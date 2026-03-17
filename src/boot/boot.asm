@@ -10,10 +10,13 @@ start:
     mov sp, 0x7c00          ; stack pointer dimulai tepat sebelum bootloader
     mov si, msg             ; arahkan SI ke alamat teks yang mau dicetak
     call print_string
+    ; simpan boot drive dari BIOS (BIOS set DL sebelum lompat ke bootloader)
+    mov [boot_drive], dl
+
     ; load kernel dari disk ke memory
-    mov bx, KERNEL_OFFSET   ; ES:BX = alamat tujuan (0x0000:0x1000)
-    mov dh, 15              ; baca 15 sektor (cukup untuk kernel kecil)
-    mov dl, 0x80            ; drive 0x80 = hard disk pertama
+    mov bx, KERNEL_OFFSET       ; ES:BX = alamat tujuan (0x0000:0x1000)
+    mov dh, 10                  ; baca 10 sektor (5KB, cukup untuk kernel kecil)
+    mov dl, [boot_drive]        ; gunakan drive number dari BIOS
     call disk_load
     cli                     ; matikan semua interrupt
     call switch_to_pm
@@ -53,6 +56,9 @@ disk_error:
 
 disk_err_msg:
     db 'Disk read error!', 0x0D, 0x0A, 0
+
+boot_drive:
+    db 0
 
 msg:
     db 'Hello from MyOS!', 0x0D, 0x0A, 0

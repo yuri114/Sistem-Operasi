@@ -28,7 +28,6 @@ function Build-Bootloader {
 
     if (-not (Test-Path $input_file)) {
         Write-Host "[ERROR] File tidak ditemukan: $input_file" -ForegroundColor Red
-        Write-Host "        Buat file src\boot\boot.asm dulu!" -ForegroundColor Yellow
         exit 1
     }
 
@@ -42,13 +41,39 @@ function Build-Bootloader {
     Write-Host "       --> $output_file" -ForegroundColor Green
 }
 
+function Build-Kernel {
+    Write-Host "[WSL]  Building kernel (nasm + gcc + ld + objcopy)..." -ForegroundColor Cyan
+    $wslScript = @"
+set -e
+cd '/mnt/d/Sistem Operasi'
+nasm -f elf32 src/kernel/kernel_entry.asm -o build/kernel_entry.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/kernel.c -o build/kernel.o
+ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/kernel.o -o build/kernel.elf
+objcopy -O binary build/kernel.elf build/kernel.bin
+echo done
+"@
+    $result = wsl -e bash -c $wslScript 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[ERROR] Kernel build gagal!" -ForegroundColor Red
+        Write-Host $result
+        exit 1
+    }
+    Write-Host "       --> $BUILD\kernel.bin ($((Get-Item "$BUILD\kernel.bin").Length) bytes)" -ForegroundColor Green
+}
+
 function Build-Image {
-    $boot_bin = "$BUILD\boot.bin"
-    $os_img   = "$BUILD\os.img"
+    $boot_bin   = "$BUILD\boot.bin"
+    $kernel_bin = "$BUILD\kernel.bin"
+    $os_img     = "$BUILD\os.img"
 
     Write-Host "[IMG]  Creating OS image..." -ForegroundColor Cyan
-    Copy-Item $boot_bin $os_img -Force
-    Write-Host "[DONE] OS image siap: build\os.img" -ForegroundColor Green
+    $boot_bytes   = [System.IO.File]::ReadAllBytes($boot_bin)
+    $kernel_bytes = [System.IO.File]::ReadAllBytes($kernel_bin)
+    $target       = 32 * 512   # 16KB = 32 sektor
+    $padding      = New-Object byte[] ($target - $boot_bytes.Length - $kernel_bytes.Length)
+    $img          = $boot_bytes + $kernel_bytes + $padding
+    [System.IO.File]::WriteAllBytes($os_img, $img)
+    Write-Host "[DONE] OS image siap: build\os.img ($($img.Length) bytes, $($img.Length/512) sektor)" -ForegroundColor Green
 }
 
 function Run-QEMU {
@@ -75,11 +100,13 @@ switch ($Action.ToLower()) {
     "build" {
         Write-Host "=== Building MyOS ===" -ForegroundColor White
         Build-Bootloader
+        Build-Kernel
         Build-Image
     }
     "run" {
         Write-Host "=== Building & Running MyOS ===" -ForegroundColor White
         Build-Bootloader
+        Build-Kernel
         Build-Image
         Run-QEMU
     }
