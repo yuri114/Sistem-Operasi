@@ -1,10 +1,12 @@
 #include "shell.h"
-
+#include "memory.h"
+#include "timer.h"
 /*fungsi dari kernel.c*/
 void print(const char *str);
 void print_char(char c);
 void clear_screen();
 void backspace_char();
+void itoa(uint32_t num, char *buf);
 
 /* Buffer untuk menyimpan input dari keyboard */
 static char input_buffer[256];
@@ -24,9 +26,11 @@ static void shell_execute(){
 
     if(str_compare(input_buffer, "help")){
         print("Perintah yang tersedia:\n");
-        print("help     - tampilkan daftar perintah\n");
-        print("clear    - bersihkan layar\n");
-        print("about    - informasi tentang myOS\n");
+        print("help      - tampilkan daftar perintah\n");
+        print("clear     - bersihkan layar\n");
+        print("about     - informasi tentang myOS\n");
+        print("memtest   - test alokasi memory\n");
+        print("uptime    - tampilkan waktu berjalan OS\n");
     }
     else if(str_compare(input_buffer, "clear")){
         clear_screen();
@@ -35,7 +39,23 @@ static void shell_execute(){
         print("MyOS versi 0.1\n");
         print("Sistem operasi sederhana untuk belajar\n");
     }
-    else if(input_len > 0){
+    else if(str_compare(input_buffer, "memtest")){
+        char *buf = (char*) malloc(16);
+        if (buf==0) {
+            print("malloc gagal!\n");
+        }
+        else {
+            print("malloc berhasil! memori dialokasikan.\n");
+        }
+    }
+    else if(str_compare(input_buffer, "uptime")){
+        char buf[16];
+        itoa(get_ticks() / 100, buf);
+        print("uptime: ");
+        print(buf);
+        print(" detik\n");
+    }
+    else {
         print("Perintah tidak dikenal: ");
         print(input_buffer);
         print("\n");

@@ -3,6 +3,9 @@
 #include "idt.h"
 #include "pic.h"
 #include "shell.h"
+#include "memory.h"
+#include "timer.h"
+
 #define VGA_ADDRESS 0xB8000
 #define VGA_COLS 80
 #define VGA_ROWS 25
@@ -16,6 +19,9 @@ int cursor_col = 0;
 int cursor_row = 0;
 int input_start_row = 0; //baris awal untuk input keyboard
 int input_start_col = 0; //kolom awal untuk input keyboard
+void scroll(); //fungsi untuk menggulir layar ke atas saat mencapai akhir layar
+void update_cursor(); //fungsi untuk update posisi kursor di hardware
+void itoa(uint32_t num, char *buf); //fungsi untuk konversi integer ke string
 
 /*fungsi: hapus seluruh layar*/
 void clear_screen() {
@@ -113,6 +119,29 @@ void print(const char *str){
     }
 }
 
+void itoa(uint32_t num, char *buf) {
+    if (num == 0) {
+        buf[0] = '0';
+        buf[1] = '\0';
+        return;
+    }
+    int i = 0;
+    char temp[32]; //buffer sementara untuk menyimpan digit dalam urutan terbalik
+
+    while (num > 0)
+    {
+        temp[i++] = '0' + (num % 10); //ambil digit terakhir dan simpan sebagai karakter
+        num /= 10; //hapus digit terakhir
+    }
+    int j;
+    for (j = 0; j < i; j++)
+    {
+        buf[j] = temp[i - j - 1]; //balik urutan digit
+    }
+    buf[i] = '\0'; //tutup string dengan null terminator
+
+}
+
 /* Deklarasi handler dari isr.asm */
 extern void irq0();
 extern void irq1();
@@ -125,7 +154,8 @@ void kernel_main(){
     print("=================================");
     print("\nKernel berjalan di Protected Mode (32-bit)\n");
     shell_init(); //inisialisasi shell
-
+    mem_init();   //inisialisasi manajemen memori
+    timer_init(100); //inisialisasi timer dengan frekuensi 100Hz
     pic_init();                          /* remap PIC dulu */
     idt_init();                          /* inisialisasi IDT (semua entry = 0) */
     idt_set_gate(32, (uint32_t)irq0);   /* timer (IRQ0 = interrupt 32) - harus ada! */
