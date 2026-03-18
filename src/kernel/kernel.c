@@ -2,6 +2,7 @@
 /*alamat VGA text buffer */
 #include "idt.h"
 #include "pic.h"
+#include "shell.h"
 #define VGA_ADDRESS 0xB8000
 #define VGA_COLS 80
 #define VGA_ROWS 25
@@ -13,6 +14,8 @@ unsigned short* vga = (unsigned short*) VGA_ADDRESS;//pointer ke VGA buffer, di-
 /* posisi kursor saat ini*/
 int cursor_col = 0;
 int cursor_row = 0;
+int input_start_row = 0; //baris awal untuk input keyboard
+int input_start_col = 0; //kolom awal untuk input keyboard
 
 /*fungsi: hapus seluruh layar*/
 void clear_screen() {
@@ -42,6 +45,37 @@ void print_char(char c){
         cursor_col = 0; //kembali ke kolom pertama
         cursor_row++; //pindah ke baris berikutnya
     }
+    update_cursor(); //update posisi kursor di hardware
+}
+
+void backspace_char(){
+    if (cursor_row == input_start_row && cursor_col == input_start_col) return; //jika sudah di awal layar, tidak lakukan apa-apa
+    
+    if (cursor_col==0)
+    {
+        cursor_row--;
+        cursor_col = VGA_COLS - 1; //kembali ke kolom terakhir baris sebelumnya
+    }
+    else
+    {
+        cursor_col--;
+    }
+    int index = cursor_row * VGA_COLS + cursor_col; //hitung index di VGA buffer
+    vga[index] = (WHITE_ON_BLACK << 8)| ' '; //hapus karakter dengan spasi
+    update_cursor(); //update posisi kursor di hardware
+}
+
+static inline void outb(uint16_t port, uint8_t value){
+    __asm__ volatile ("outb %0, %1":: "a"(value), "Nd"(port));
+}
+
+void update_cursor(){
+    uint16_t pos = cursor_row * VGA_COLS + cursor_col; /* hitung posisi kursor */
+    outb(0x3D4, 0x0F); //index register untuk low byte
+    outb(0x3D5,pos & 0xFF); //kirim low byte
+    
+    outb(0x3D4, 0x0E); //index register untuk high byte
+    outb(0x3D5, (pos >> 8) & 0xFF); //kirim high byte
 }
 
 /*fungsi: cetak string ke layar*/
@@ -65,12 +99,15 @@ void kernel_main(){
     print("\n   Selamat datang di MyOS!   \n");
     print("=================================");
     print("\nKernel berjalan di Protected Mode (32-bit)\n");
-    print("Ketik sesuatu:\n");
+    shell_init(); //inisialisasi shell
 
     pic_init();                          /* remap PIC dulu */
     idt_init();                          /* inisialisasi IDT (semua entry = 0) */
     idt_set_gate(32, (uint32_t)irq0);   /* timer (IRQ0 = interrupt 32) - harus ada! */
     idt_set_gate(33, (uint32_t)irq1);   /* keyboard (IRQ1 = interrupt 33) */
+
+    input_start_row = cursor_row; //simpan posisi awal input keyboard
+    input_start_col = cursor_col;
 
     /* aktifkan hardware interrupt */
     __asm__ volatile ("sti");

@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include "keyboard.h"
 #include "pic.h"
+#include "shell.h"
 
 #define KEYBOARD_DATA_PORT 0x60
 
@@ -23,6 +24,7 @@ static inline uint8_t inb(uint16_t port){
     return value;
 }
 
+void backspace_char();
 /* Dipanggil dari irq_handler saat ada keyboard interrupt */
 void keyboard_handler(){
     uint8_t scancode = inb(KEYBOARD_DATA_PORT);
@@ -31,11 +33,17 @@ void keyboard_handler(){
     if (scancode & 0x80) {
         return;
     }
-    /* cek apakah scancode ada di table */
-    if (scancode < sizeof(scancode_table)) {
+
+    if (scancode == 0x0E) { //scancode 0x0E = backspace
+        shell_process_char('\b');
+    }
+    else if (scancode == 0x1C){
+        shell_process_char('\n');
+    }
+    else if (scancode < sizeof(scancode_table)) {
         char c = scancode_table[scancode];
-        if (c!=0) {
-            print_char(c); /* Tampilkan karakter ke layar */
+        if (c != 0) {
+            shell_process_char(c); /* Tampilkan karakter ke layar */
         }
     }
 }
