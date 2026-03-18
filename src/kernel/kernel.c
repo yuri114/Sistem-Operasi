@@ -1,5 +1,7 @@
 /*kernel.c - kernel utama*/
 /*alamat VGA text buffer */
+#include "idt.h"
+#include "pic.h"
 #define VGA_ADDRESS 0xB8000
 #define VGA_COLS 80
 #define VGA_ROWS 25
@@ -52,6 +54,10 @@ void print(const char *str){
     }
 }
 
+/* Deklarasi handler dari isr.asm */
+extern void irq0();
+extern void irq1();
+
 /*entry point kernel - dipanggil dari kernel_entry.asm*/
 void kernel_main(){
     clear_screen();
@@ -59,7 +65,15 @@ void kernel_main(){
     print("\n   Selamat datang di MyOS!   \n");
     print("=================================");
     print("\nKernel berjalan di Protected Mode (32-bit)\n");
-    print("VGA text mode aktif.\n");
+    print("Ketik sesuatu:\n");
+
+    pic_init();                          /* remap PIC dulu */
+    idt_init();                          /* inisialisasi IDT (semua entry = 0) */
+    idt_set_gate(32, (uint32_t)irq0);   /* timer (IRQ0 = interrupt 32) - harus ada! */
+    idt_set_gate(33, (uint32_t)irq1);   /* keyboard (IRQ1 = interrupt 33) */
+
+    /* aktifkan hardware interrupt */
+    __asm__ volatile ("sti");
 
     /*kernel tidak boleh return - loop selamanya*/
     while (1){}

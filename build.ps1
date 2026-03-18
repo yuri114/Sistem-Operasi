@@ -47,12 +47,16 @@ function Build-Kernel {
 set -e
 cd '/mnt/d/Sistem Operasi'
 nasm -f elf32 src/kernel/kernel_entry.asm -o build/kernel_entry.o
-gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/kernel.c -o build/kernel.o
-ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/kernel.o -o build/kernel.elf
+nasm -f elf32 src/kernel/isr.asm         -o build/isr.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/kernel.c   -o build/kernel.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/idt.c      -o build/idt.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/pic.c      -o build/pic.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/keyboard.c -o build/keyboard.o
+ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o -o build/kernel.elf
 objcopy -O binary build/kernel.elf build/kernel.bin
 echo done
 "@
-    $result = wsl -e bash -c $wslScript 2>&1
+    $result = wsl -e bash -c ($wslScript -replace "`r`n", "`n") 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[ERROR] Kernel build gagal!" -ForegroundColor Red
         Write-Host $result
