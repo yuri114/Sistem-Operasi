@@ -34,6 +34,11 @@ void print_char(char c){
     {
         cursor_col = 0;//kembali ke kolom pertama
         cursor_row++;//pindah ke baris berikutnya
+        if (cursor_row >= VGA_ROWS)
+        {
+            scroll(); //geser layar ke atas jika mencapai akhir layar
+        }
+        
         return;
     }
     int index = cursor_row * VGA_COLS + cursor_col;  //hitung index di VGA buffer
@@ -44,6 +49,10 @@ void print_char(char c){
     {
         cursor_col = 0; //kembali ke kolom pertama
         cursor_row++; //pindah ke baris berikutnya
+        if (cursor_row >= VGA_ROWS)
+        {
+            scroll(); //geser layar ke atas jika mencapai akhir layar
+        }
     }
     update_cursor(); //update posisi kursor di hardware
 }
@@ -63,6 +72,22 @@ void backspace_char(){
     int index = cursor_row * VGA_COLS + cursor_col; //hitung index di VGA buffer
     vga[index] = (WHITE_ON_BLACK << 8)| ' '; //hapus karakter dengan spasi
     update_cursor(); //update posisi kursor di hardware
+}
+
+void scroll() {
+    int row, col;
+    for (row = 1; row < VGA_ROWS; row++)
+    {
+        for (col = 0; col < VGA_COLS; col++)
+        {
+            vga[(row - 1) * VGA_COLS + col] = vga[row * VGA_COLS + col]; //geser setiap baris ke atas
+        }
+    }
+    for (col = 0; col < VGA_COLS; col++)
+    {
+        vga[(VGA_ROWS - 1) * VGA_COLS + col] = (WHITE_ON_BLACK << 8) | ' '; //hapus baris terakhir
+    }
+    cursor_row = VGA_ROWS - 1; //pindah ke baris terakhir
 }
 
 static inline void outb(uint16_t port, uint8_t value){
