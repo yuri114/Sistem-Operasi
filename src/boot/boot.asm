@@ -15,7 +15,7 @@ start:
 
     ; load kernel dari disk ke memory
     mov bx, KERNEL_OFFSET       ; ES:BX = alamat tujuan (0x0000:0x1000)
-    mov dh, 10                  ; baca 10 sektor (5KB, cukup untuk kernel kecil)
+    mov dh, 20                  ; baca 20 sektor (10KB, cukup untuk kernel yang lebih besar)
     mov dl, [boot_drive]        ; gunakan drive number dari BIOS
     call disk_load
     cli                     ; matikan semua interrupt

@@ -22,6 +22,11 @@ int input_start_col = 0; //kolom awal untuk input keyboard
 void scroll(); //fungsi untuk menggulir layar ke atas saat mencapai akhir layar
 void update_cursor(); //fungsi untuk update posisi kursor di hardware
 void itoa(uint32_t num, char *buf); //fungsi untuk konversi integer ke string
+uint8_t current_color = 0x0f; //warna teks saat ini
+
+void set_color(uint8_t fg, uint8_t bg){
+    current_color = (bg << 4) | (fg & 0x0F); //gabungkan warna latar belakang dan teks
+}
 
 /*fungsi: hapus seluruh layar*/
 void clear_screen() {
@@ -48,7 +53,7 @@ void print_char(char c){
         return;
     }
     int index = cursor_row * VGA_COLS + cursor_col;  //hitung index di VGA buffer
-    vga[index] = (WHITE_ON_BLACK << 8) | c; //set entry = warna + char
+    vga[index] = (current_color << 8) | c; //set entry = warna + char
     
     cursor_col++; //pindah ke kolom berikutnya
     if (cursor_col >= VGA_COLS)//jika mencapai akhir baris
@@ -76,7 +81,7 @@ void backspace_char(){
         cursor_col--;
     }
     int index = cursor_row * VGA_COLS + cursor_col; //hitung index di VGA buffer
-    vga[index] = (WHITE_ON_BLACK << 8)| ' '; //hapus karakter dengan spasi
+    vga[index] = (current_color << 8)| ' '; //hapus karakter dengan spasi
     update_cursor(); //update posisi kursor di hardware
 }
 
@@ -91,7 +96,7 @@ void scroll() {
     }
     for (col = 0; col < VGA_COLS; col++)
     {
-        vga[(VGA_ROWS - 1) * VGA_COLS + col] = (WHITE_ON_BLACK << 8) | ' '; //hapus baris terakhir
+        vga[(VGA_ROWS - 1) * VGA_COLS + col] = (current_color << 8) | ' '; //hapus baris terakhir
     }
     cursor_row = VGA_ROWS - 1; //pindah ke baris terakhir
 }

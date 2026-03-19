@@ -76,7 +76,7 @@ function Build-Image {
     Write-Host "[IMG]  Creating OS image..." -ForegroundColor Cyan
     $boot_bytes   = [System.IO.File]::ReadAllBytes($boot_bin)
     $kernel_bytes = [System.IO.File]::ReadAllBytes($kernel_bin)
-    $target       = 32 * 512   # 16KB = 32 sektor
+    $target       = 64 * 512   # 32KB = 64 sektor
     $padding      = New-Object byte[] ($target - $boot_bytes.Length - $kernel_bytes.Length)
     $img          = $boot_bytes + $kernel_bytes + $padding
     [System.IO.File]::WriteAllBytes($os_img, $img)
