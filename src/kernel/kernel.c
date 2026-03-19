@@ -5,6 +5,7 @@
 #include "shell.h"
 #include "memory.h"
 #include "timer.h"
+#include "fs.h"
 
 #define VGA_ADDRESS 0xB8000
 #define VGA_COLS 80
@@ -160,6 +161,7 @@ void kernel_main(){
     print("\nKernel berjalan di Protected Mode (32-bit)\n");
     shell_init(); //inisialisasi shell
     mem_init();   //inisialisasi manajemen memori
+    fs_init();    //inisialisasi filesystem sederhana
     timer_init(100); //inisialisasi timer dengan frekuensi 100Hz
     pic_init();                          /* remap PIC dulu */
     idt_init();                          /* inisialisasi IDT (semua entry = 0) */
