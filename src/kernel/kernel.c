@@ -6,6 +6,7 @@
 #include "memory.h"
 #include "timer.h"
 #include "fs.h"
+#include "paging.h"
 
 #define VGA_ADDRESS 0xB8000
 #define VGA_COLS 80
@@ -159,19 +160,19 @@ void kernel_main(){
     print("\n   Selamat datang di MyOS!   \n");
     print("=================================");
     print("\nKernel berjalan di Protected Mode (32-bit)\n");
-    shell_init(); //inisialisasi shell
-    mem_init();   //inisialisasi manajemen memori
-    fs_init();    //inisialisasi filesystem sederhana
-    timer_init(100); //inisialisasi timer dengan frekuensi 100Hz
-    pic_init();                          /* remap PIC dulu */
-    idt_init();                          /* inisialisasi IDT (semua entry = 0) */
-    idt_set_gate(32, (uint32_t)irq0);   /* timer (IRQ0 = interrupt 32) - harus ada! */
-    idt_set_gate(33, (uint32_t)irq1);   /* keyboard (IRQ1 = interrupt 33) */
+    shell_init();
+    mem_init();
+    fs_init();
+    timer_init(100);
+    paging_init();
+    pic_init();
+    idt_init();
+    idt_set_gate(32, (uint32_t)irq0);
+    idt_set_gate(33, (uint32_t)irq1);
 
-    input_start_row = cursor_row; //simpan posisi awal input keyboard
+    input_start_row = cursor_row;
     input_start_col = cursor_col;
 
-    /* aktifkan hardware interrupt */
     __asm__ volatile ("sti");
 
     /*kernel tidak boleh return - loop selamanya*/

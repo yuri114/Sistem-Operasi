@@ -2,6 +2,8 @@
 #include "memory.h"
 #include "timer.h"
 #include "fs.h"
+#include "paging.h"
+
 /*fungsi dari kernel.c*/
 void print(const char *str);
 void print_char(char c);
@@ -64,7 +66,7 @@ static void shell_execute(){
         print("read <nama>          - baca file\n");
         print("write <nama> <isi>   - simpan file\n");
         print("del <nama>           - hapus file\n");
-
+        print("paging               - tampilkan status paging\n");
     }
     else if(str_compare(input_buffer, "clear")){
         clear_screen();
@@ -177,6 +179,23 @@ static void shell_execute(){
                 set_color(15,0); //kembalikan warna putih di hitam
             }
         }
+    }
+    else if (str_compare(input_buffer, "paging")) {
+        uint32_t cr0 = paging_get_cr0();
+        char buf[20];
+        if (cr0 & 0x80000000) {
+            set_color(10,0); //warna hijau di hitam untuk info
+            print("Paging aktif");
+        }
+        else {
+            set_color(12,0); //warna merah di hitam untuk error
+            print("Paging tidak aktif");
+        }
+        print("\nCR0: 0x");
+        itoa(cr0, buf);
+        print(buf);
+        print("\n");
+        set_color(15,0); //kembalikan warna putih di hitam
     }
     else {
         set_color(12,0); //warna merah di hitam untuk error
