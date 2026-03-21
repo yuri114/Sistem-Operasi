@@ -20,14 +20,14 @@ void paging_init() {
         setiap entry = alamat fisik halaman | flag 
         flag 3 bit0 = present, bit1 = read/write*/
     for (i = 0; i < 1024; i++) {
-        page_table[i] = (i * 0x1000) | 3;
+        page_table[i] = (i * 0x1000) | 7; // present + read/write + user (bit 2) agar ring 3 bisa akses
     }
     /*  isi page_directory: semua kosong dulu*/
     for (i = 0; i < 1024; i++) {
         page_directory[i] = 2;
     }
     /*  pasang page_table pertama ke page_directory */
-    page_directory[0] = ((uint32_t)page_table) | 3; //present + read/write
+    page_directory[0] = ((uint32_t)page_table) | 7; // present + read/write + user
 
     /* aktifkan paging */
     load_page_directory(page_directory);

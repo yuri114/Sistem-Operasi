@@ -32,3 +32,8 @@ void idt_init(){
     /* Load IDT ke CPU*/
     idt_load(&idt_desc);
 }
+
+void idt_set_gate_user(int n, uint32_t handler) {
+    idt_set_gate(n, handler);
+    idt[n].type_attr = 0xEE; // 1110 1110: interrupt gate, ring 3 (user)
+}

@@ -48,6 +48,29 @@ kernel_gdt:
     db 10010010b        ; access: present, ring0, data, writable
     db 11001111b        ; flags: 32-bit, 4KB granularity
     db 0x00             ; base  [24:31]
+
+    ; Entry 3: User Code segment (ring 3) selector 0x18, pakai 0x1B (|3)
+user_code_desc:
+    dw 0xFFFF
+    dw 0x0000
+    db 0x00
+    db 11111010b        ; present = 1, ring = 3, code, readable
+    db 11001111b
+    db 0x00
+
+    ; Entry 4: User Data segment (ring 3) selector 0x20, pakai 0x23 (|3)
+user_data_desc:
+    dw 0xFFFF
+    dw 0x0000
+    db 0x00
+    db 11110010b        ; present = 1, ring = 3, code, readable
+    db 11001111b
+    db 0x00
+    ; Entry 5: TSS descriptor (diisi nanti olehj tss_init())
+tss_desc:
+    dq 0                ; 8 byte kosong dulu, diisi oleh C
+    global tss_desc
+
 kernel_gdt_end:
 
 kernel_gdt_ptr:

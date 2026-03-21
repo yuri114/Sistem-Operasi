@@ -59,8 +59,9 @@ gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/ker
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/paging.c   -o build/paging.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/task.c      -o build/task.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/syscall.c   -o build/syscall.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/tss.c       -o build/tss.o
 
-ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o -o build/kernel.elf
+ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o -o build/kernel.elf
 objcopy -O binary build/kernel.elf build/kernel.bin
 echo done
 "@

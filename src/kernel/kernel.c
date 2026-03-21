@@ -9,6 +9,7 @@
 #include "paging.h"
 #include "task.h"
 #include "syscall.h"
+#include "tss.h"
 
 #define VGA_ADDRESS 0xB8000
 #define VGA_COLS 80
@@ -150,6 +151,26 @@ void my_background_task() {
     }
 }
 
+void enter_usermode(uint32_t eip, uint32_t user_esp) {
+    __asm__ volatile (
+        "mov $0x23, %%ax\n" //segment selector untuk user data (GDT entry 4)
+        "mov %%ax, %%ds\n"
+        "mov %%ax, %%es\n"
+        "mov %%ax, %%fs\n"
+        "mov %%ax, %%gs\n"
+        "push $0x23\n" //segment selector untuk user data
+        "push %1\n" //stack pointer untuk user mode
+        "pushf\n" //eflags
+        "pop %%eax\n"
+        "or $0x200, %%eax\n" //set IF flag
+        "push %%eax\n"
+        "pushl $0x1B\n" //segment selector untuk user code (GDT entry 3)
+        "pushl %0\n" //eip untuk user mode
+        "iret\n" //lakukan iret untuk switch ke user mode
+        :: "r"(eip), "r"(user_esp) : "eax"
+    );
+}
+
 void itoa(uint32_t num, char *buf) {
     if (num == 0) {
         buf[0] = '0';
@@ -171,6 +192,11 @@ void itoa(uint32_t num, char *buf) {
     }
     buf[i] = '\0'; //tutup string dengan null terminator
 
+}
+
+void user_task() {
+    // user mode task - kosong untuk sementara
+    while (1){}
 }
 
 /* Deklarasi handler dari isr.asm */
@@ -199,16 +225,21 @@ void kernel_main(){
     input_start_row = cursor_row;
     input_start_col = cursor_col;
 
+    static uint8_t user_stack[4096]; //stack untuk user mode
+    tss_init(0x90000); //inisialisasi TSS dengan stack kernel di atas stack user
+    
+    //register syscall dengan DPL = 3
+    idt_set_gate_user(0x80, (uint32_t)int80_handler); //set gate dengan privilege level user (ring 3) untuk interrupt 0x80 (syscall)    
+
+    // inisialisasi multitasking SEBELUM enter_usermode (setelah enter_usermode tidak pernah balik)
+    task_init();
+    task_set_main(); //tandai task utama sudah ada
+    task_create(my_background_task); //buat task latar belakang
+
     __asm__ volatile ("sti");
 
-    task_init();
+    enter_usermode((uint32_t)user_task, (uint32_t)(user_stack + 4096));
     
-    /* task 0 = shell yang sudah jalan (tidak perlu task_create)*/
-    /* set esp ke nilai esp sekarang (diurus oleh irq0 nanti)*/
-    task_set_main(); //tandai task utama sudah ada, sehingga tidak perlu dibuat lagi
-
-    task_create(my_background_task); //buat task latar belakang untuk demo multitasking
-    
-    /* kernel tidak boleh return - loop selamanya*/
+    /* tidak pernah sampai sini */
     while (1){}
 }
