@@ -8,6 +8,7 @@
 #include "fs.h"
 #include "paging.h"
 #include "task.h"
+#include "syscall.h"
 
 #define VGA_ADDRESS 0xB8000
 #define VGA_COLS 80
@@ -134,19 +135,18 @@ void vga_put_char_at(int col,int row, char c, uint8_t color){
 }
 
 void my_background_task() {
-     uint32_t counter = 0;
+    uint32_t counter = 0;
     char digits[] = "0123456789";
+
     while(1) {
         counter++;
         // tulis 2 digit counter di pojok kanan atas
-        vga_put_char_at(78,0,digits[(counter / 10) % 10], 0x0A); //warna hijau di hitam
+        vga_put_char_at(78,0,digits[(counter / 10) % 10], 0x0A);
         vga_put_char_at(79,0,digits[counter % 10], 0x0A);
-        //delay kecil supaya tidak terlalu cepat
         uint32_t i;
         for (i = 0; i < 5000000; i++) {
             __asm__ volatile ("nop");
-            
-        }        
+        }
     }
 }
 
@@ -176,6 +176,7 @@ void itoa(uint32_t num, char *buf) {
 /* Deklarasi handler dari isr.asm */
 extern void irq0();
 extern void irq1();
+extern void int80_handler();
 
 /*entry point kernel - dipanggil dari kernel_entry.asm*/
 void kernel_main(){
@@ -193,6 +194,7 @@ void kernel_main(){
     idt_init();
     idt_set_gate(32, (uint32_t)irq0);
     idt_set_gate(33, (uint32_t)irq1);
+    idt_set_gate(0x80, (uint32_t)int80_handler); //set handler untuk syscall di interrupt 0x80
 
     input_start_row = cursor_row;
     input_start_col = cursor_col;

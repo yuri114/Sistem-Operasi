@@ -97,3 +97,16 @@ irq1:
 
     popa
     iret
+
+extern syscall_handler
+global int80_handler
+
+int80_handler:
+    pusha
+    push edx                ; argumen ke-3 (tidak dipakai sekarang)
+    push ebx                ; argumen ke-2 (pointer string dll)
+    push eax                ; argumen ke-1 (nomor syscall)
+    call syscall_handler
+    add esp, 12             ; bersihkan 3 argumen dari stack
+    popa
+    iret
