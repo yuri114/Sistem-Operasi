@@ -34,6 +34,28 @@ irq0:
 
     call timer_handler
 
+    extern task_switch
+    extern current_esp
+    extern next_esp
+
+    ;di dalam irq0, setelah call timer_handler dan sebelum pop eax
+    call task_switch
+
+    ; simpan ESP task sekarang (skip jika 0 = bootstrap task 0)
+    mov eax, [current_esp]
+    test eax, eax
+    jz .skip_save
+    mov [eax], esp          ; simpan ESP task lama
+
+.skip_save:
+    ; load ESP task berikutnya
+    mov eax, [next_esp]
+    test eax, eax
+    jz .no_switch
+    mov esp, [eax]          ; ganti stack ke task baru
+
+.no_switch:
+
     mov al, 0x20
     out 0x20, al        ; kirim EOI ke master PIC
     

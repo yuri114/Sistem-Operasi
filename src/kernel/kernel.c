@@ -7,6 +7,7 @@
 #include "timer.h"
 #include "fs.h"
 #include "paging.h"
+#include "task.h"
 
 #define VGA_ADDRESS 0xB8000
 #define VGA_COLS 80
@@ -25,6 +26,7 @@ void scroll(); //fungsi untuk menggulir layar ke atas saat mencapai akhir layar
 void update_cursor(); //fungsi untuk update posisi kursor di hardware
 void itoa(uint32_t num, char *buf); //fungsi untuk konversi integer ke string
 uint8_t current_color = 0x0f; //warna teks saat ini
+void vga_put_char_at(int col,int row, char c, uint8_t color); //fungsi untuk menampilkan karakter dengan warna tertentu di posisi tertentu
 
 void set_color(uint8_t fg, uint8_t bg){
     current_color = (bg << 4) | (fg & 0x0F); //gabungkan warna latar belakang dan teks
@@ -126,6 +128,28 @@ void print(const char *str){
     }
 }
 
+void vga_put_char_at(int col,int row, char c, uint8_t color){
+    int idx = row * VGA_COLS + col; //hitung index di VGA buffer
+    vga[idx] = (color << 8) | (unsigned char)c; //set entry = warna + char
+}
+
+void my_background_task() {
+     uint32_t counter = 0;
+    char digits[] = "0123456789";
+    while(1) {
+        counter++;
+        // tulis 2 digit counter di pojok kanan atas
+        vga_put_char_at(78,0,digits[(counter / 10) % 10], 0x0A); //warna hijau di hitam
+        vga_put_char_at(79,0,digits[counter % 10], 0x0A);
+        //delay kecil supaya tidak terlalu cepat
+        uint32_t i;
+        for (i = 0; i < 5000000; i++) {
+            __asm__ volatile ("nop");
+            
+        }        
+    }
+}
+
 void itoa(uint32_t num, char *buf) {
     if (num == 0) {
         buf[0] = '0';
@@ -175,6 +199,14 @@ void kernel_main(){
 
     __asm__ volatile ("sti");
 
-    /*kernel tidak boleh return - loop selamanya*/
+    task_init();
+    
+    /* task 0 = shell yang sudah jalan (tidak perlu task_create)*/
+    /* set esp ke nilai esp sekarang (diurus oleh irq0 nanti)*/
+    task_set_main(); //tandai task utama sudah ada, sehingga tidak perlu dibuat lagi
+
+    task_create(my_background_task); //buat task latar belakang untuk demo multitasking
+    
+    /* kernel tidak boleh return - loop selamanya*/
     while (1){}
 }
