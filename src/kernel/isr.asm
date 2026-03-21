@@ -102,20 +102,12 @@ extern syscall_handler
 global int80_handler
 
 int80_handler:
-    extern tss_set_kernel_stack
-
     pusha
     push edx                ; argumen ke-3 (tidak dipakai sekarang)
     push ebx                ; argumen ke-2 (pointer string dll)
     push eax                ; argumen ke-1 (nomor syscall)
     call syscall_handler
     add esp, 12             ; bersihkan 3 argumen dari stack
-    
-    ; update kernel stack di TSS (untuk interrupt berikutnya dari ring 3)
-    mov eax, esp
-    add eax, 40     ; skip pusha (32 bytes) + 4 (return addr push) + 4 (push eax)
-    push eax
-    call tss_set_kernel_stack ; skip semua yang sudah di-push (pusha=32, 3 arg=12)
-    add esp, 4
+    mov [esp+28], eax
     popa
     iret

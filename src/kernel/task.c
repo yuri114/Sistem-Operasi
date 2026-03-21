@@ -55,10 +55,30 @@ void task_set_main() {
 
     int next = (current_task + 1) % task_count; //pilih task berikutnya secara round-robin
 
+    //skip task yang tidak digunakan (seharusnya tidak terjadi karena task_count sudah dihitung)
+    int i;
+    for (i = 0; i < task_count; i++)
+    {
+        if (tasks[next].used) {
+            break;
+        }
+        next = (next + 1) % task_count;
+    }
+    if (!tasks[next].used)return; //tidak ada task lain yang aktif
+    if (next == current_task) return; //hanya ada satu task yang aktif
+
     //Simpan konteks task saat ini (esp)
     extern uint32_t *current_esp;
     extern uint32_t *next_esp;
     current_esp = &tasks[current_task].esp; //simpan esp task saat ini
     next_esp = &tasks[next].esp; //siapkan esp untuk task berikutnya
     current_task = next; //update task yang sedang berjalan
+ }
+ 
+ void task_exit() {
+    tasks[current_task].used = 0; //tandai slot ini tidak digunakan lagi
+    __asm__ volatile ("sti");
+    while (1) {
+        __asm__ volatile ("hlt"); //hentikan CPU sampai ada interrupt, karena task ini sudah selesai
+    }
  }

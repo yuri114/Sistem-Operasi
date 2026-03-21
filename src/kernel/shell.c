@@ -72,7 +72,7 @@ static void shell_execute(){
         clear_screen();
     }
     else if(str_compare(input_buffer, "about")){
-        print("MyOS versi 0.1\n");
+        print("MyOS versi 0.0.3\n");
         print("Sistem operasi sederhana untuk belajar\n");
     }
     else if(str_compare(input_buffer, "memtest")){

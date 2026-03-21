@@ -195,8 +195,26 @@ void itoa(uint32_t num, char *buf) {
 }
 
 void user_task() {
+
+    /*
     // user mode task - kosong untuk sementara
-    while (1){}
+    // test SYS_PRINT
+    const char *msg = "[user] tekan sembarang tombol:";
+    __asm__ volatile ("mov $0, %%eax; mov %0, %%ebx; int $0x80":: "r"(msg) : "eax", "ebx");
+
+    //test SYS_GETKEY - tunggu 1 tombol simpan hasilnya di EAX
+    uint32_t key;
+    __asm__ volatile ("mov $1, %%eax; int $0x80; mov %%eax, %0" : "=r"(key) : : "eax");
+    
+    //test SYS_PRINT lagi untuk menampilkan karakter yang ditekan
+    const char *msg2 = "\n[user] tombol diterima! keluar... \n";
+    __asm__ volatile ("mov $0, %%eax; mov %0, %%ebx; int $0x80":: "r"(msg2) : "eax", "ebx");
+    
+    //test SYS_EXIT untuk keluar dari task ini
+    __asm__ volatile ("mov $2, %%eax; int $0x80":: : "eax");
+    */
+   while (1){}
+   
 }
 
 /* Deklarasi handler dari isr.asm */

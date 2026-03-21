@@ -4,6 +4,28 @@
 #include "shell.h"
 
 #define KEYBOARD_DATA_PORT 0x60
+#define KEY_BUFFER_SIZE 64
+
+static char key_buffer[KEY_BUFFER_SIZE];
+static int key_head = 0; //index untuk menulis karakter baru
+static int key_tail = 0; //index untuk membaca karakter
+
+static void key_push(char c) {
+    int next = (key_tail + 1) % KEY_BUFFER_SIZE;
+    if (next != key_head) { //pastikan buffer tidak penuh
+        key_buffer[key_tail] = c;
+        key_tail = next;
+    }
+}
+
+char keyboard_getchar() {
+    if (key_head == key_tail) {
+        return 0; //buffer kosong
+    }
+    char c = key_buffer[key_head];
+    key_head = (key_head + 1) % KEY_BUFFER_SIZE;
+    return c;
+}
 
 /*  Tabel scancode karakter ASCII
     Index = scancode, value = karakter
@@ -35,14 +57,17 @@ void keyboard_handler(){
     }
 
     if (scancode == 0x0E) { //scancode 0x0E = backspace
+        key_push('\b'); //push karakter backspace ke buffer
         shell_process_char('\b');
     }
     else if (scancode == 0x1C){
+        key_push('\n'); //push karakter newline ke buffer
         shell_process_char('\n');
     }
     else if (scancode < sizeof(scancode_table)) {
         char c = scancode_table[scancode];
         if (c != 0) {
+            key_push(c); //push karakter ke buffer
             shell_process_char(c); /* Tampilkan karakter ke layar */
         }
     }

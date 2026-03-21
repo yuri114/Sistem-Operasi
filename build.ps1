@@ -99,7 +99,7 @@ function Run-QEMU {
 
     Write-Host "[QEMU] Menjalankan OS di emulator..." -ForegroundColor Cyan
     Write-Host "       Tekan Ctrl+Alt+G untuk release mouse dari QEMU" -ForegroundColor Yellow
-    & $QEMU -drive format=raw,file=$os_img
+    & $QEMU -machine pc -drive format=raw,file=$os_img
 }
 
 function Clean-Build {
