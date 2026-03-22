@@ -2,6 +2,12 @@
 #include "vmm.h"
 #include "tss.h"
 
+static void str_copy_n(char *dst, const char *src, int n) {
+    int i;
+    for (i = 0; i < n - 1 && src[i]; i++) dst[i] = src[i];
+    dst[i] = '\0';
+}
+
 static Task tasks[MAX_TASKS]; //array untuk menyimpan task
 static uint8_t stacks[MAX_TASKS][STACK_SIZE]; //stack untuk setiap task
 static int current_task = 0; //id task yang sedang berjalan
@@ -18,18 +24,20 @@ void task_init() {
 }
 
 void task_set_main() {
-    task_count = 1; //anggap sudah ada 1 task (main)
-    tasks[0].used = 1; //tandai slot ini digunakan
+    task_count = 1;
+    tasks[0].used = 1;
+    str_copy_n(tasks[0].name, "[shell]", 32);
 }
 
  int task_create(void (*entry)()){
     if (task_count >= MAX_TASKS){
-        return -1; //gagal, sudah mencapai batas maksimal task
+        return -1;
     }
 
-    int id = task_count++; //gunakan id berikutnya
-    tasks[id].used = 1; //tandai slot ini digunakan
-    tasks[id].page_dir = vmm_create_page_dir(); //buat page directory baru untuk task ini
+    int id = task_count++;
+    tasks[id].used = 1;
+    str_copy_n(tasks[id].name, "[idle]", 32);
+    tasks[id].page_dir = vmm_create_page_dir();
     //Inisialisasi stack untuk task baru
     uint32_t *stack_top = (uint32_t*)(stacks[id] + STACK_SIZE); //mulai dari atas stack
 
@@ -87,12 +95,13 @@ void task_set_main() {
     }
  }
  
-int task_create_user(uint32_t entry, uint32_t *page_dir, uint32_t user_esp) {
+int task_create_user(uint32_t entry, uint32_t *page_dir, uint32_t user_esp, const char *name) {
     if (task_count >= MAX_TASKS) return -1;
 
     int id = task_count++;
     tasks[id].used = 1;
     tasks[id].page_dir = page_dir;
+    str_copy_n(tasks[id].name, name ? name : "?", 32);
 
     uint32_t *stack_top = (uint32_t*)(stacks[id] + STACK_SIZE);
 
@@ -119,9 +128,26 @@ int task_create_user(uint32_t entry, uint32_t *page_dir, uint32_t user_esp) {
 }
 
  void task_exit() {
-    tasks[current_task].used = 0; //tandai slot ini tidak digunakan lagi
+    tasks[current_task].used = 0;
     __asm__ volatile ("sti");
     while (1) {
-        __asm__ volatile ("hlt"); //hentikan CPU sampai ada interrupt, karena task ini sudah selesai
+        __asm__ volatile ("hlt");
     }
  }
+
+// --- fungsi info untuk ps command ---
+int task_get_max()         { return MAX_TASKS; }
+int task_is_used(int id)   { return (id >= 0 && id < MAX_TASKS) ? tasks[id].used : 0; }
+const char *task_get_name(int id) { return (id >= 0 && id < MAX_TASKS) ? tasks[id].name : ""; }
+int task_get_current()     { return current_task; }
+
+// kill: matikan task dengan id tertentu
+// tidak boleh kill id 0 (shell)
+int task_kill(int id) {
+    if (id <= 0 || id >= MAX_TASKS) return 0;  // id 0 = shell, lindungi
+    if (!tasks[id].used) return 0;             // sudah mati
+    tasks[id].used = 0;
+    // jika task_count menunjuk slot ini, kurangi agar slot bisa dipakai ulang
+    if (id == task_count - 1) task_count--;
+    return 1;
+}

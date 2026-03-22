@@ -1,30 +1,29 @@
 #include "lib.h"
 
+// hello.c — penerima: polling queue dan cetak setiap pesan yang masuk
 void _start() {
-    print("=== Hello ELF Program ===\n");
+    print("[receiver] menunggu pesan dari queue...\n");
 
-    // tulis file ke filesystem kernel
-    int ok = fs_write("pesan", "Halo dari program ELF!");
-    if (ok) {
-        print("fs_write: file 'pesan' berhasil disimpan\n");
-    } else {
-        print("fs_write: gagal!\n");
+    char buf[64];
+    int total = 0;
+
+    // coba ambil sampai 8 pesan (maks queue)
+    int i;
+    for (i = 0; i < 8; i++) {
+        if (msg_recv(buf)) {
+            print("[receiver] terima: ");
+            print(buf);
+            print("\n");
+            total++;
+        }
     }
 
-    // baca kembali file yang baru ditulis
-    const char *isi = fs_read("pesan");
-    if (isi) {
-        print("fs_read 'pesan': ");
-        print(isi);
+    if (total == 0) {
+        print("[receiver] queue kosong — jalankan 'exec sender' dulu!\n");
+    } else {
+        print("[receiver] selesai, total pesan: ");
+        print_int(total);
         print("\n");
-    } else {
-        print("fs_read: file tidak ditemukan\n");
-    }
-
-    // baca file yang tidak ada
-    const char *tidak_ada = fs_read("xyz");
-    if (!tidak_ada) {
-        print("fs_read 'xyz': tidak ditemukan (benar)\n");
     }
 
     exit();

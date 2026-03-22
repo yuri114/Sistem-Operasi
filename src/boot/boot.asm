@@ -1,6 +1,6 @@
 [BITS 16]
 [ORG 0x7c00]
-KERNEL_OFFSET equ 0x1000    ; kernel akan dimuat di alamat ini
+KERNEL_OFFSET equ 0x8000    ; kernel dimuat di sini (0x1000 berbahaya: DISK_LOAD bisa menimpa bootloader 0x7C00)
 
 start:
     xor ax, ax              ; ax = 0
@@ -15,7 +15,7 @@ start:
 
     ; load kernel dari disk ke memory
     mov bx, KERNEL_OFFSET       ; ES:BX = alamat tujuan (0x0000:0x1000)
-    mov dh, 40                  ; baca 40 sektor (20KB, lebih dari cukup)
+    mov dh, KERNEL_SECTORS      ; jumlah sektor kernel (dihitung otomatis saat build)
     mov dl, [boot_drive]        ; gunakan drive number dari BIOS
     call disk_load
     cli                     ; matikan semua interrupt

@@ -47,12 +47,33 @@ static inline uint8_t inb(uint16_t port){
 }
 
 void backspace_char();
+
+static uint8_t extended = 0; // flag untuk extended scancode (0xE0)
+
 /* Dipanggil dari irq_handler saat ada keyboard interrupt */
 void keyboard_handler(){
     uint8_t scancode = inb(KEYBOARD_DATA_PORT);
 
+    // prefix 0xE0 = extended scancode (arrow keys, dll)
+    // HARUS dicek SEBELUM bit-7 check karena 0xE0 = 11100000b (bit 7 = 1)
+    if (scancode == 0xE0) {
+        extended = 1;
+        return;
+    }
+
     /*Bit 7 = 1 berarti tombol dilepas(key release), abaikan */
     if (scancode & 0x80) {
+        extended = 0;
+        return;
+    }
+
+    if (extended) {
+        extended = 0;
+        if (scancode == 0x48) {          // ↑ up arrow
+            shell_process_char('\x01');
+        } else if (scancode == 0x50) {   // ↓ down arrow
+            shell_process_char('\x02');
+        }
         return;
     }
 

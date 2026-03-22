@@ -3,6 +3,7 @@
 #include "task.h"
 #include "memory.h"
 #include "fs.h"
+#include "ipc.h"
 
 extern void print(const char *str); // dari kernel.c
 
@@ -46,6 +47,23 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx) {
         const char *name = args[0];
         const char *data = args[1];
         return (uint32_t)fs_write(name, data);
+    }
+
+    // SYS_MSG_SEND(7): ebx = pointer string pesan
+    // return: 1 sukses, 0 queue penuh
+    if (eax == SYS_MSG_SEND) {
+        return (uint32_t)ipc_send((const char*)ebx);
+    }
+    // SYS_MSG_RECV(8): ebx = pointer buffer tujuan (minimal 64 byte)
+    // return: 1 ada pesan, 0 queue kosong
+    if (eax == SYS_MSG_RECV) {
+        return (uint32_t)ipc_recv((char*)ebx);
+    }
+
+    // SYS_KILL(9): ebx = id proses yang akan dimatikan
+    // return: 1 sukses, 0 gagal (id tidak valid / dilindungi)
+    if (eax == SYS_KILL) {
+        return (uint32_t)task_kill((int)ebx);
     }
 
     return (uint32_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal

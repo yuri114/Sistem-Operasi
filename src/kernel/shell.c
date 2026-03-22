@@ -19,6 +19,13 @@ void set_color(uint8_t fg, uint8_t bg);
 static char input_buffer[256];
 static int input_len = 0;
 
+/* History ring buffer */
+#define HISTORY_SIZE 8
+static char history[HISTORY_SIZE][256];
+static int hist_head  = 0;  // slot berikutnya untuk ditulis
+static int hist_count = 0;  // jumlah entri tersimpan (maks HISTORY_SIZE)
+static int hist_cursor = -1; // -1 = tidak browse; 0 = paling baru, 1 = sebelumnya
+
 static int str_compare(const char *a, const char *b){
     int i=0;
     while (a[i] != '\0' && b[i] != '\0') {
@@ -70,7 +77,9 @@ static void shell_execute(){
         print("write <nama> <isi>   - simpan file\n");
         print("del <nama>           - hapus file\n");
         print("paging               - tampilkan status paging\n");
-        print("exec <nama>         - jalankan program ELF\n");
+        print("exec <nama>          - jalankan program ELF\n");
+        print("ps                   - tampilkan daftar proses\n");
+        print("kill <id>            - matikan proses berdasarkan ID\n");
     }
     else if(str_compare(input_buffer, "clear")){
         clear_screen();
@@ -218,9 +227,59 @@ static void shell_execute(){
                 uint32_t stack_phys = pmm_alloc_frame();
                 vmm_map_page(proc_dir, 0x400000, stack_phys, 7);
                 uint32_t user_esp = 0x400000 + PAGE_SIZE; // puncak stack (tumbuh ke bawah)
-                task_create_user(entry, proc_dir, user_esp);
+                task_create_user(entry, proc_dir, user_esp, name);
                 print("exec: program dimulai\n");
             }
+        }
+    }
+    else if(str_compare(input_buffer, "ps")) {
+        int i;
+        int cur = task_get_current();
+        set_color(14, 0);
+        print("ID  STATUS    NAMA\n");
+        print("--- --------- ----------------\n");
+        set_color(15, 0);
+        for (i = 0; i < task_get_max(); i++) {
+            if (!task_is_used(i)) continue;
+            char id_buf[4];
+            itoa(i, id_buf);
+            // pad ID ke 3 karakter
+            print(id_buf);
+            print("   ");
+            if (i == cur) {
+                set_color(10, 0);
+                print("running   ");
+            } else {
+                set_color(7, 0);
+                print("ready     ");
+            }
+            set_color(15, 0);
+            print(task_get_name(i));
+            print("\n");
+        }
+    }
+    else if(str_starts_with(input_buffer, "kill ")) {
+        // parse angka id dari "kill <id>"
+        const char *p = input_buffer + 5;
+        int id = 0;
+        while (*p >= '0' && *p <= '9') {
+            id = id * 10 + (*p - '0');
+            p++;
+        }
+        if (id == 0) {
+            set_color(12, 0);
+            print("kill: tidak dapat mematikan shell (id 0)\n");
+            set_color(15, 0);
+        } else if (task_kill(id)) {
+            set_color(10, 0);
+            print("kill: proses ");
+            char buf[8]; itoa(id, buf); print(buf);
+            print(" dihentikan\n");
+            set_color(15, 0);
+        } else {
+            set_color(12, 0);
+            print("kill: proses tidak ditemukan atau tidak dapat dimatikan\n");
+            set_color(15, 0);
         }
     }
     else {
@@ -242,24 +301,75 @@ void shell_init(){
 
 void shell_process_char(char c){
     if (c=='\n'){                           /* enter ditekan*/
-        input_buffer[input_len] = '\0';     /* tutup string dengan null terminator*/
-        input_len = 0;                      /* reset buffer untuk input berikutnya*/        
-        shell_execute();                    /* eksekusi perintah */
-        set_color(10,0);                     /* warna hijau di hitam untuk prompt */
-        print("> ");                        /* tampilkan prompt */
-        set_color(15,0);                     /* warna putih di hitam untuk input */
+        input_buffer[input_len] = '\0';     /* tutup string */
+
+        // simpan ke history jika bukan kosong
+        if (input_len > 0) {
+            int i;
+            for (i = 0; i <= input_len; i++) history[hist_head][i] = input_buffer[i];
+            hist_head = (hist_head + 1) % HISTORY_SIZE;
+            if (hist_count < HISTORY_SIZE) hist_count++;
+            hist_cursor = -1;
+        }
+
+        input_len = 0;
+        shell_execute();
+        set_color(10,0);
+        print("> ");
+        set_color(15,0);
     }
     else if(c== '\b'){                      /* backspace */
         if (input_len > 0) {
-            input_len--;                    /* hapus karakter terakhir dari buffer */
-            backspace_char();               /* hapus karakter dari layar */
+            input_len--;
+            backspace_char();
+        }
+    }
+    else if (c == '\x01') {                 /* ↑ up arrow: maju ke history lebih lama */
+        if (hist_count == 0) return;
+        if (hist_cursor == -1) hist_cursor = 0;
+        else if (hist_cursor < hist_count - 1) hist_cursor++;
+        else return; // sudah di entri tertua
+        // hapus input sekarang dan tampilkan entri history
+        int i;
+        for (i = 0; i < input_len; i++) backspace_char();
+        int idx = (hist_head - 1 - hist_cursor + HISTORY_SIZE * 8) % HISTORY_SIZE;
+        i = 0;
+        while (history[idx][i] && i < 255) {
+            input_buffer[i] = history[idx][i];
+            print_char(history[idx][i]);
+            i++;
+        }
+        input_buffer[i] = '\0';
+        input_len = i;
+    }
+    else if (c == '\x02') {                 /* ↓ down arrow: kembali ke history lebih baru */
+        if (hist_cursor < 0) return;
+        int i;
+        for (i = 0; i < input_len; i++) backspace_char();
+        if (hist_cursor == 0) {
+            // kembali ke input kosong
+            hist_cursor = -1;
+            input_buffer[0] = '\0';
+            input_len = 0;
+        } else {
+            hist_cursor--;
+            int idx = (hist_head - 1 - hist_cursor + HISTORY_SIZE * 8) % HISTORY_SIZE;
+            i = 0;
+            while (history[idx][i] && i < 255) {
+                input_buffer[i] = history[idx][i];
+                print_char(history[idx][i]);
+                i++;
+            }
+            input_buffer[i] = '\0';
+            input_len = i;
         }
     }
     else {
         if (input_len < 255){
-            input_buffer[input_len] = c;    /* simpan karakter ke buffer */
+            hist_cursor = -1; // keluar dari mode browse saat user mengetik
+            input_buffer[input_len] = c;
             input_len++;
-            print_char(c);                  /* tampilkan karakter ke layar */
+            print_char(c);
         }
     }
 }

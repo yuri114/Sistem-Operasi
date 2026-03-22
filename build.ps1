@@ -23,6 +23,7 @@ $BUILD   = "$ROOT\build"
 New-Item -ItemType Directory -Force -Path $BUILD | Out-Null
 
 function Build-Bootloader {
+    $kernel_file = "$BUILD\kernel.bin"
     $input_file  = "$SRC\boot\boot.asm"
     $output_file = "$BUILD\boot.bin"
 
@@ -31,8 +32,12 @@ function Build-Bootloader {
         exit 1
     }
 
-    Write-Host "[NASM] Compiling bootloader..." -ForegroundColor Cyan
-    & $NASM -f bin $input_file -o $output_file
+    # hitung jumlah sektor kernel secara otomatis (+1 untuk pembulatan ke atas)
+    $kernel_size    = (Get-Item $kernel_file).Length
+    $kernel_sectors = [math]::Ceiling($kernel_size / 512)
+
+    Write-Host "[NASM] Compiling bootloader (kernel=$kernel_size bytes, $kernel_sectors sektor)..." -ForegroundColor Cyan
+    & $NASM -f bin $input_file -o $output_file -D KERNEL_SECTORS=$kernel_sectors
 
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[ERROR] Bootloader compile gagal!" -ForegroundColor Red
@@ -52,6 +57,10 @@ gcc -m32 -nostdlib -nostartfiles -fno-builtin -fno-pic \
 -T src/programs/user.ld src/programs/hello.c \
     -o build/hello.elf
 xxd -i build/hello.elf > src/kernel/hello_elf_data.h
+gcc -m32 -nostdlib -nostartfiles -fno-builtin -fno-pic \
+-T src/programs/user.ld src/programs/sender.c \
+    -o build/sender.elf
+xxd -i build/sender.elf > src/kernel/sender_elf_data.h
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/kernel.c    -o build/kernel.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/idt.c       -o build/idt.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/pic.c       -o build/pic.o
@@ -66,7 +75,8 @@ gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/ker
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/tss.c       -o build/tss.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/vmm.c       -o build/vmm.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/elf_loader.c -o build/elf_loader.o
-ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o -o build/kernel.elf
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/ipc.c        -o build/ipc.o
+ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o -o build/kernel.elf
 objcopy -O binary build/kernel.elf build/kernel.bin
 echo done
 "@
@@ -87,11 +97,22 @@ function Build-Image {
     Write-Host "[IMG]  Creating OS image..." -ForegroundColor Cyan
     $boot_bytes   = [System.IO.File]::ReadAllBytes($boot_bin)
     $kernel_bytes = [System.IO.File]::ReadAllBytes($kernel_bin)
-    $target       = 64 * 512   # 32KB = 64 sektor
-    $padding      = New-Object byte[] ($target - $boot_bytes.Length - $kernel_bytes.Length)
-    $img          = $boot_bytes + $kernel_bytes + $padding
-    [System.IO.File]::WriteAllBytes($os_img, $img)
-    Write-Host "[DONE] OS image siap: build\os.img ($($img.Length) bytes, $($img.Length/512) sektor)" -ForegroundColor Green
+    $target       = 2 * 1024 * 1024  # 2MB
+
+    # Tulis langsung ke file tanpa membuat array besar di memory
+    $fs = [System.IO.FileStream]::new($os_img, [System.IO.FileMode]::Create)
+    $fs.Write($boot_bytes,   0, $boot_bytes.Length)
+    $fs.Write($kernel_bytes, 0, $kernel_bytes.Length)
+    $remaining = $target - $boot_bytes.Length - $kernel_bytes.Length
+    $zeros = New-Object byte[] 4096
+    while ($remaining -gt 0) {
+        $chunk = [Math]::Min($remaining, 4096)
+        $fs.Write($zeros, 0, $chunk)
+        $remaining -= $chunk
+    }
+    $fs.Close()
+
+    Write-Host "[DONE] OS image siap: build\os.img ($target bytes, $($target/512) sektor)" -ForegroundColor Green
 }
 
 function Run-QEMU {
@@ -117,14 +138,14 @@ function Clean-Build {
 switch ($Action.ToLower()) {
     "build" {
         Write-Host "=== Building MyOS ===" -ForegroundColor White
-        Build-Bootloader
         Build-Kernel
+        Build-Bootloader
         Build-Image
     }
     "run" {
         Write-Host "=== Building & Running MyOS ===" -ForegroundColor White
-        Build-Bootloader
         Build-Kernel
+        Build-Bootloader
         Build-Image
         Run-QEMU
     }

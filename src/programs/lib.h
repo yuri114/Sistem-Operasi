@@ -11,6 +11,9 @@
 #define SYS_FREE     4
 #define SYS_FS_READ  5
 #define SYS_FS_WRITE 6
+#define SYS_MSG_SEND 7
+#define SYS_MSG_RECV 8
+#define SYS_KILL     9
 
 // ============================================================
 // syscall — memanggil kernel lewat int 0x80
@@ -139,6 +142,28 @@ static inline int fs_write(const char *name, const char *data) {
     args[0] = name;
     args[1] = data;
     return syscall1(SYS_FS_WRITE, (int)args);
+}
+
+// ============================================================
+// IPC — kirim dan terima pesan antar proses
+// ============================================================
+
+// Kirim pesan ke message queue kernel
+// return 1 sukses, 0 jika queue penuh (maks 8 pesan)
+static inline int msg_send(const char *msg) {
+    return syscall1(SYS_MSG_SEND, (int)msg);
+}
+
+// Ambil satu pesan dari queue ke buffer buf (minimal 64 byte)
+// return 1 jika ada pesan, 0 jika queue kosong
+static inline int msg_recv(char *buf) {
+    return syscall1(SYS_MSG_RECV, (int)buf);
+}
+
+// Kirim sinyal kill ke proses dengan id tertentu
+// return 1 sukses, 0 gagal (id tidak valid / dilindungi)
+static inline int kill(int id) {
+    return syscall1(SYS_KILL, id);
 }
 
 #endif
