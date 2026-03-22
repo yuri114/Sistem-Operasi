@@ -3,6 +3,9 @@
 #include "timer.h"
 #include "fs.h"
 #include "paging.h"
+#include "vmm.h"
+#include "elf_loader.h"
+#include "task.h"
 
 /*fungsi dari kernel.c*/
 void print(const char *str);
@@ -67,6 +70,7 @@ static void shell_execute(){
         print("write <nama> <isi>   - simpan file\n");
         print("del <nama>           - hapus file\n");
         print("paging               - tampilkan status paging\n");
+        print("exec <nama>         - jalankan program ELF\n");
     }
     else if(str_compare(input_buffer, "clear")){
         clear_screen();
@@ -196,6 +200,28 @@ static void shell_execute(){
         print(buf);
         print("\n");
         set_color(15,0); //kembalikan warna putih di hitam
+    }
+    else if(str_starts_with(input_buffer, "exec ")) {
+        const char *name = input_buffer + 5; // ambil nama setelah "exec "
+        uint32_t size;
+        const uint8_t *data = fs_read_bin(name, &size);
+        if (!data) {
+            print("exec: file tidak ditemukan\n");
+        } else {
+            // buat page directory baru khusus untuk proses ini (isolasi penuh)
+            uint32_t *proc_dir = vmm_create_page_dir();
+            uint32_t entry = elf_load(data, size, proc_dir);
+            if (!entry) {
+                print("exec: gagal memuat ELF\n");
+            } else {
+                // alokasikan user stack dari PMM, petakan di virtual 0x400000
+                uint32_t stack_phys = pmm_alloc_frame();
+                vmm_map_page(proc_dir, 0x400000, stack_phys, 7);
+                uint32_t user_esp = 0x400000 + PAGE_SIZE; // puncak stack (tumbuh ke bawah)
+                task_create_user(entry, proc_dir, user_esp);
+                print("exec: program dimulai\n");
+            }
+        }
     }
     else {
         set_color(12,0); //warna merah di hitam untuk error

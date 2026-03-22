@@ -79,3 +79,45 @@ void fs_list(void (*print_fn)(const char*)) {
     }
 }
 
+static void fs_memcpy(uint8_t *dst, const uint8_t *src, uint32_t n) {
+    uint32_t i;
+    for (i = 0; i < n; i++) {
+        dst[i] = src[i];
+    }
+}
+
+int fs_write_bin(const char *name, const uint8_t *data, uint32_t size) {
+    if (size > FS_MAX_DATA) return 0; //gagal, data terlalu besar
+
+    int i;
+    for (i = 0; i < FS_MAX_FILES; i++) {
+        if (files[i].used && fs_strcmp(files[i].name, name)) {
+            fs_memcpy(files[i].data, data, size);
+            files[i].size = size;
+            return 1; //sukses
+        }
+    }
+    for (i = 0; i < FS_MAX_FILES; i++) {
+        if (!files[i].used) {
+            fs_strcpy(files[i].name, name, FS_MAX_NAME);
+            fs_memcpy(files[i].data, data, size);
+            files[i].size = size;
+            files[i].used = 1;
+            return 1; //sukses
+        }
+    }
+    return 0; //gagal, tidak ada slot kosong
+}
+
+const uint8_t* fs_read_bin(const char *name, uint32_t *out_size) {
+    int i;
+    for (i = 0; i < FS_MAX_FILES; i++) {
+        if (files[i].used && fs_strcmp(files[i].name, name)) {
+            if (out_size) {
+                *out_size = files[i].size; //kembalikan ukuran data jika pointer valid
+            }
+            return files[i].data; //kembalikan pointer ke data
+        }
+    }
+    return 0; //tidak ditemukan
+}

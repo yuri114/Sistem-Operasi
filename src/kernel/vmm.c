@@ -25,14 +25,14 @@ void pmm_init() {
     }
     // tandai 4MB pertama (1024 frame) sebagai sudah dipakai
     // karena disitu ada kernel, stack, page tables, dll
-    for (i=0; i < 1024 ; i++) {
+    for (i=0; i < 768 ; i++) {
         bitmap_set(i);
     }
 }
 
 uint32_t pmm_alloc_frame() {
     int i;
-    for(i = 1024; i < TOTAL_FRAMES; i++) { //mulai dari frame 1024 karena 0-1023 sudah dipakai
+    for(i = 768; i < 1024; i++) { //mulai dari frame 768 karena 0-767 sudah dipakai
         if (!bitmap_test(i)) { //cari frame yang bebas
             bitmap_set(i); //tandai frame ini sebagai dipakai
             return (uint32_t)(i * PAGE_SIZE); //kembalikan alamat fisik frame ini
@@ -78,7 +78,15 @@ uint32_t* vmm_create_page_dir() {
         dir[i] = 0; //inisialisasi semua entry page directory sebagai tidak valid
     }
     extern uint32_t page_directory[]; //gunakan page directory kernel yang sudah ada untuk mapping 4MB pertama
-    dir[0] = page_directory[0]; //copy entry pertama untuk mapping 4MB pertama
+
+    // deep-copy page table kernel (bukan copy pointer) agar tiap proses punya page table sendiri
+    // sehingga vmm_map_page tidak merusak mapping kernel
+    if (page_directory[0] & 1) {
+        uint32_t *kernel_pt = (uint32_t*)(page_directory[0] & 0xFFFFF000);
+        uint32_t *new_pt = (uint32_t*)malloc(PAGE_SIZE);
+        for (i = 0; i < 1024; i++) new_pt[i] = kernel_pt[i];
+        dir[0] = ((uint32_t)new_pt) | (page_directory[0] & 0xFFF); //same flags, new page table
+    }
 
     return dir;
 }

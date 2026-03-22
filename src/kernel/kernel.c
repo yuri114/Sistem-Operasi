@@ -11,6 +11,8 @@
 #include "syscall.h"
 #include "tss.h"
 #include "vmm.h"
+#include "elf_loader.h"
+#include "hello_elf_data.h"
 
 #define VGA_ADDRESS 0xB8000
 #define VGA_COLS 80
@@ -218,6 +220,10 @@ void user_task() {
    
 }
 
+void programs_init() {
+    fs_write_bin("hello", build_hello_elf, build_hello_elf_len); //simpan data ELF hello world ke file system
+}
+
 /* Deklarasi handler dari isr.asm */
 extern void irq0();
 extern void irq1();
@@ -234,6 +240,7 @@ void kernel_main(){
     mem_init();
     pmm_init();
     fs_init();
+    programs_init();
     timer_init(100);
     paging_init();
     pic_init();

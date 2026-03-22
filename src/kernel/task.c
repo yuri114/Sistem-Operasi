@@ -1,5 +1,6 @@
 #include "task.h"
 #include "vmm.h"
+#include "tss.h"
 
 static Task tasks[MAX_TASKS]; //array untuk menyimpan task
 static uint8_t stacks[MAX_TASKS][STACK_SIZE]; //stack untuk setiap task
@@ -76,6 +77,9 @@ void task_set_main() {
     next_esp = &tasks[next].esp; //siapkan esp untuk task berikutnya
     current_task = next; //update task yang sedang berjalan
 
+    // update TSS agar interrupt saat ring 3 menggunakan kernel stack task yang benar
+    tss_set_kernel_stack((uint32_t)(stacks[next] + STACK_SIZE));
+
     // switch ke page directory task berikutnya (kalau ada)
     extern void vmm_switch_dir(uint32_t*);
     if (tasks[current_task].page_dir) {
@@ -83,6 +87,37 @@ void task_set_main() {
     }
  }
  
+int task_create_user(uint32_t entry, uint32_t *page_dir, uint32_t user_esp) {
+    if (task_count >= MAX_TASKS) return -1;
+
+    int id = task_count++;
+    tasks[id].used = 1;
+    tasks[id].page_dir = page_dir;
+
+    uint32_t *stack_top = (uint32_t*)(stacks[id] + STACK_SIZE);
+
+    // iret frame untuk transisi ke ring 3:
+    // CPU pop eip, cs, eflags, esp_user, ss saat iret ke ring <= privilege level rendah
+    *(--stack_top) = 0x23;       // ss  (user data segment, ring 3)
+    *(--stack_top) = user_esp;   // esp (user stack pointer)
+    *(--stack_top) = 0x202;      // eflags (IF=1, agar interrupt aktif)
+    *(--stack_top) = 0x1B;       // cs  (user code segment, ring 3)
+    *(--stack_top) = entry;      // eip (alamat entry point ELF)
+    // pusha: register umum (di-restore dengan popa di irq0)
+    *(--stack_top) = 0; // eax
+    *(--stack_top) = 0; // ecx
+    *(--stack_top) = 0; // edx
+    *(--stack_top) = 0; // ebx
+    *(--stack_top) = 0; // esp (dummy, tidak dipakai)
+    *(--stack_top) = 0; // ebp
+    *(--stack_top) = 0; // esi
+    *(--stack_top) = 0; // edi
+    *(--stack_top) = 0x23; // ds  (user data segment, di-pop pertama oleh irq0)
+
+    tasks[id].esp = (uint32_t)stack_top;
+    return id;
+}
+
  void task_exit() {
     tasks[current_task].used = 0; //tandai slot ini tidak digunakan lagi
     __asm__ volatile ("sti");
