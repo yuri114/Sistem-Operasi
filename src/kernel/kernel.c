@@ -10,6 +10,7 @@
 #include "task.h"
 #include "syscall.h"
 #include "tss.h"
+#include "vmm.h"
 
 #define VGA_ADDRESS 0xB8000
 #define VGA_COLS 80
@@ -231,6 +232,7 @@ void kernel_main(){
     print("\nKernel berjalan di Protected Mode (32-bit)\n");
     shell_init();
     mem_init();
+    pmm_init();
     fs_init();
     timer_init(100);
     paging_init();

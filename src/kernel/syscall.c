@@ -1,6 +1,7 @@
 #include "syscall.h"
 #include "keyboard.h"
 #include "task.h"
+#include "memory.h"
 
 extern void print(const char *str); // dari kernel.c
 
@@ -21,5 +22,14 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx) {
         task_exit(); //keluar dari task saat ini
         return 0; //tidak akan pernah sampai sini karena task_exit akan menghentikan task
     }
+    if (eax == SYS_ALLOC) {
+        void* ptr = malloc(ebx); //ebx berisi ukuran memori yang akan dialokasikan
+        return (uint32_t)ptr; //kembalikan pointer ke memori yang dialokasikan
+    }
+    if (eax == SYS_FREE) {
+        free((void*)ebx); //ebx berisi pointer ke memori yang akan dibebaskan
+        return 0; //kembalikan 0 untuk menandakan sukses
+    }
+
     return (uint32_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal
 }

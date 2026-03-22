@@ -48,20 +48,21 @@ set -e
 cd '/mnt/d/Sistem Operasi'
 nasm -f elf32 src/kernel/kernel_entry.asm -o build/kernel_entry.o
 nasm -f elf32 src/kernel/isr.asm         -o build/isr.o
-gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/kernel.c   -o build/kernel.o
-gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/idt.c      -o build/idt.o
-gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/pic.c      -o build/pic.o
-gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/keyboard.c -o build/keyboard.o
-gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/shell.c    -o build/shell.o
-gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/memory.c   -o build/memory.o
-gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/timer.c    -o build/timer.o
-gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/fs.c       -o build/fs.o
-gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/paging.c   -o build/paging.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/kernel.c    -o build/kernel.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/idt.c       -o build/idt.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/pic.c       -o build/pic.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/keyboard.c  -o build/keyboard.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/shell.c     -o build/shell.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/memory.c    -o build/memory.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/timer.c     -o build/timer.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/fs.c        -o build/fs.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/paging.c    -o build/paging.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/task.c      -o build/task.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/syscall.c   -o build/syscall.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/tss.c       -o build/tss.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/vmm.c       -o build/vmm.o
 
-ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o -o build/kernel.elf
+ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o -o build/kernel.elf
 objcopy -O binary build/kernel.elf build/kernel.bin
 echo done
 "@

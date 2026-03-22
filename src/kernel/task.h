@@ -8,6 +8,7 @@
 typedef struct{
     uint32_t esp; //stack pointer
     uint8_t used; //flag untuk menandai apakah slot ini digunakan
+    uint32_t *page_dir; //pointer ke page directory untuk task ini
 } Task;
 
 void task_init();

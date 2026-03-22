@@ -1,4 +1,5 @@
 #include "task.h"
+#include "vmm.h"
 
 static Task tasks[MAX_TASKS]; //array untuk menyimpan task
 static uint8_t stacks[MAX_TASKS][STACK_SIZE]; //stack untuk setiap task
@@ -27,6 +28,7 @@ void task_set_main() {
 
     int id = task_count++; //gunakan id berikutnya
     tasks[id].used = 1; //tandai slot ini digunakan
+    tasks[id].page_dir = vmm_create_page_dir(); //buat page directory baru untuk task ini
     //Inisialisasi stack untuk task baru
     uint32_t *stack_top = (uint32_t*)(stacks[id] + STACK_SIZE); //mulai dari atas stack
 
@@ -73,6 +75,12 @@ void task_set_main() {
     current_esp = &tasks[current_task].esp; //simpan esp task saat ini
     next_esp = &tasks[next].esp; //siapkan esp untuk task berikutnya
     current_task = next; //update task yang sedang berjalan
+
+    // switch ke page directory task berikutnya (kalau ada)
+    extern void vmm_switch_dir(uint32_t*);
+    if (tasks[current_task].page_dir) {
+        vmm_switch_dir(tasks[current_task].page_dir);
+    }
  }
  
  void task_exit() {

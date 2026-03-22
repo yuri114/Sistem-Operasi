@@ -1,6 +1,6 @@
 #include "paging.h"
 
-static uint32_t page_directory[1024] __attribute__((aligned(4096)));
+uint32_t page_directory[1024] __attribute__((aligned(4096)));
 static uint32_t page_table[1024]     __attribute__((aligned(4096)));
 
 static void load_page_directory(uint32_t *dir) {
