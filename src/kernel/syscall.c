@@ -2,6 +2,7 @@
 #include "keyboard.h"
 #include "task.h"
 #include "memory.h"
+#include "fs.h"
 
 extern void print(const char *str); // dari kernel.c
 
@@ -29,6 +30,22 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx) {
     if (eax == SYS_FREE) {
         free((void*)ebx); //ebx berisi pointer ke memori yang akan dibebaskan
         return 0; //kembalikan 0 untuk menandakan sukses
+    }
+
+    // SYS_FS_READ(5): ebx = pointer nama file
+    // return: pointer ke isi file (string), atau 0 jika tidak ditemukan
+    if (eax == SYS_FS_READ) {
+        const char *data = fs_read((const char*)ebx);
+        return (uint32_t)data;
+    }
+    // SYS_FS_WRITE(6): ebx = pointer ke struct { const char *name; const char *data; }
+    // return: 1 sukses, 0 gagal
+    if (eax == SYS_FS_WRITE) {
+        // struct dikirim lewat pointer di ebx
+        const char **args = (const char**)ebx;
+        const char *name = args[0];
+        const char *data = args[1];
+        return (uint32_t)fs_write(name, data);
     }
 
     return (uint32_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal

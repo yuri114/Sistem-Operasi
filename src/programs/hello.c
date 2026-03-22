@@ -1,17 +1,31 @@
-#define SYS_PRINT 0
-#define SYS_EXIT 2
-
-static void sys_print(const char *msg) {
-    __asm__ volatile (
-        "mov $0, %%eax\n"
-        "mov %0, %%ebx\n"
-        "int $0x80\n"
-        :: "r"(msg) : "eax", "ebx"
-    );
-}
+#include "lib.h"
 
 void _start() {
-    sys_print("Hello from ELF program!\n");
-    // SYS_EXIT
-    __asm__ volatile ("mov $2, %%eax; int $0x80" ::: "eax");
+    print("=== Hello ELF Program ===\n");
+
+    // tulis file ke filesystem kernel
+    int ok = fs_write("pesan", "Halo dari program ELF!");
+    if (ok) {
+        print("fs_write: file 'pesan' berhasil disimpan\n");
+    } else {
+        print("fs_write: gagal!\n");
+    }
+
+    // baca kembali file yang baru ditulis
+    const char *isi = fs_read("pesan");
+    if (isi) {
+        print("fs_read 'pesan': ");
+        print(isi);
+        print("\n");
+    } else {
+        print("fs_read: file tidak ditemukan\n");
+    }
+
+    // baca file yang tidak ada
+    const char *tidak_ada = fs_read("xyz");
+    if (!tidak_ada) {
+        print("fs_read 'xyz': tidak ditemukan (benar)\n");
+    }
+
+    exit();
 }
