@@ -25,6 +25,13 @@
 #define SYS_DEV_READ   20  // dev_read:  ebx=dev_id, edx=buf_ptr
 #define SYS_DEV_IOCTL  21  // dev_ioctl: ebx=dev_id, edx=cmd<<16|arg
 
+// Syscall grafis (Phase 24)
+#define SYS_DRAW_PIXEL  22  // ebx=x, edx=(y<<8)|color — gambar 1 piksel
+#define SYS_FILL_SCREEN 23  // ebx=color — isi seluruh layar
+#define SYS_FILL_RECT   24  // ebx=ptr GfxRect — gambar persegi panjang
+#define SYS_DRAW_LINE   25  // ebx=ptr GfxLine — gambar garis
+#define SYS_CLR_SCREEN  26  // kosongkan layar + reset kursor
+
 void syscall_init();
 uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx);
 

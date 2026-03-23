@@ -1,6 +1,7 @@
 #include "task.h"
 #include "vmm.h"
 #include "tss.h"
+#include "paging.h"
 
 static void str_copy_n(char *dst, const char *src, int n) {
     int i;
@@ -29,6 +30,11 @@ void task_set_main() {
     tasks[0].priority = 3;  // shell: prioritas tinggi
     tasks[0].ticks    = 3;
     tasks[0].pipe_id  = -1;
+    /* Simpan page directory kernel asli. Wajib agar saat task switch kembali ke
+     * task 0, CR3 dikembalikan ke PD yang memiliki mapping VBE LFB (0xE0000000).
+     * Tanpa ini, task switch ke bg_task mengubah CR3 ke PD baru,
+     * dan saat kembali ke shell, 0xE0000000 tidak ter-map → page fault. */
+    tasks[0].page_dir = page_directory;
     str_copy_n(tasks[0].name, "[shell]", 32);
 }
 

@@ -111,3 +111,82 @@ int80_handler:
     mov [esp+28], eax
     popa
     iret
+
+; ============================================================
+; Exception handlers INT 0-14 — CPU exceptions
+; ============================================================
+extern exception_handler
+
+; Exception TANPA error code (CPU tidak push error code)
+%macro EXC_NOERR 1
+global exc%1
+exc%1:
+    push dword 0        ; fake error code
+    push dword %1       ; nomor exception
+    jmp exc_common
+%endmacro
+
+; Exception DENGAN error code (CPU sudah push error code sebelum kita dipanggil)
+%macro EXC_ERR 1
+global exc%1
+exc%1:
+    push dword %1       ; nomor exception (error code sudah ada di stack dari CPU)
+    jmp exc_common
+%endmacro
+
+EXC_NOERR 0    ; #DE Divide Error
+EXC_NOERR 1    ; #DB Debug
+EXC_NOERR 2    ;     NMI
+EXC_NOERR 3    ; #BP Breakpoint
+EXC_NOERR 4    ; #OF Overflow
+EXC_NOERR 5    ; #BR Bound Range
+EXC_NOERR 6    ; #UD Invalid Opcode
+EXC_NOERR 7    ; #NM Device Not Available
+EXC_ERR   8    ; #DF Double Fault     (error code selalu 0)
+EXC_NOERR 9    ;     Coprocessor Segment Overrun
+EXC_ERR   10   ; #TS Invalid TSS
+EXC_ERR   11   ; #NP Segment Not Present
+EXC_ERR   12   ; #SS Stack Fault
+EXC_ERR   13   ; #GP General Protection Fault
+EXC_ERR   14   ; #PF Page Fault
+
+exc_common:
+    ; Posisi stack saat masuk (dari ESP[0] ke alamat lebih tinggi):
+    ;   [ESP+ 0] = exc_num         (kita push)
+    ;   [ESP+ 4] = error_code      (kita push 0, atau error code dari CPU)
+    ;   [ESP+ 8] = EIP             (CPU push, alamat instruksi yang salah)
+    ;   [ESP+12] = CS
+    ;   [ESP+16] = EFLAGS
+    ;   [ESP+20] = ESP_user, [ESP+24] = SS_user  (hanya jika ada perubahan privilege)
+    pusha               ; push 8 register = 32 bytes
+    mov ax, ds
+    push eax            ; simpan DS = 4 bytes
+    ; Sekarang: exc_num=[ESP+36], error_code=[ESP+40], EIP=[ESP+44]
+
+    mov ax, 0x10        ; kernel data segment
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    mov eax, [esp + 36]   ; exc_num
+    mov ebx, [esp + 40]   ; error_code
+    mov ecx, [esp + 44]   ; EIP (alamat instruksi penyebab)
+    mov edx, cr2          ; CR2 = alamat akses yang menyebabkan #PF
+
+    push edx              ; arg4: cr2
+    push ecx              ; arg3: eip
+    push ebx              ; arg2: error_code
+    push eax              ; arg1: exc_num
+    call exception_handler   ; tidak pernah kembali (cli+hlt di dalam)
+    add esp, 16
+
+    pop eax
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    popa
+    add esp, 8          ; buang exc_num dan error_code
+    iret

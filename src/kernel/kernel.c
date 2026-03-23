@@ -1,5 +1,4 @@
 /*kernel.c - kernel utama*/
-/*alamat VGA text buffer */
 #include "idt.h"
 #include "pic.h"
 #include "shell.h"
@@ -19,120 +18,106 @@
 #include "pipe_sender_elf_data.h"
 #include "pipe_receiver_elf_data.h"
 #include "devtest_elf_data.h"
+#include "gfxtest_elf_data.h"
 #include "ipc.h"
 #include "semaphore.h"
 #include "pipe.h"
 #include "device.h"
 #include "drv_vga.h"
 #include "drv_kbd.h"
+#include "graphics.h"
+#include "vbe.h"
+#include "keyboard.h"
 
-#define VGA_ADDRESS 0xB8000
+/* Bochs VBE 640x480 @ 8bpp: font 8x8 = 80 kolom x 60 baris */
 #define VGA_COLS 80
-#define VGA_ROWS 25
-#define WHITE_ON_BLACK 0x0F
+#define VGA_ROWS 60
 
-/*pointer ke VGA buffer - setiap entry = 2 byte (char + warna)*/
-unsigned short* vga = (unsigned short*) VGA_ADDRESS;//pointer ke VGA buffer, di-cast ke unsigned short* karena setiap entry 2 byte
-
-/* posisi kursor saat ini*/
+/* posisi kursor teks saat ini (dalam satuan sel karakter 8x8) */
 int cursor_col = 0;
 int cursor_row = 0;
-int input_start_row = 0; //baris awal untuk input keyboard
-int input_start_col = 0; //kolom awal untuk input keyboard
-void scroll(); //fungsi untuk menggulir layar ke atas saat mencapai akhir layar
-void update_cursor(); //fungsi untuk update posisi kursor di hardware
-void itoa(uint32_t num, char *buf); //fungsi untuk konversi integer ke string
-uint8_t current_color = 0x0f; //warna teks saat ini
-void vga_put_char_at(int col,int row, char c, uint8_t color); //fungsi untuk menampilkan karakter dengan warna tertentu di posisi tertentu
+int input_start_row = 0;
+int input_start_col = 0;
+void scroll();
+void update_cursor();
+void itoa(uint32_t num, char *buf);
 
-void set_color(uint8_t fg, uint8_t bg){
-    current_color = (bg << 4) | (fg & 0x0F); //gabungkan warna latar belakang dan teks
+/* Warna teks saat ini (fg/bg sebagai indeks palette Mode 13h 0-255) */
+uint8_t current_color = 0x0f;  /* packed: bg<<4|fg (untuk kompatibilitas drv_vga) */
+uint8_t fg_color = GFX_LGRAY;  /* warna foreground karakter */
+uint8_t bg_color = GFX_BLACK;  /* warna background sel */
+
+void vga_put_char_at(int col, int row, char c, uint8_t color);
+
+void set_color(uint8_t fg, uint8_t bg) {
+    fg_color = fg & 0x0F;
+    bg_color = bg & 0x0F;
+    current_color = (bg_color << 4) | fg_color;
 }
 
 /*fungsi: hapus seluruh layar*/
 void clear_screen() {
-    int i;
-    for (i = 0; i < VGA_COLS * VGA_ROWS; i++)   //loop untuk setiap entry di VGA buffer
-    {
-        vga[i] = (WHITE_ON_BLACK << 8) | ' ';   //setiap entry = warna + char
-    }
+    fill_screen(bg_color);   /* isi framebuffer Mode 13h dengan warna background */
     cursor_col = 0;
     cursor_row = 0;
 }
 
 /*fungsi: cetak suatu karakter ke layar*/
-void print_char(char c){
-    if (c=='\n') //jika karakter newline, pindah ke baris berikutnya
-    {
-        cursor_col = 0;//kembali ke kolom pertama
-        cursor_row++;//pindah ke baris berikutnya
-        if (cursor_row >= VGA_ROWS)
-        {
-            scroll(); //geser layar ke atas jika mencapai akhir layar
-        }
-        
+void print_char(char c) {
+    if (c == '\n') {
+        cursor_col = 0;
+        cursor_row++;
+        if (cursor_row >= VGA_ROWS) scroll();
         return;
     }
-    int index = cursor_row * VGA_COLS + cursor_col;  //hitung index di VGA buffer
-    vga[index] = (current_color << 8) | c; //set entry = warna + char
-    
-    cursor_col++; //pindah ke kolom berikutnya
-    if (cursor_col >= VGA_COLS)//jika mencapai akhir baris
-    {
-        cursor_col = 0; //kembali ke kolom pertama
-        cursor_row++; //pindah ke baris berikutnya
-        if (cursor_row >= VGA_ROWS)
-        {
-            scroll(); //geser layar ke atas jika mencapai akhir layar
-        }
+    draw_char_gfx(cursor_col * 8, cursor_row * 8, c, fg_color, bg_color);
+    cursor_col++;
+    if (cursor_col >= VGA_COLS) {
+        cursor_col = 0;
+        cursor_row++;
+        if (cursor_row >= VGA_ROWS) scroll();
     }
-    update_cursor(); //update posisi kursor di hardware
+    update_cursor();
 }
 
-void backspace_char(){
-    if (cursor_row == input_start_row && cursor_col == input_start_col) return; //jika sudah di awal layar, tidak lakukan apa-apa
-    
-    if (cursor_col==0)
-    {
+void backspace_char() {
+    if (cursor_row == input_start_row && cursor_col == input_start_col) return;
+    if (cursor_col == 0) {
         cursor_row--;
-        cursor_col = VGA_COLS - 1; //kembali ke kolom terakhir baris sebelumnya
-    }
-    else
-    {
+        cursor_col = VGA_COLS - 1;
+    } else {
         cursor_col--;
     }
-    int index = cursor_row * VGA_COLS + cursor_col; //hitung index di VGA buffer
-    vga[index] = (current_color << 8)| ' '; //hapus karakter dengan spasi
-    update_cursor(); //update posisi kursor di hardware
+    draw_char_gfx(cursor_col * 8, cursor_row * 8, ' ', fg_color, bg_color);
+    update_cursor();
 }
 
 void scroll() {
-    int row, col;
-    for (row = 1; row < VGA_ROWS; row++)
-    {
-        for (col = 0; col < VGA_COLS; col++)
-        {
-            vga[(row - 1) * VGA_COLS + col] = vga[row * VGA_COLS + col]; //geser setiap baris ke atas
-        }
-    }
-    for (col = 0; col < VGA_COLS; col++)
-    {
-        vga[(VGA_ROWS - 1) * VGA_COLS + col] = (current_color << 8) | ' '; //hapus baris terakhir
-    }
-    cursor_row = VGA_ROWS - 1; //pindah ke baris terakhir
+    /* Geser framebuffer ke atas 8 baris — tulis 32-bit sekaligus agar cepat.
+     * 640*(480-8) = 301,120 byte = 75,280 dword yang di-copy */
+    uint32_t *fb32  = (uint32_t *)FB_ADDR;
+    uint32_t stride = SCREEN_W / 4;  /* dword per baris */
+    int i;
+    /* Copy baris 8..479 ke baris 0..471 */
+    for (i = 0; i < stride * (SCREEN_H - 8); i++)
+        fb32[i] = fb32[i + stride * 8];
+    /* Hapus 8 baris terakhir dengan warna background */
+    uint32_t bval = (uint32_t)bg_color
+                  | ((uint32_t)bg_color << 8)
+                  | ((uint32_t)bg_color << 16)
+                  | ((uint32_t)bg_color << 24);
+    for (i = stride * (SCREEN_H - 8); i < stride * SCREEN_H; i++)
+        fb32[i] = bval;
+    cursor_row = VGA_ROWS - 1;
 }
 
 static inline void outb(uint16_t port, uint8_t value){
     __asm__ volatile ("outb %0, %1":: "a"(value), "Nd"(port));
 }
 
-void update_cursor(){
-    uint16_t pos = cursor_row * VGA_COLS + cursor_col; /* hitung posisi kursor */
-    outb(0x3D4, 0x0F); //index register untuk low byte
-    outb(0x3D5,pos & 0xFF); //kirim low byte
-    
-    outb(0x3D4, 0x0E); //index register untuk high byte
-    outb(0x3D5, (pos >> 8) & 0xFF); //kirim high byte
+void update_cursor() {
+    /* Di Mode 13h hardware cursor tidak terlihat — no-op.
+     * Software cursor (opsional) dapat ditambahkan di fase mendatang. */
 }
 
 /*fungsi: cetak string ke layar*/
@@ -145,20 +130,14 @@ void print(const char *str){
     }
 }
 
-void vga_put_char_at(int col,int row, char c, uint8_t color){
-    int idx = row * VGA_COLS + col; //hitung index di VGA buffer
-    vga[idx] = (color << 8) | (unsigned char)c; //set entry = warna + char
+void vga_put_char_at(int col, int row, char c, uint8_t color) {
+    draw_char_gfx(col * 8, row * 8, c, color, bg_color);
 }
 
 void my_background_task() {
-    uint32_t counter = 0;
-    char digits[] = "0123456789";
-
     while(1) {
-        counter++;
-        // tulis 2 digit counter di pojok kanan atas
-        vga_put_char_at(78,0,digits[(counter / 10) % 10], 0x0A);
-        vga_put_char_at(79,0,digits[counter % 10], 0x0A);
+        /* background task — tidak menggambar langsung ke framebuffer
+         * agar tidak menyebabkan flicker */
         uint32_t i;
         for (i = 0; i < 5000000; i++) {
             __asm__ volatile ("nop");
@@ -240,15 +219,101 @@ void programs_init() {
     fs_write_bin("pipe_sender",   build_pipe_sender_elf,   build_pipe_sender_elf_len);
     fs_write_bin("pipe_receiver", build_pipe_receiver_elf, build_pipe_receiver_elf_len);
     fs_write_bin("devtest",       build_devtest_elf,       build_devtest_elf_len);
+    fs_write_bin("gfxtest",       build_gfxtest_elf,       build_gfxtest_elf_len);
 }
 
 /* Deklarasi handler dari isr.asm */
 extern void irq0();
 extern void irq1();
 extern void int80_handler();
+extern void exc0();  extern void exc1();  extern void exc2();
+extern void exc3();  extern void exc4();  extern void exc5();
+extern void exc6();  extern void exc7();  extern void exc8();
+extern void exc9();  extern void exc10(); extern void exc11();
+extern void exc12(); extern void exc13(); extern void exc14();
+
+/* Cetak nilai 32-bit dalam format hex 8 digit */
+static void print_hex32(uint32_t val) {
+    const char *hex = "0123456789ABCDEF";
+    char buf[9];
+    int i;
+    for (i = 0; i < 8; i++) {
+        buf[7 - i] = hex[val & 0xF];
+        val >>= 4;
+    }
+    buf[8] = '\0';
+    print(buf);
+}
+
+/* Dipanggil dari exc_common di isr.asm saat CPU exception terjadi.
+ * Tampilkan layar merah dengan info exception, lalu halt sistem. */
+void exception_handler(uint32_t exc_num, uint32_t error_code,
+                       uint32_t eip,      uint32_t cr2) {
+    static const char *names[] = {
+        "#DE Divide Error",         "#DB Debug",
+        "NMI",                      "#BP Breakpoint",
+        "#OF Overflow",             "#BR Bound Range",
+        "#UD Invalid Opcode",       "#NM Device Not Available",
+        "#DF Double Fault",         "Coprocessor Overrun",
+        "#TS Invalid TSS",          "#NP Segment Not Present",
+        "#SS Stack Fault",          "#GP General Protection",
+        "#PF Page Fault"
+    };
+    char num_buf[12];
+
+    /* Layar merah — gunakan VBE framebuffer yang sudah terpeta */
+    fill_screen(GFX_RED);
+    cursor_row = 0; cursor_col = 0;
+    set_color(GFX_WHITE, GFX_RED);
+
+    print("========== KERNEL PANIC ==========\n\n");
+    print("Exception : ");
+    print(exc_num < 15 ? names[exc_num] : "Unknown");
+    print("  (INT ");
+    itoa(exc_num, num_buf); print(num_buf);
+    print(")\nErr Code  : 0x"); print_hex32(error_code);
+    print("\nEIP       : 0x"); print_hex32(eip);
+
+    if (exc_num == 14) {   /* Page Fault — CR2 berisi alamat yang menyebabkan fault */
+        print("\nCR2       : 0x"); print_hex32(cr2);
+        print("\nAccess    : ");
+        print(error_code & 4 ? "User " : "Kernel ");
+        print(error_code & 2 ? "Write "  : "Read ");
+        print(error_code & 1 ? "(Protection Violation)" : "(Page Not Present)");
+    }
+
+    print("\n\nSystem Halted.\n");
+    __asm__ volatile ("cli");
+    for (;;) __asm__ volatile ("hlt");
+}
 
 /*entry point kernel - dipanggil dari kernel_entry.asm*/
 void kernel_main(){
+    /* Diagnostik: tulis ke VGA text buffer (0xB8000) sebelum VBE aktif.
+     * Jika huruf 'K' muncul di pojok kiri atas, berarti kernel C sudah dicapai.
+     * Ini menggunakan physical address 0xB8000 yang selalu ter-identity-map (< 4MB). */
+    volatile uint16_t *vga_dbg = (volatile uint16_t *)0xB8000;
+    vga_dbg[0] = 0x0F4B; /* 'K' putih di atas hitam */
+    vga_dbg[1] = 0x0F43; /* 'C' */
+    vga_dbg[2] = 0x0F20; /* ' ' */
+
+    /* 1. Paging harus aktif lebih dulu agar bisa akses VBE LFB */
+    paging_init();
+    vga_dbg[3] = 0x0F50; /* 'P' = paging OK */
+
+    /* 2. Temukan alamat BAR0 (VRAM/LFB) VBE stdvga via PCI config space.
+     *    BAR0 (offset 0x10) = VRAM / Linear Framebuffer.
+     *    BAR2 (offset 0x18) = MMIO registers (4KB) — menulis framebuffer ke sana
+     *    menyebabkan machine check → triple fault → reboot loop. */
+    uint32_t lfb_addr = vbe_find_lfb();
+    vga_dbg[4] = 0x0F46; /* 'F' = find_lfb OK */
+    paging_map_vbe(lfb_addr);
+    vga_dbg[5] = 0x0F4D; /* 'M' = map OK */
+
+    /* 3. Set mode grafis 640x480, update pointer framebuffer, inisialisasi */
+    vbe_set_mode(640, 480, 8);
+    graphics_set_fb(lfb_addr);
+    graphics_init();
     clear_screen();
     print("=================================");
     print("\n   Selamat datang di MyOS!   \n");
@@ -267,12 +332,28 @@ void kernel_main(){
     dev_init_all();
     programs_init();
     timer_init(100);
-    paging_init();
     pic_init();
     idt_init();
     idt_set_gate(32, (uint32_t)irq0);
     idt_set_gate(33, (uint32_t)irq1);
     idt_set_gate(0x80, (uint32_t)int80_handler); //set handler untuk syscall di interrupt 0x80
+
+    /* Exception handlers INT 0-14 — tanpa ini CPU exception → triple fault → reboot */
+    idt_set_gate(0,  (uint32_t)exc0);
+    idt_set_gate(1,  (uint32_t)exc1);
+    idt_set_gate(2,  (uint32_t)exc2);
+    idt_set_gate(3,  (uint32_t)exc3);
+    idt_set_gate(4,  (uint32_t)exc4);
+    idt_set_gate(5,  (uint32_t)exc5);
+    idt_set_gate(6,  (uint32_t)exc6);
+    idt_set_gate(7,  (uint32_t)exc7);
+    idt_set_gate(8,  (uint32_t)exc8);
+    idt_set_gate(9,  (uint32_t)exc9);
+    idt_set_gate(10, (uint32_t)exc10);
+    idt_set_gate(11, (uint32_t)exc11);
+    idt_set_gate(12, (uint32_t)exc12);
+    idt_set_gate(13, (uint32_t)exc13);
+    idt_set_gate(14, (uint32_t)exc14);
 
     input_start_row = cursor_row;
     input_start_col = cursor_col;
@@ -283,15 +364,26 @@ void kernel_main(){
     //register syscall dengan DPL = 3
     idt_set_gate_user(0x80, (uint32_t)int80_handler); //set gate dengan privilege level user (ring 3) untuk interrupt 0x80 (syscall)    
 
-    // inisialisasi multitasking SEBELUM enter_usermode (setelah enter_usermode tidak pernah balik)
+    // inisialisasi multitasking
     task_init();
     task_set_main(); //tandai task utama sudah ada
-    task_create(my_background_task); //buat task latar belakang
+    /* Tidak membuat background task — task_count=1, task_switch selalu early return.
+     * Background task menyebabkan task switch aktif, yang mengubah CR3 dan ESP
+     * secara tidak terduga saat shell berada di tengah drawing loop → crash. */
 
     __asm__ volatile ("sti");
 
-    enter_usermode((uint32_t)user_task, (uint32_t)(user_stack + 4096));
-    
-    /* tidak pernah sampai sini */
-    while (1){}
+    /* Shell polling loop — berjalan di ring 0, bukan di interrupt context.
+     * Dulu shell_process_char dipanggil dari irq1 (keyboard interrupt), artinya
+     * draw_char_gfx (64 pixel write) terjadi di dalam interrupt dengan IF=0.
+     * Akibatnya: (1) delay lama antar keystroke, (2) fast typing → crash karena
+     * banyak timer interrupt tertunda langsung menyerbu saat irq1 selesai.
+     *
+     * Sekarang keyboard_handler HANYA melakukan key_push ke buffer (cepat, <10 instruksi).
+     * Shell processing (termasuk drawing) terjadi di sini dengan IF=1 sehingga
+     * timer interrupt bisa masuk kapan saja — task switch aman, tidak ada crash. */
+    while (1) {
+        char c = keyboard_getchar();
+        if (c) shell_process_char(c);
+    }
 }

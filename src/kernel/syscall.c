@@ -7,8 +7,10 @@
 #include "semaphore.h"
 #include "pipe.h"
 #include "device.h"
+#include "graphics.h"
 
 extern void print(const char *str); // dari kernel.c
+extern void clear_screen();         // dari kernel.c
 
 uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
     if (eax == SYS_PRINT){
@@ -123,6 +125,37 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
         int cmd = (int)((edx >> 16) & 0xFFFF);
         int arg = (int)(edx & 0xFFFF);
         return (uint32_t)dev_ioctl((int)ebx, cmd, arg);
+    }
+
+    // SYS_DRAW_PIXEL(22): ebx=x, edx=(y<<8)|color — gambar satu piksel
+    if (eax == SYS_DRAW_PIXEL) {
+        int x = (int)ebx;
+        int y = (int)((edx >> 8) & 0xFF);
+        uint8_t color = (uint8_t)(edx & 0xFF);
+        draw_pixel(x, y, color);
+        return 0;
+    }
+    // SYS_FILL_SCREEN(23): ebx=color — isi seluruh layar
+    if (eax == SYS_FILL_SCREEN) {
+        fill_screen((uint8_t)ebx);
+        return 0;
+    }
+    // SYS_FILL_RECT(24): ebx=pointer ke GfxRect
+    if (eax == SYS_FILL_RECT) {
+        GfxRect *r = (GfxRect*)ebx;
+        fill_rect(r->x, r->y, r->w, r->h, r->color);
+        return 0;
+    }
+    // SYS_DRAW_LINE(25): ebx=pointer ke GfxLine — gambar garis Bresenham
+    if (eax == SYS_DRAW_LINE) {
+        GfxLine *l = (GfxLine*)ebx;
+        draw_line(l->x1, l->y1, l->x2, l->y2, l->color);
+        return 0;
+    }
+    // SYS_CLR_SCREEN(26): bersihkan layar + reset kursor ke (0,0)
+    if (eax == SYS_CLR_SCREEN) {
+        clear_screen();
+        return 0;
     }
 
     return (uint32_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal

@@ -17,10 +17,12 @@ static int kbd_write(const char *buf) {
 // buf[0] diisi, buf[1]='\0'. Return 1 jika ada karakter, 0 jika buffer kosong.
 static int kbd_read(char *buf) {
     if (!buf) return -1;
-    // Aktifkan interrupt dan tunggu karakter tersedia
+    // Aktifkan interrupt agar IRQ1 bisa mengisi buffer, lalu tunggu dengan hlt
+    // (hlt lebih efisien dari busy-spin: CPU tidur sampai interrupt berikutnya)
     __asm__ volatile ("sti");
     char c = 0;
     while (c == 0) {
+        __asm__ volatile ("hlt");   // tidur sampai ada interrupt (IRQ1 atau IRQ0)
         c = keyboard_getchar();
     }
     buf[0] = c;

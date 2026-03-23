@@ -88,6 +88,17 @@ uint32_t* vmm_create_page_dir() {
         dir[0] = ((uint32_t)new_pt) | (page_directory[0] & 0xFFF); //same flags, new page table
     }
 
+    /* Salin mapping VBE LFB ke page directory proses baru.
+     * Gunakan runtime address (gfx_lfb_addr) bukan hardcode 0xE0000000,
+     * karena QEMU bisa saja menetapkan BAR0 stdvga di alamat berbeda
+     * (misalnya 0xFD000000). Jika pd_index salah, user PD tidak punya
+     * mapping VBE → page fault di syscall → crash/triple fault. */
+    extern uint32_t gfx_lfb_addr;
+    uint32_t lfb_pd_idx = gfx_lfb_addr >> 22;
+    if (lfb_pd_idx > 0 && (page_directory[lfb_pd_idx] & 1)) {
+        dir[lfb_pd_idx] = page_directory[lfb_pd_idx]; /* share VBE page table */
+    }
+
     return dir;
 }
 

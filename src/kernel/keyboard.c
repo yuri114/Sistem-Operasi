@@ -1,7 +1,6 @@
 #include <stdint.h>
 #include "keyboard.h"
 #include "pic.h"
-#include "shell.h"
 
 #define KEYBOARD_DATA_PORT 0x60
 #define KEY_BUFFER_SIZE 64
@@ -56,12 +55,15 @@ static inline uint8_t inb(uint16_t port){
     return value;
 }
 
-void backspace_char();
+/* backspace_char dideklarasikan di kernel.c, dipakai oleh shell.c */
 
-static uint8_t extended = 0; // flag untuk extended scancode (0xE0)
-static uint8_t shift_pressed = 0; // flag: Left Shift (0x2A) atau Right Shift (0x36) sedang ditekan
+static uint8_t extended = 0;      /* flag extended scancode (0xE0) */
+static uint8_t shift_pressed = 0; /* Left Shift (0x2A) / Right Shift (0x36) */
 
-/* Dipanggil dari irq_handler saat ada keyboard interrupt */
+/* Dipanggil dari irq_handler saat ada keyboard interrupt.
+ * HANYA melakukan buffering — tidak menggambar ke layar.
+ * Shell processing (draw_char_gfx dll.) dilakukan di polling loop kernel_main
+ * agar tidak terjadi drawing di dalam interrupt context (penyebab delay + crash). */
 void keyboard_handler(){
     uint8_t scancode = inb(KEYBOARD_DATA_PORT);
 
@@ -92,33 +94,22 @@ void keyboard_handler(){
 
     if (extended) {
         extended = 0;
-        if (scancode == 0x48) {          // ↑ up arrow
-            shell_process_char('\x01');
-        } else if (scancode == 0x50) {   // ↓ down arrow
-            shell_process_char('\x02');
-        }
+        if (scancode == 0x48)       key_push('\x01'); /* ↑ up */
+        else if (scancode == 0x50)  key_push('\x02'); /* ↓ down */
         return;
     }
 
-    if (scancode == 0x0F) {              // Tab
-        shell_process_char('\x03');
-        return;
-    }
+    if (scancode == 0x0F) { key_push('\x03'); return; } /* Tab */
 
-    if (scancode == 0x0E) { //scancode 0x0E = backspace
-        key_push('\b'); //push karakter backspace ke buffer
-        shell_process_char('\b');
+    if (scancode == 0x0E) {
+        key_push('\b');
     }
-    else if (scancode == 0x1C){
-        key_push('\n'); //push karakter newline ke buffer
-        shell_process_char('\n');
+    else if (scancode == 0x1C) {
+        key_push('\n');
     }
     else if (scancode < sizeof(scancode_table)) {
         char c = shift_pressed ? scancode_shift_table[scancode] : scancode_table[scancode];
-        if (c != 0) {
-            key_push(c); //push karakter ke buffer
-            shell_process_char(c); /* Tampilkan karakter ke layar */
-        }
+        if (c != 0) key_push(c);
     }
 }
 

@@ -27,6 +27,13 @@
 #define SYS_DEV_READ   20
 #define SYS_DEV_IOCTL  21
 
+// Syscall grafis (Phase 24)
+#define SYS_DRAW_PIXEL  22
+#define SYS_FILL_SCREEN 23
+#define SYS_FILL_RECT   24
+#define SYS_DRAW_LINE   25
+#define SYS_CLR_SCREEN  26
+
 // Device ID (harus sama dengan device.h)
 #define DEV_VGA  0
 #define DEV_KBD  1
@@ -38,6 +45,28 @@
 
 // Keyboard ioctl commands
 #define KBD_IOCTL_FLUSH      0  // kosongkan buffer keyboard
+
+// Warna Mode 13h palette (0-15 = CGA/EGA standard)
+#define GFX_BLACK     0
+#define GFX_BLUE      1
+#define GFX_GREEN     2
+#define GFX_CYAN      3
+#define GFX_RED       4
+#define GFX_MAGENTA   5
+#define GFX_BROWN     6
+#define GFX_LGRAY     7
+#define GFX_DGRAY     8
+#define GFX_LBLUE     9
+#define GFX_LGREEN   10
+#define GFX_LCYAN    11
+#define GFX_LRED     12
+#define GFX_LMAGENTA 13
+#define GFX_YELLOW   14
+#define GFX_WHITE    15
+
+// Struct argumen syscall grafis — layout harus cocok dengan GfxRect/GfxLine di graphics.h
+typedef struct { int x, y, w, h; unsigned char color; } GfxRect;
+typedef struct { int x1, y1, x2, y2; unsigned char color; } GfxLine;
 
 // ============================================================
 // syscall — memanggil kernel lewat int 0x80
@@ -270,6 +299,48 @@ static inline int dev_read(int dev_id, char *buf) {
 // Kontrol khusus device (cmd dan arg dikemas dalam edx: cmd<<16 | arg)
 static inline int dev_ioctl(int dev_id, int cmd, int arg) {
     return syscall2(SYS_DEV_IOCTL, dev_id, (cmd << 16) | (arg & 0xFFFF));
+}
+
+// ============================================================
+// Grafis Mode 13h — akses framebuffer 320x200 via syscall
+// ============================================================
+
+// Gambar satu piksel di (x, y) dengan warna 0-255
+static inline void gfx_pixel(int x, int y, unsigned char color) {
+    syscall2(SYS_DRAW_PIXEL, x, (y << 8) | (int)color);
+}
+
+// Isi seluruh layar dengan satu warna
+static inline void gfx_fill(unsigned char color) {
+    syscall1(SYS_FILL_SCREEN, (int)color);
+}
+
+// Bersihkan layar dan reset posisi kursor teks ke (0,0)
+static inline void gfx_clear() {
+    syscall0(SYS_CLR_SCREEN);
+}
+
+// Gambar persegi panjang terisi menggunakan struct pointer
+// (hindari variable length array di stack)
+static inline void gfx_rect_s(GfxRect *r) {
+    syscall1(SYS_FILL_RECT, (int)r);
+}
+
+// Gambar garis lurus menggunakan struct pointer
+static inline void gfx_line_s(GfxLine *l) {
+    syscall1(SYS_DRAW_LINE, (int)l);
+}
+
+// Shorthand: gambar persegi panjang tanpa deklarasi struct terpisah
+static inline void gfx_rect(int x, int y, int w, int h, unsigned char color) {
+    GfxRect r = {x, y, w, h, color};
+    syscall1(SYS_FILL_RECT, (int)&r);
+}
+
+// Shorthand: gambar garis tanpa deklarasi struct terpisah
+static inline void gfx_line(int x1, int y1, int x2, int y2, unsigned char color) {
+    GfxLine l = {x1, y1, x2, y2, color};
+    syscall1(SYS_DRAW_LINE, (int)&l);
 }
 
 #endif

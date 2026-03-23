@@ -81,11 +81,17 @@ gcc -m32 -nostdlib -nostartfiles -fno-builtin -fno-pic \
 -T src/programs/user.ld src/programs/devtest.c \
     -o build/devtest.elf
 xxd -i build/devtest.elf > src/kernel/devtest_elf_data.h
+gcc -m32 -nostdlib -nostartfiles -fno-builtin -fno-pic \
+-T src/programs/user.ld src/programs/gfxtest.c \
+    -o build/gfxtest.elf
+xxd -i build/gfxtest.elf > src/kernel/gfxtest_elf_data.h
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/semaphore.c  -o build/semaphore.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/pipe.c       -o build/pipe.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/device.c     -o build/device.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/drv_vga.c    -o build/drv_vga.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/drv_kbd.c    -o build/drv_kbd.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/vbe.c        -o build/vbe.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/graphics.c   -o build/graphics.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/kernel.c    -o build/kernel.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/idt.c       -o build/idt.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/pic.c       -o build/pic.o
@@ -101,7 +107,7 @@ gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/ker
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/vmm.c       -o build/vmm.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/elf_loader.c -o build/elf_loader.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/ipc.c        -o build/ipc.o
-ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o build/device.o build/drv_vga.o build/drv_kbd.o -o build/kernel.elf
+ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o build/device.o build/drv_vga.o build/drv_kbd.o build/vbe.o build/graphics.o -o build/kernel.elf
 objcopy -O binary build/kernel.elf build/kernel.bin
 echo done
 "@
@@ -150,7 +156,8 @@ function Run-QEMU {
 
     Write-Host "[QEMU] Menjalankan OS di emulator..." -ForegroundColor Cyan
     Write-Host "       Tekan Ctrl+Alt+G untuk release mouse dari QEMU" -ForegroundColor Yellow
-    & $QEMU -machine pc -drive format=raw,file=$os_img
+    Write-Host "       Zoom: View > Zoom In/Out di menu QEMU (GTK)" -ForegroundColor Yellow
+    & $QEMU -machine pc -drive format=raw,file=$os_img -display gtk,zoom-to-fit=on
 }
 
 function Clean-Build {

@@ -18,6 +18,7 @@ start:
     mov dh, KERNEL_SECTORS      ; jumlah sektor kernel (dihitung otomatis saat build)
     mov dl, [boot_drive]        ; gunakan drive number dari BIOS
     call disk_load
+
     cli                     ; matikan semua interrupt
     call switch_to_pm
 print_string:
