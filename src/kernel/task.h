@@ -32,4 +32,5 @@ int         task_get_priority(int id);           // baca priority task
 int         task_set_priority(int id, int prio); // ubah priority (1-3)
 void        task_set_pipe(int id, int pipe_id);  // set pipe_id task (dipanggil shell saat exec pipe)
 int         task_get_current_pipe();             // pipe_id task yang sedang jalan
+uint32_t    task_get_esp0(int id);               // alamat puncak kernel stack task id (untuk TSS)
 #endif

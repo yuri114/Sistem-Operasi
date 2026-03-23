@@ -157,7 +157,18 @@ int task_create_user(uint32_t entry, uint32_t *page_dir, uint32_t user_esp, cons
 }
 
  void task_exit() {
-    tasks[current_task].used = 0;
+    /* Simpan page_dir lama sebelum kita clear slot */
+    uint32_t *dir = tasks[current_task].page_dir;
+    tasks[current_task].used      = 0;
+    tasks[current_task].page_dir  = 0;
+
+    /* Kembali ke page directory kernel dulu agar aman mem-free page_dir user */
+    extern uint32_t page_directory[];
+    vmm_switch_dir(page_directory);
+
+    /* Bebaskan semua frame user: page tables + data frames */
+    vmm_free_user_memory(dir);
+
     __asm__ volatile ("sti");
     while (1) {
         __asm__ volatile ("hlt");
@@ -192,8 +203,19 @@ int task_get_current_pipe() {
 int task_kill(int id) {
     if (id <= 0 || id >= MAX_TASKS) return 0;  // id 0 = shell, lindungi
     if (!tasks[id].used) return 0;             // sudah mati
-    tasks[id].used = 0;
+    /* Tandai tidak aktif dulu agar task_switch tidak pernah menjadwalkannya */
+    uint32_t *dir = tasks[id].page_dir;
+    tasks[id].used      = 0;
+    tasks[id].page_dir  = 0;
+    /* Bebaskan semua frame user (aman karena killer adalah task lain) */
+    vmm_free_user_memory(dir);
     // jika task_count menunjuk slot ini, kurangi agar slot bisa dipakai ulang
     if (id == task_count - 1) task_count--;
     return 1;
+}
+
+/* Kembalikan alamat puncak kernel stack task id (untuk TSS esp0) */
+uint32_t task_get_esp0(int id) {
+    if (id < 0 || id >= MAX_TASKS) return 0;
+    return (uint32_t)(stacks[id] + STACK_SIZE);
 }

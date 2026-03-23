@@ -1,7 +1,7 @@
 #include "vmm.h"
 #include "memory.h"
 
-// 16MB / 4KB = 4096 frame, butuh 4096/8 = 512 uint32_t untuk bitmap
+// 16MB / 4KB = 4096 frame, butuh 4096/8 = 512 byte untuk bitmap
 #define TOTAL_FRAMES 4096
 static uint8_t frame_bitmap[TOTAL_FRAMES / 8]; //bitmap untuk melacak frame yang digunakan
 
@@ -23,8 +23,8 @@ void pmm_init() {
     for(i=0; i < TOTAL_FRAMES / 8; i++) {
         frame_bitmap[i] = 0;
     }
-    // tandai 4MB pertama (1024 frame) sebagai sudah dipakai
-    // karena disitu ada kernel, stack, page tables, dll
+    // Tandai 3MB pertama (768 frame) sebagai sudah dipakai:
+    // frame 0-767 = kernel binary, heap, page tables statik
     for (i=0; i < 768 ; i++) {
         bitmap_set(i);
     }
@@ -32,17 +32,27 @@ void pmm_init() {
 
 uint32_t pmm_alloc_frame() {
     int i;
-    for(i = 768; i < 1024; i++) { //mulai dari frame 768 karena 0-767 sudah dipakai
+    // scan frame 768-4095 (3MB–16MB), semuanya identity-mapped
+    for(i = 768; i < TOTAL_FRAMES; i++) {
         if (!bitmap_test(i)) { //cari frame yang bebas
             bitmap_set(i); //tandai frame ini sebagai dipakai
-            return (uint32_t)(i * PAGE_SIZE); //kembalikan alamat fisik frame ini
+            return (uint32_t)((uint32_t)i * PAGE_SIZE); //kembalikan alamat fisik frame ini
         }
     }
     return 0; // tidak ada frame yang tersedia
 }
 
 void pmm_free_frame(uint32_t addr) {
-    bitmap_clear(addr / PAGE_SIZE); //bebaskan frame dengan clear bit di bitmap
+    uint32_t frame = addr / PAGE_SIZE;
+    if (frame >= 768 && frame < TOTAL_FRAMES)
+        bitmap_clear(frame); //bebaskan frame dengan clear bit di bitmap
+}
+
+// Zero-fill satu frame berdasarkan alamat fisiknya
+static void zero_frame(uint32_t phys) {
+    uint8_t *p = (uint8_t*)phys;
+    uint32_t i;
+    for (i = 0; i < PAGE_SIZE; i++) p[i] = 0;
 }
 
 // Virtual Memory Manager
@@ -59,40 +69,41 @@ void vmm_map_page(uint32_t* page_dir, uint32_t virt, uint32_t phys, uint32_t fla
     if (page_dir[pd_idx] & 1) { //jika page table sudah ada
         page_table = (uint32_t*)(page_dir[pd_idx] & 0xFFFFF000); //ambil alamat page table dari entry
     }
-    else { //jika belum ada, buat baru
-        page_table = (uint32_t*)malloc(PAGE_SIZE); //alokasikan frame untuk page table baru
-        int i;
-        for (i = 0; i < 1024; i++)
-        {
-            page_table[i] = 0; //inisialisasi semua entry page table sebagai tidak valid
-        }
-        page_dir[pd_idx] = ((uint32_t)page_table) | flags | 1; //set entry di page directory dengan alamat page table + flag present
+    else { //jika belum ada, buat baru dari PMM (4KB-aligned, bisa di-free)
+        uint32_t pt_phys = pmm_alloc_frame();
+        if (!pt_phys) return;  // kehabisan frame
+        zero_frame(pt_phys);
+        page_table = (uint32_t*)pt_phys;
+        page_dir[pd_idx] = pt_phys | flags | 1; //set entry di page directory dengan alamat page table + flag present
     }
     page_table[pt_idx] = (phys & 0xFFFFF000) | flags | 1; //set entry di page table dengan alamat fisik + flag present
+    /* Flush TLB untuk alamat virtual ini agar tidak pakai entry lama */
+    __asm__ volatile ("invlpg (%0)" :: "r"(virt) : "memory");
 }
 
 uint32_t* vmm_create_page_dir() {
-    uint32_t *dir = (uint32_t*)malloc(PAGE_SIZE); //alokasikan frame untuk page directory baru
-    int i;
-    for (i = 0; i < 1024; i++) {
-        dir[i] = 0; //inisialisasi semua entry page directory sebagai tidak valid
-    }
+    // Alokasi page directory baru dari PMM (4KB-aligned)
+    uint32_t dir_phys = pmm_alloc_frame();
+    if (!dir_phys) return 0;
+    zero_frame(dir_phys);
+    uint32_t *dir = (uint32_t*)dir_phys;
+
     extern uint32_t page_directory[]; //gunakan page directory kernel yang sudah ada untuk mapping 4MB pertama
 
     // deep-copy page table kernel (bukan copy pointer) agar tiap proses punya page table sendiri
     // sehingga vmm_map_page tidak merusak mapping kernel
     if (page_directory[0] & 1) {
         uint32_t *kernel_pt = (uint32_t*)(page_directory[0] & 0xFFFFF000);
-        uint32_t *new_pt = (uint32_t*)malloc(PAGE_SIZE);
+        uint32_t new_pt_phys = pmm_alloc_frame();
+        if (!new_pt_phys) { pmm_free_frame(dir_phys); return 0; }
+        uint32_t *new_pt = (uint32_t*)new_pt_phys;
+        int i;
         for (i = 0; i < 1024; i++) new_pt[i] = kernel_pt[i];
-        dir[0] = ((uint32_t)new_pt) | (page_directory[0] & 0xFFF); //same flags, new page table
+        dir[0] = new_pt_phys | (page_directory[0] & 0xFFF); //same flags, new page table
     }
 
     /* Salin mapping VBE LFB ke page directory proses baru.
-     * Gunakan runtime address (gfx_lfb_addr) bukan hardcode 0xE0000000,
-     * karena QEMU bisa saja menetapkan BAR0 stdvga di alamat berbeda
-     * (misalnya 0xFD000000). Jika pd_index salah, user PD tidak punya
-     * mapping VBE → page fault di syscall → crash/triple fault. */
+     * Gunakan runtime address (gfx_lfb_addr) bukan hardcode 0xE0000000. */
     extern uint32_t gfx_lfb_addr;
     uint32_t lfb_pd_idx = gfx_lfb_addr >> 22;
     if (lfb_pd_idx > 0 && (page_directory[lfb_pd_idx] & 1)) {
@@ -101,4 +112,43 @@ uint32_t* vmm_create_page_dir() {
 
     return dir;
 }
+
+/* Bebaskan semua frame yang milik proses user: page directory, page tables,
+ * dan semua frame data user (fisik >= 3MB = frame >= 768).
+ * Jangan panggil untuk page_directory kernel (tasks[0]).  */
+void vmm_free_user_memory(uint32_t *page_dir) {
+    if (!page_dir) return;
+
+    extern uint32_t gfx_lfb_addr;
+    uint32_t lfb_pd_idx = gfx_lfb_addr >> 22;
+
+    int i, j;
+    for (i = 0; i < 1024; i++) {
+        if ((uint32_t)i == lfb_pd_idx) continue;  /* VBE shared — jangan disentuh */
+        if (!(page_dir[i] & 1)) continue;          /* entry tidak present, skip */
+
+        uint32_t *pt = (uint32_t*)(page_dir[i] & 0xFFFFF000);
+
+        /* pd_idx=0: lewati 768 entry pertama (kernel 0–3MB, jangan dibebaskan) */
+        int start_j = (i == 0) ? 768 : 0;
+
+        for (j = start_j; j < 1024; j++) {
+            if (pt[j] & 1) {
+                uint32_t phys = pt[j] & 0xFFFFF000;
+                /* Hanya bebaskan frame PMM (>= 3MB = frame 768+) */
+                if (phys >= 768u * PAGE_SIZE)
+                    pmm_free_frame(phys);
+            }
+        }
+
+        /* Bebaskan frame page table itu sendiri jika dari PMM */
+        if ((uint32_t)pt >= 768u * PAGE_SIZE)
+            pmm_free_frame((uint32_t)pt);
+    }
+
+    /* Bebaskan frame page directory */
+    if ((uint32_t)page_dir >= 768u * PAGE_SIZE)
+        pmm_free_frame((uint32_t)page_dir);
+}
+
 

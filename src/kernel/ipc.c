@@ -26,16 +26,20 @@ static void ipc_strncpy(char *dst, const char *src, int n) {
 }
 
 int ipc_send(const char *msg) {
+    __asm__ volatile ("cli");
     int next = (tail + 1) % IPC_QUEUE_SIZE;
-    if (next == head) return 0; // queue penuh
+    if (next == head) { __asm__ volatile ("sti"); return 0; } // queue penuh
     ipc_strncpy(queue[tail], msg, IPC_MSG_LEN);
     tail = next;
+    __asm__ volatile ("sti");
     return 1;
 }
 
 int ipc_recv(char *buf) {
-    if (head == tail) return 0; // queue kosong
+    __asm__ volatile ("cli");
+    if (head == tail) { __asm__ volatile ("sti"); return 0; } // queue kosong
     ipc_strncpy(buf, queue[head], IPC_MSG_LEN);
     head = (head + 1) % IPC_QUEUE_SIZE;
+    __asm__ volatile ("sti");
     return 1;
 }

@@ -34,6 +34,7 @@ void pipe_free(int id) {
 int pipe_write(int id, const char *str) {
     if (id < 0 || id >= PIPE_MAX || !pipes[id].used) return -1;
     if (!str) return -1;
+    __asm__ volatile ("cli");
     Pipe *p = &pipes[id];
     int written = 0;
     // tulis karakter demi karakter
@@ -50,6 +51,7 @@ int pipe_write(int id, const char *str) {
         p->buf[p->tail] = '\0';
         p->tail = next;
     }
+    __asm__ volatile ("sti");
     return written;
 }
 
@@ -58,8 +60,9 @@ int pipe_write(int id, const char *str) {
 int pipe_read(int id, char *buf) {
     if (id < 0 || id >= PIPE_MAX || !pipes[id].used) return -1;
     if (!buf) return -1;
+    __asm__ volatile ("cli");
     Pipe *p = &pipes[id];
-    if (p->head == p->tail) return 0; // kosong
+    if (p->head == p->tail) { __asm__ volatile ("sti"); return 0; } // kosong
     int i = 0;
     while (p->head != p->tail && i < PIPE_BUF - 1) {
         char c = p->buf[p->head];
@@ -68,5 +71,6 @@ int pipe_read(int id, char *buf) {
         buf[i++] = c;
     }
     buf[i] = '\0';
+    __asm__ volatile ("sti");
     return i;
 }

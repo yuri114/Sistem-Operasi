@@ -306,8 +306,9 @@ static inline int dev_ioctl(int dev_id, int cmd, int arg) {
 // ============================================================
 
 // Gambar satu piksel di (x, y) dengan warna 0-255
+// edx = (y << 16) | color  → y mendukung 0–479, color 0–255
 static inline void gfx_pixel(int x, int y, unsigned char color) {
-    syscall2(SYS_DRAW_PIXEL, x, (y << 8) | (int)color);
+    syscall2(SYS_DRAW_PIXEL, x, (y << 16) | (int)color);
 }
 
 // Isi seluruh layar dengan satu warna

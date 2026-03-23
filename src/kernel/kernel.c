@@ -231,6 +231,8 @@ extern void exc3();  extern void exc4();  extern void exc5();
 extern void exc6();  extern void exc7();  extern void exc8();
 extern void exc9();  extern void exc10(); extern void exc11();
 extern void exc12(); extern void exc13(); extern void exc14();
+/* Dari task.c */
+extern uint32_t task_get_esp0(int id);
 
 /* Cetak nilai 32-bit dalam format hex 8 digit */
 static void print_hex32(uint32_t val) {
@@ -358,15 +360,14 @@ void kernel_main(){
     input_start_row = cursor_row;
     input_start_col = cursor_col;
 
-    static uint8_t user_stack[4096]; //stack untuk user mode
-    tss_init(0x90000); //inisialisasi TSS dengan stack kernel di atas stack user
-    
-    //register syscall dengan DPL = 3
-    idt_set_gate_user(0x80, (uint32_t)int80_handler); //set gate dengan privilege level user (ring 3) untuk interrupt 0x80 (syscall)    
-
     // inisialisasi multitasking
     task_init();
     task_set_main(); //tandai task utama sudah ada
+    /* TSS esp0 harus menunjuk ke puncak kernel stack task 0 (shell),
+     * sehingga saat ring-3 → ring-0 transition, CPU memakai stack yang benar. */
+    tss_init(task_get_esp0(0));
+    //register syscall dengan DPL = 3 agar ring-3 bisa memanggil int 0x80
+    idt_set_gate_user(0x80, (uint32_t)int80_handler);
     /* Tidak membuat background task — task_count=1, task_switch selalu early return.
      * Background task menyebabkan task switch aktif, yang mengubah CR3 dan ESP
      * secara tidak terduga saat shell berada di tengah drawing loop → crash. */

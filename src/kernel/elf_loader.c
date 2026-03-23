@@ -33,34 +33,47 @@ typedef struct {
 }__attribute__((packed)) Elf32_Phdr;
 
 uint32_t elf_load(const uint8_t *data, uint32_t size, uint32_t *page_dir) {
+    if (size < sizeof(Elf32_Ehdr)) return 0;
     Elf32_Ehdr *hdr = (Elf32_Ehdr*)data;
     
-    if (hdr->e_ident[0] != 0x7F || hdr->e_ident[1] != 'E' || hdr->e_ident[2] != 'L' || hdr->e_ident[3] != 'F') {
-        return 0; //bukan file ELF yang valid
+    /* Validasi magic ELF */
+    if (hdr->e_ident[0] != 0x7F || hdr->e_ident[1] != 'E' ||
+        hdr->e_ident[2] != 'L'  || hdr->e_ident[3] != 'F') {
+        return 0;
     }
+    /* Harus ET_EXEC (2) dan EM_386 (3) */
+    if (hdr->e_type != 2 || hdr->e_machine != 3) return 0;
+    /* Minimal ada satu program header */
+    if (hdr->e_phnum == 0) return 0;
 
     int i;
     for (i = 0; i < hdr->e_phnum; i++) {
-        Elf32_Phdr *phdr = (Elf32_Phdr*)(data + hdr->e_phoff + i * hdr->e_phentsize);
+        /* Bounds check: offset program header harus dalam file */
+        uint32_t ph_off = hdr->e_phoff + (uint32_t)i * hdr->e_phentsize;
+        if (ph_off + hdr->e_phentsize > size) return 0;
+
+        Elf32_Phdr *phdr = (Elf32_Phdr*)(data + ph_off);
         if (phdr->p_type != 1) continue; //hanya proses segmen yang bisa dimuat
 
+        /* Bounds check: data segmen harus dalam file */
+        if (phdr->p_filesz > 0) {
+            if (phdr->p_offset >= size || phdr->p_offset + phdr->p_filesz > size) return 0;
+        }
+
         // iterasi per halaman (4KB) dalam segmen ini
-        uint32_t virt_page = phdr->p_vaddr & 0xFFFFF000; //halaman pertama, dibulatkan ke bawah
-        uint32_t virt_end  = (phdr->p_vaddr + phdr->p_memsz + PAGE_SIZE - 1) & 0xFFFFF000; //halaman terakhir
+        uint32_t virt_page = phdr->p_vaddr & 0xFFFFF000;
+        uint32_t virt_end  = (phdr->p_vaddr + phdr->p_memsz + PAGE_SIZE - 1) & 0xFFFFF000;
 
         while (virt_page < virt_end) {
-            // alokasikan frame fisik dari PMM untuk halaman ini
             uint32_t phys = pmm_alloc_frame();
             if (!phys) return 0; //kehabisan frame fisik
 
-            // zero-fill frame lewat identity mapping kernel (PMM frame ada di 3MB-4MB, sudah di-identity map)
+            // zero-fill frame
             uint8_t *frame_ptr = (uint8_t*)phys;
             uint32_t j;
             for (j = 0; j < PAGE_SIZE; j++) frame_ptr[j] = 0;
 
             // salin byte ELF yang jatuh dalam halaman virtual ini
-            // range halaman virtual: [virt_page, virt_page + PAGE_SIZE)
-            // range data file segmen: [p_vaddr, p_vaddr + p_filesz)
             uint32_t seg_file_end = phdr->p_vaddr + phdr->p_filesz;
             uint32_t page_end     = virt_page + PAGE_SIZE;
             uint32_t copy_start   = virt_page > phdr->p_vaddr ? virt_page : phdr->p_vaddr;
@@ -73,10 +86,9 @@ uint32_t elf_load(const uint8_t *data, uint32_t size, uint32_t *page_dir) {
                 for (j = 0; j < copy_len; j++) dst[j] = src[j];
             }
 
-            // petakan halaman virtual ke frame fisik di page directory proses
             vmm_map_page(page_dir, virt_page, phys, 7);
             virt_page += PAGE_SIZE;
         }
     }
-    return hdr->e_entry; //kembalikan alamat entry point untuk eksekusi
+    return hdr->e_entry;
 }

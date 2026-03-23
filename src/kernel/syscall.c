@@ -12,8 +12,15 @@
 extern void print(const char *str); // dari kernel.c
 extern void clear_screen();         // dari kernel.c
 
+/* Validasi pointer dari user space: tolak NULL dan pointer ke kernel space (<0x300000).
+ * User programs dimuat di 0x300000+. Stack user di 0x400000+. */
+static int is_user_ptr(uint32_t ptr) {
+    return (ptr != 0 && ptr >= 0x300000u);
+}
+
 uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
     if (eax == SYS_PRINT){
+        if (!is_user_ptr(ebx)) return (uint32_t)-1;
         print((const char*)ebx); //ebx berisi pointer ke string yang akan dicetak
         return 0; //kembalikan 0 untuk menandakan sukses
     }
@@ -41,38 +48,38 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
     // SYS_FS_READ(5): ebx = pointer nama file
     // return: pointer ke isi file (string), atau 0 jika tidak ditemukan
     if (eax == SYS_FS_READ) {
+        if (!is_user_ptr(ebx)) return 0;
         const char *data = fs_read((const char*)ebx);
         return (uint32_t)data;
     }
     // SYS_FS_WRITE(6): ebx = pointer ke struct { const char *name; const char *data; }
     // return: 1 sukses, 0 gagal
     if (eax == SYS_FS_WRITE) {
-        // struct dikirim lewat pointer di ebx
+        if (!is_user_ptr(ebx)) return 0;
         const char **args = (const char**)ebx;
+        if (!is_user_ptr((uint32_t)args[0]) || !is_user_ptr((uint32_t)args[1])) return 0;
         const char *name = args[0];
         const char *data = args[1];
         return (uint32_t)fs_write(name, data);
     }
 
     // SYS_MSG_SEND(7): ebx = pointer string pesan
-    // return: 1 sukses, 0 queue penuh
     if (eax == SYS_MSG_SEND) {
+        if (!is_user_ptr(ebx)) return 0;
         return (uint32_t)ipc_send((const char*)ebx);
     }
     // SYS_MSG_RECV(8): ebx = pointer buffer tujuan (minimal 64 byte)
-    // return: 1 ada pesan, 0 queue kosong
     if (eax == SYS_MSG_RECV) {
+        if (!is_user_ptr(ebx)) return 0;
         return (uint32_t)ipc_recv((char*)ebx);
     }
 
     // SYS_KILL(9): ebx = id proses yang akan dimatikan
-    // return: 1 sukses, 0 gagal (id tidak valid / dilindungi)
     if (eax == SYS_KILL) {
         return (uint32_t)task_kill((int)ebx);
     }
 
     // SYS_SEM_ALLOC(10): ebx = nilai awal (biasanya 1)
-    // return: id semaphore (0-7) atau -1 jika penuh
     if (eax == SYS_SEM_ALLOC) {
         return (uint32_t)sem_alloc((int)ebx);
     }
@@ -96,10 +103,12 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
     }
     // SYS_PIPE_WRITE(15): ebx=id, edx=pointer string — tulis ke pipe
     if (eax == SYS_PIPE_WRITE) {
+        if (!is_user_ptr(edx)) return (uint32_t)-1;
         return (uint32_t)pipe_write((int)ebx, (const char*)edx);
     }
     // SYS_PIPE_READ(16): ebx=id, edx=pointer buffer — baca satu pesan dari pipe
     if (eax == SYS_PIPE_READ) {
+        if (!is_user_ptr(edx)) return (uint32_t)-1;
         return (uint32_t)pipe_read((int)ebx, (char*)edx);
     }
     // SYS_PIPE_CLOSE(17): ebx=id — bebaskan slot pipe
@@ -114,23 +123,26 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
 
     // SYS_DEV_WRITE(19): ebx=dev_id, edx=pointer string
     if (eax == SYS_DEV_WRITE) {
+        if (!is_user_ptr(edx)) return (uint32_t)-1;
         return (uint32_t)dev_write((int)ebx, (const char*)edx);
     }
     // SYS_DEV_READ(20): ebx=dev_id, edx=pointer buffer
     if (eax == SYS_DEV_READ) {
+        if (!is_user_ptr(edx)) return (uint32_t)-1;
         return (uint32_t)dev_read((int)ebx, (char*)edx);
     }
-    // SYS_DEV_IOCTL(21): ebx=dev_id, edx=cmd<<16|arg (pack dua nilai 16-bit dalam edx)
+    // SYS_DEV_IOCTL(21): ebx=dev_id, edx=cmd<<16|arg
     if (eax == SYS_DEV_IOCTL) {
         int cmd = (int)((edx >> 16) & 0xFFFF);
         int arg = (int)(edx & 0xFFFF);
         return (uint32_t)dev_ioctl((int)ebx, cmd, arg);
     }
 
-    // SYS_DRAW_PIXEL(22): ebx=x, edx=(y<<8)|color — gambar satu piksel
+    // SYS_DRAW_PIXEL(22): ebx=x, edx=(y<<16)|color
+    // y dikemas di bit 16–31 (mendukung 0–479), color di bit 0–7
     if (eax == SYS_DRAW_PIXEL) {
         int x = (int)ebx;
-        int y = (int)((edx >> 8) & 0xFF);
+        int y = (int)((edx >> 16) & 0xFFFF);
         uint8_t color = (uint8_t)(edx & 0xFF);
         draw_pixel(x, y, color);
         return 0;
@@ -142,12 +154,14 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
     }
     // SYS_FILL_RECT(24): ebx=pointer ke GfxRect
     if (eax == SYS_FILL_RECT) {
+        if (!is_user_ptr(ebx)) return (uint32_t)-1;
         GfxRect *r = (GfxRect*)ebx;
         fill_rect(r->x, r->y, r->w, r->h, r->color);
         return 0;
     }
     // SYS_DRAW_LINE(25): ebx=pointer ke GfxLine — gambar garis Bresenham
     if (eax == SYS_DRAW_LINE) {
+        if (!is_user_ptr(ebx)) return (uint32_t)-1;
         GfxLine *l = (GfxLine*)ebx;
         draw_line(l->x1, l->y1, l->x2, l->y2, l->color);
         return 0;

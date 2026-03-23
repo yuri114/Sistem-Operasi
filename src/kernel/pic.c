@@ -62,9 +62,13 @@ void pic_init(){
     outb(PIC2_DATA, ICW4_8086);
     io_wait();
 
-    /*unmask semua IRQ (izinkan semua interrupt)*/
-    outb(PIC1_DATA, 0x00); /* Master PIC: unmask semua */
-    outb(PIC2_DATA, 0x00); /* Slave PIC: unmask semua */
+    /* Mask IRQ:
+     * Master (IRQ0-7): hanya buka IRQ0 (timer=bit0) dan IRQ1 (keyboard=bit1).
+     * IRQ2 (cascade slave) juga dibuka agar future slave IRQ bisa didaftarkan.
+     * bit = 0 → unmask (aktif), bit = 1 → mask (non-aktif)
+     * 0xF8 = 1111 1000: unmask IRQ0=0, IRQ1=1, IRQ2=2 */
+    outb(PIC1_DATA, 0xF8); /* Master: aktifkan IRQ0 (timer), IRQ1 (kbd), IRQ2 (cascade) */
+    outb(PIC2_DATA, 0xFF); /* Slave: semua di-mask (belum ada handler) */
 }
 
 void pic_send_eoi(uint8_t irq){

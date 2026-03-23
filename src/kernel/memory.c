@@ -1,22 +1,60 @@
 #include "memory.h"
-#define HEAP_START 0x100000 //alamat awal heap (1MB)
-#define HEAP_SIZE  0x100000 //ukuran heap (1MB)
 
-static uint8_t *heap_ptr; //pointer ke posisi saat ini di heap
+#define HEAP_START 0x100000u  /* 1MB — awal heap kernel */
+#define HEAP_SIZE  0x100000u  /* 1MB — ukuran heap kernel */
+
+/* Header setiap blok heap */
+typedef struct BlockHeader {
+    uint32_t           size;   /* bytes data (tidak termasuk header) */
+    uint8_t            free;   /* 1 = bebas, 0 = terpakai */
+    uint8_t            _pad[3];
+    struct BlockHeader *next;  /* blok berikutnya dalam linked list */
+} BlockHeader;
+
+#define HEADER_SIZE ((uint32_t)sizeof(BlockHeader))  /* 12 bytes */
+
+static BlockHeader *heap_head = 0;
 
 void mem_init() {
-    heap_ptr = (uint8_t*) HEAP_START; //inisialisasi pointer heap ke alamat awal
+    heap_head = (BlockHeader*)HEAP_START;
+    heap_head->size   = HEAP_SIZE - HEADER_SIZE;
+    heap_head->free   = 1;
+    heap_head->_pad[0] = heap_head->_pad[1] = heap_head->_pad[2] = 0;
+    heap_head->next   = 0;
 }
+
 void* malloc(uint32_t size) {
-    if (heap_ptr + size > (uint8_t*)(HEAP_START + HEAP_SIZE)) {
-        return 0;
+    if (!size) return 0;
+    size = (size + 3u) & ~3u;  /* bulatkan ke kelipatan 4 byte */
+
+    BlockHeader *curr = heap_head;
+    while (curr) {
+        if (curr->free && curr->size >= size) {
+            /* Pecah blok jika cukup ruang untuk blok baru sesudahnya */
+            if (curr->size >= size + HEADER_SIZE + 4u) {
+                BlockHeader *split = (BlockHeader*)((uint8_t*)curr + HEADER_SIZE + size);
+                split->size  = curr->size - size - HEADER_SIZE;
+                split->free  = 1;
+                split->_pad[0] = split->_pad[1] = split->_pad[2] = 0;
+                split->next  = curr->next;
+                curr->size   = size;
+                curr->next   = split;
+            }
+            curr->free = 0;
+            return (void*)((uint8_t*)curr + HEADER_SIZE);
+        }
+        curr = curr->next;
     }
-    void* addr= heap_ptr; //simpan alamat yang akan dikembalikan
-    heap_ptr += size; //geser pointer heap ke posisi berikutnya
-    return addr; //kembalikan alamat yang dialokasikan
+    return 0;  /* kehabisan heap */
 }
-void free(void* ptr) {
-    // bump allocator tidak bisa benar-benar membebaskan memori, jadi fungsi ini kosong
-    // fungsi ini sengaja dikosongkan
-    (void)ptr; //hindari warning unused parameter
+
+void free(void *ptr) {
+    if (!ptr) return;
+    BlockHeader *block = (BlockHeader*)((uint8_t*)ptr - HEADER_SIZE);
+    block->free = 1;
+    /* Gabung dengan blok berikutnya jika juga bebas (coalescing) */
+    if (block->next && block->next->free) {
+        block->size += HEADER_SIZE + block->next->size;
+        block->next  = block->next->next;
+    }
 }
