@@ -39,6 +39,16 @@ static char scancode_table[]={
     'm', ',', '.', '/',  0,  '*',  0,' '               /* 0x32-0x39 */
 };
 
+/* Tabel karakter saat Shift ditekan */
+static char scancode_shift_table[]={
+    0,   0,   '!', '@', '#', '$', '%', '^', '&', '*', /* 0x00-0x09 */
+    '(', ')', '_', '+', 0,   0,   'Q', 'W', 'E', 'R', /* 0x0A-0x13 */
+    'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', 0,   0,   /* 0x14-0x1D */
+    'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', /* 0x1E-0x27 */
+    '"',  '~', 0,  '|', 'Z', 'X', 'C', 'V', 'B', 'N', /* 0x28-0x31 */
+    'M', '<', '>', '?',  0,  '*',  0,  ' '            /* 0x32-0x39 */
+};
+
 /* Fungsi bantu untuk baca port I/O*/
 static inline uint8_t inb(uint16_t port){
     uint8_t value;
@@ -49,6 +59,7 @@ static inline uint8_t inb(uint16_t port){
 void backspace_char();
 
 static uint8_t extended = 0; // flag untuk extended scancode (0xE0)
+static uint8_t shift_pressed = 0; // flag: Left Shift (0x2A) atau Right Shift (0x36) sedang ditekan
 
 /* Dipanggil dari irq_handler saat ada keyboard interrupt */
 void keyboard_handler(){
@@ -61,9 +72,21 @@ void keyboard_handler(){
         return;
     }
 
+    /* Deteksi Shift release (sebelum bit-7 check umum) */
+    if (scancode == 0xAA || scancode == 0xB6) { // Left/Right Shift dilepas
+        shift_pressed = 0;
+        return;
+    }
+
     /*Bit 7 = 1 berarti tombol dilepas(key release), abaikan */
     if (scancode & 0x80) {
         extended = 0;
+        return;
+    }
+
+    /* Deteksi Shift press */
+    if (scancode == 0x2A || scancode == 0x36) { // Left/Right Shift ditekan
+        shift_pressed = 1;
         return;
     }
 
@@ -91,7 +114,7 @@ void keyboard_handler(){
         shell_process_char('\n');
     }
     else if (scancode < sizeof(scancode_table)) {
-        char c = scancode_table[scancode];
+        char c = shift_pressed ? scancode_shift_table[scancode] : scancode_table[scancode];
         if (c != 0) {
             key_push(c); //push karakter ke buffer
             shell_process_char(c); /* Tampilkan karakter ke layar */
