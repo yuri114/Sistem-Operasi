@@ -21,6 +21,9 @@
 #define SYS_PIPE_READ  16  // baca dari pipe: ebx=id, edx=buf_ptr
 #define SYS_PIPE_CLOSE 17  // tutup pipe: ebx=id
 #define SYS_PIPE_GETID 18  // ambil pipe_id task saat ini (untuk inherited pipe)
+#define SYS_DEV_WRITE  19  // dev_write: ebx=dev_id, edx=str_ptr
+#define SYS_DEV_READ   20  // dev_read:  ebx=dev_id, edx=buf_ptr
+#define SYS_DEV_IOCTL  21  // dev_ioctl: ebx=dev_id, edx=cmd<<16|arg
 
 void syscall_init();
 uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx);

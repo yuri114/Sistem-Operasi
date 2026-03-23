@@ -23,6 +23,21 @@
 #define SYS_PIPE_READ  16
 #define SYS_PIPE_CLOSE 17
 #define SYS_PIPE_GETID 18
+#define SYS_DEV_WRITE  19
+#define SYS_DEV_READ   20
+#define SYS_DEV_IOCTL  21
+
+// Device ID (harus sama dengan device.h)
+#define DEV_VGA  0
+#define DEV_KBD  1
+
+// VGA ioctl commands
+#define VGA_IOCTL_SET_COLOR  0  // arg = byte warna (fg | bg<<4)
+#define VGA_IOCTL_CLEAR      1  // clear screen
+#define VGA_IOCTL_GET_COLOR  2  // return warna saat ini
+
+// Keyboard ioctl commands
+#define KBD_IOCTL_FLUSH      0  // kosongkan buffer keyboard
 
 // ============================================================
 // syscall — memanggil kernel lewat int 0x80
@@ -235,6 +250,26 @@ static inline void pipe_close(int id) {
 // Return -1 jika tidak ada pipe yang di-assign
 static inline int pipe_get_id() {
     return syscall0(SYS_PIPE_GETID);
+}
+
+// ============================================================
+// Device Driver — akses hardware lewat abstraksi driver
+// ============================================================
+
+// Tulis string ke device (misal: print ke layar via DEV_VGA)
+static inline int dev_write(int dev_id, const char *msg) {
+    return syscall2(SYS_DEV_WRITE, dev_id, (int)msg);
+}
+
+// Baca satu karakter dari device ke buf (misal: keyboard via DEV_KBD)
+// Return 1 jika ada karakter, 0 jika kosong
+static inline int dev_read(int dev_id, char *buf) {
+    return syscall2(SYS_DEV_READ, dev_id, (int)buf);
+}
+
+// Kontrol khusus device (cmd dan arg dikemas dalam edx: cmd<<16 | arg)
+static inline int dev_ioctl(int dev_id, int cmd, int arg) {
+    return syscall2(SYS_DEV_IOCTL, dev_id, (cmd << 16) | (arg & 0xFFFF));
 }
 
 #endif

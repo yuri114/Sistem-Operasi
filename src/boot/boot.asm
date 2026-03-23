@@ -33,20 +33,63 @@ print_string:
     ret                     ; kembali ke pemanggil
 
 disk_load:
-    ; input DL = drive, DH = jumlah sektor, BX = alamat tujuan
-    push dx                 ; simpan DX (kita butuh DH nanti)
+    ; DL=drive, DH=total sektor — muat ke flat 0x8000 via INT 13h/42h (LBA)
+    ; LBA 0 = sektor 1 (bootloader), LBA 1 = sektor 2 (awal kernel)
+    push cx
+    push si
 
-    mov ah, 0x02            ; fungsi BIOS: read sectors
-    mov al, dh              ; jumlah sektor yang dibaca
-    mov ch, 0               ; cylinder 0
-    mov cl, 2               ; mulai dari sektor 2 (sektor 1 = bootloader)
-    mov dh, 0               ; head 0
-    int 0x13                ; panggil BIOS disk service
-    jc disk_error           ; jika carry flag set = error
-    pop dx
-    cmp al, dh              ; apakah sektor yang terbaca = yang diminta?
-    jne disk_error
+    xor cx, cx              ; cx = sektor yang sudah dibaca
+
+.dl_batch:
+    mov al, dh
+    sub al, cl              ; al = sisa sektor (8-bit, max ~200)
+    jbe .dl_done
+
+    cmp al, 63              ; baca maks 63 sektor per batch (aman di semua BIOS)
+    jbe .dl_fit
+    mov al, 63
+.dl_fit:
+    ; isi DAP sebelum setiap batch
+    mov byte [dap+2], al    ; jumlah sektor batch ini
+    mov byte [dap+3], 0
+
+    ; buffer: segment = 0x800 + cx*32  → flat = segment*16 = 0x8000 + cx*512
+    push ax
+    mov ax, cx
+    shl ax, 5               ; ax = cx * 32
+    add ax, 0x0800          ; ax = segment tujuan
+    mov [dap+6], ax         ; segment buffer
+    mov word [dap+4], 0     ; offset buffer = 0
+    ; LBA = 1 + cx  (kernel mulai dari LBA 1)
+    mov ax, cx
+    inc ax
+    mov [dap+8], ax         ; LBA [15:0]
+    mov word [dap+10], 0    ; LBA [31:16]
+    pop ax                  ; al = jumlah sektor yang diminta batch ini
+
+    push ax
+    mov ah, 0x42            ; Extended Read
+    mov si, dap             ; DS:SI → DAP
+    int 0x13
+    pop ax
+    jc disk_error           ; carry set = error
+
+    xor ah, ah
+    add cx, ax              ; cx += sektor yang dibaca
+    jmp .dl_batch
+
+.dl_done:
+    pop si
+    pop cx
     ret
+
+; Disk Address Packet (DAP) untuk INT 13h/42h — 16 byte
+dap:
+    db 0x10, 0              ; ukuran DAP=16, reserved
+    dw 0                    ; jumlah sektor (diisi tiap batch)
+    dw 0, 0                 ; offset:segment buffer (diisi tiap batch)
+    dd 0, 0                 ; LBA 64-bit (hanya 32-bit bawah yang dipakai)
+
 disk_error:
     mov si, disk_err_msg
     call print_string

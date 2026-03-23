@@ -6,6 +6,7 @@
 #include "ipc.h"
 #include "semaphore.h"
 #include "pipe.h"
+#include "device.h"
 
 extern void print(const char *str); // dari kernel.c
 
@@ -107,6 +108,21 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
     // SYS_PIPE_GETID(18): kembalikan pipe_id yang diwarisi task saat ini dari shell
     if (eax == SYS_PIPE_GETID) {
         return (uint32_t)task_get_current_pipe();
+    }
+
+    // SYS_DEV_WRITE(19): ebx=dev_id, edx=pointer string
+    if (eax == SYS_DEV_WRITE) {
+        return (uint32_t)dev_write((int)ebx, (const char*)edx);
+    }
+    // SYS_DEV_READ(20): ebx=dev_id, edx=pointer buffer
+    if (eax == SYS_DEV_READ) {
+        return (uint32_t)dev_read((int)ebx, (char*)edx);
+    }
+    // SYS_DEV_IOCTL(21): ebx=dev_id, edx=cmd<<16|arg (pack dua nilai 16-bit dalam edx)
+    if (eax == SYS_DEV_IOCTL) {
+        int cmd = (int)((edx >> 16) & 0xFFFF);
+        int arg = (int)(edx & 0xFFFF);
+        return (uint32_t)dev_ioctl((int)ebx, cmd, arg);
     }
 
     return (uint32_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal
