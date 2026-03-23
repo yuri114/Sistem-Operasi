@@ -10,6 +10,8 @@
 #define CLOSE_BTN_W     18   /* lebar tombol tutup (X) */
 #define BORDER_W         1   /* tebal border window */
 #define WIN_EVQ_SIZE    16   /* kapasitas antrian event per window */
+#define WIN_TEXTBUF     32   /* maks baris teks yang disimpan per window (backing store) */
+#define WIN_TEXTBUF_STR 64   /* panjang maks string per entri backing store */
 
 #define WM_DESKTOP_BG    8   /* GFX_DGRAY — warna latar desktop */
 

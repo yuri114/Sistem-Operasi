@@ -18,6 +18,14 @@
 /* ============================================================
  * Data internal
  * ============================================================ */
+
+/* Satu entri backing store teks — disimpan tiap kali wm_draw_text dipanggil */
+typedef struct {
+    int     x, y;
+    char    s[WIN_TEXTBUF_STR];
+    uint8_t fg, bg;
+} WinText;
+
 typedef struct {
     int x, y, w, h;
     char title[32];
@@ -26,6 +34,9 @@ typedef struct {
     /* antrian event ring-buffer */
     uint8_t ev_q[WIN_EVQ_SIZE];
     int ev_head, ev_tail;
+    /* backing store teks: di-replay ulang setiap kali window di-redraw */
+    WinText text_buf[WIN_TEXTBUF];
+    int     text_count;
 } WinSlot;
 
 static WinSlot windows[MAX_WINDOWS];
@@ -131,8 +142,18 @@ static void wm_draw_window(int id) {
     int ca_y = w->y + BORDER_W + TITLEBAR_H;
     int ca_w = w->w - 2 * BORDER_W;
     int ca_h = w->h - 2 * BORDER_W - TITLEBAR_H;
-    if (ca_h > 0)
-        fill_rect(ca_x, ca_y, ca_w, ca_h, w->content_bg);
+    if (ca_h <= 0) return;
+    fill_rect(ca_x, ca_y, ca_w, ca_h, w->content_bg);
+
+    /* Replay backing store teks */
+    for (int t = 0; t < w->text_count; t++) {
+        WinText *te = &w->text_buf[t];
+        int sx = ca_x + te->x;
+        int sy = ca_y + te->y;
+        int mpx = (ca_x + ca_w) - sx;
+        if (mpx > 0 && sy >= ca_y && sy + 8 <= ca_y + ca_h)
+            wm_drawstr(sx, sy, te->s, te->fg, te->bg, mpx);
+    }
 }
 
 static void wm_redraw_all(void) {
@@ -182,9 +203,10 @@ static int hit_titlebar(int id, int mx, int my) {
 
 void wm_init(void) {
     for (int i = 0; i < MAX_WINDOWS; i++) {
-        windows[i].alive    = 0;
-        windows[i].ev_head  = 0;
-        windows[i].ev_tail  = 0;
+        windows[i].alive      = 0;
+        windows[i].ev_head    = 0;
+        windows[i].ev_tail    = 0;
+        windows[i].text_count = 0;
     }
     z_count  = 0;
     drag_id  = -1;
@@ -218,6 +240,7 @@ int wm_create(int x, int y, int w, int h, const char *title) {
     win->alive      = 1;
     win->ev_head    = 0;
     win->ev_tail    = 0;
+    win->text_count = 0;
     wm_strncpy(win->title, title, 32);
 
     /* tambah ke paling atas z-order */
@@ -226,9 +249,13 @@ int wm_create(int x, int y, int w, int h, const char *title) {
     if (first_window) {
         /* Pertama kali: cat ulang seluruh layar jadi desktop */
         fill_rect(0, 0, SCREEN_W, SCREEN_H, WM_DESKTOP_BG);
+        /* Redraw semua (termasuk window baru) */
+        wm_redraw_all();
+    } else {
+        /* Window tambahan: cukup gambar window baru saja di atas yang ada
+         * supaya konten window lama tidak tertimpa */
+        wm_draw_window(id);
     }
-
-    wm_redraw_all();
     return id;
 }
 
@@ -251,6 +278,24 @@ void wm_draw_text(int id, int px, int py, const char *s, uint8_t fg, uint8_t bg)
     if (id < 0 || id >= MAX_WINDOWS || !windows[id].alive || !s) return;
     WinSlot *w  = &windows[id];
 
+    /* Simpan ke backing store:
+     * jika sudah ada entri di (px,py), overwrite; jika tidak, append */
+    int slot = -1;
+    for (int t = 0; t < w->text_count; t++) {
+        if (w->text_buf[t].x == px && w->text_buf[t].y == py) {
+            slot = t; break;
+        }
+    }
+    if (slot < 0 && w->text_count < WIN_TEXTBUF)
+        slot = w->text_count++;
+    if (slot >= 0) {
+        WinText *te = &w->text_buf[slot];
+        te->x = px; te->y = py; te->fg = fg; te->bg = bg;
+        int k = 0;
+        while (k < WIN_TEXTBUF_STR - 1 && s[k]) { te->s[k] = s[k]; k++; }
+        te->s[k] = '\0';
+    }
+
     int ca_x = w->x + BORDER_W;
     int ca_y = w->y + BORDER_W + TITLEBAR_H;
     int ca_w = w->w - 2 * BORDER_W;
@@ -267,7 +312,8 @@ void wm_draw_text(int id, int px, int py, const char *s, uint8_t fg, uint8_t bg)
 void wm_clear_content(int id, uint8_t bg) {
     if (id < 0 || id >= MAX_WINDOWS || !windows[id].alive) return;
     WinSlot *w = &windows[id];
-    w->content_bg = bg;
+    w->content_bg  = bg;
+    w->text_count  = 0;  /* hapus seluruh backing store teks */
 
     int ca_x = w->x + BORDER_W;
     int ca_y = w->y + BORDER_W + TITLEBAR_H;

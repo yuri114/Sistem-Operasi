@@ -22,11 +22,28 @@ static void int_to_s(int n, char *buf) {
     buf[j]='\0';
 }
 
+/* Buat string "prefix + angka" dengan padding spasi hingga lebar `width` */
+static void make_label(const char *pre, int n, char *buf, int width) {
+    int i = 0;
+    while (pre[i]) { buf[i] = pre[i]; i++; }
+    char num[12]; int_to_s(n, num);
+    int j = 0;
+    while (num[j]) { buf[i++] = num[j++]; }
+    while (i < width) buf[i++] = ' ';
+    buf[i] = '\0';
+}
+
 void _start(void) {
-    /* WM akan membersihkan layar secara otomatis saat window pertama dibuat */
+    /* Buat semua window DULU, baru gambar konten
+     * (wm_create melakukan redraw yang menghapus teks dari window sebelumnya) */
 
     /* ---- Buat Window 1 (kiri atas) ---- */
     int w1 = win_create(40, 40, 260, 180, "Info Sistem");
+
+    /* ---- Buat Window 2 (kanan atas) ---- */
+    int w2 = win_create(330, 60, 220, 160, "Mouse Monitor");
+
+    /* ---- Isi konten window 1 SETELAH semua window dibuat ---- */
     win_draw(w1,  6,  6, "MyOS Window Manager",     GFX_YELLOW, GFX_BLACK);
     win_draw(w1,  6, 20, "VBE 640x480 @ 8bpp",      GFX_WHITE,  GFX_BLACK);
     win_draw(w1,  6, 34, "PS/2 Mouse  + IRQ12",      GFX_WHITE,  GFX_BLACK);
@@ -34,8 +51,7 @@ void _start(void) {
     win_draw(w1,  6, 70, "Drag: klik & tahan judul", GFX_LGRAY,  GFX_BLACK);
     win_draw(w1,  6, 84, "Tutup: klik tombol X",     GFX_LGRAY,  GFX_BLACK);
 
-    /* ---- Buat Window 2 (kanan bawah) ---- */
-    int w2 = win_create(330, 200, 220, 160, "Mouse Monitor");
+    /* ---- Isi konten window 2 ---- */
     win_draw(w2,  6,  6, "Posisi mouse:", GFX_CYAN,  GFX_BLACK);
     win_draw(w2,  6, 30, "X: ---",        GFX_WHITE, GFX_BLACK);
     win_draw(w2,  6, 44, "Y: ---",        GFX_WHITE, GFX_BLACK);
@@ -70,22 +86,15 @@ void _start(void) {
             MouseState ms;
             mouse_get(&ms);
 
-            char num[12];
+            char line[16];
 
-            /* Update X */
-            int_to_s(ms.x, num);
-            /* Tulis label + angka (padding spasi agar hapus digit lama) */
-            win_draw(w2, 6, 30, "X:       ", GFX_WHITE, GFX_BLACK);
-            win_draw(w2, 6, 30, "X: ",       GFX_WHITE, GFX_BLACK);
-            win_draw(w2, 24, 30, num,         GFX_LGREEN, GFX_BLACK);
+            /* Satu draw per baris → backing store overwrite slot (x,y) yang sama */
+            make_label("X: ", ms.x, line, 12);
+            win_draw(w2, 6, 30, line, GFX_LGREEN, GFX_BLACK);
 
-            /* Update Y */
-            int_to_s(ms.y, num);
-            win_draw(w2, 6, 44, "Y:       ", GFX_WHITE, GFX_BLACK);
-            win_draw(w2, 6, 44, "Y: ",       GFX_WHITE, GFX_BLACK);
-            win_draw(w2, 24, 44, num,         GFX_LGREEN, GFX_BLACK);
+            make_label("Y: ", ms.y, line, 12);
+            win_draw(w2, 6, 44, line, GFX_LGREEN, GFX_BLACK);
 
-            /* Update status tombol */
             win_draw(w2, 6, 80,
                      (ms.buttons & 0x01) ? "Kiri   = [X]" : "Kiri   = [ ]",
                      (ms.buttons & 0x01) ? GFX_LRED : GFX_WHITE, GFX_BLACK);
