@@ -1,4 +1,5 @@
 #include "pipe.h"
+#include "task.h"
 
 static Pipe pipes[PIPE_MAX];
 
@@ -56,13 +57,18 @@ int pipe_write(int id, const char *str) {
 }
 
 // Baca satu pesan (sampai '\0') dari ring buffer ke buf.
-// buf harus setidaknya PIPE_BUF byte. Return bytes dibaca, 0 jika kosong.
+// Memblokir (tidur 10ms) sampai data tersedia. Return bytes dibaca.
 int pipe_read(int id, char *buf) {
     if (id < 0 || id >= PIPE_MAX || !pipes[id].used) return -1;
     if (!buf) return -1;
-    __asm__ volatile ("cli");
+    // Tunggu sampai ada data — sleep antara cek
+    while (1) {
+        __asm__ volatile ("cli");
+        if (pipes[id].head != pipes[id].tail) break; // ada data
+        __asm__ volatile ("sti");
+        task_sleep(10); // tidur 10ms lalu coba lagi
+    }
     Pipe *p = &pipes[id];
-    if (p->head == p->tail) { __asm__ volatile ("sti"); return 0; } // kosong
     int i = 0;
     while (p->head != p->tail && i < PIPE_BUF - 1) {
         char c = p->buf[p->head];

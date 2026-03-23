@@ -32,6 +32,11 @@
 #define SYS_DRAW_LINE   25  // ebx=ptr GfxLine — gambar garis
 #define SYS_CLR_SCREEN  26  // kosongkan layar + reset kursor
 
+#define SYS_GETPID 27  // kembalikan id task saat ini
+#define SYS_YIELD  28  // lepas sisa slot CPU ke task lain
+#define SYS_SLEEP  29  // tidur ebx milidetik
+#define SYS_EXEC   30  // jalankan program dari FS: ebx=nama, return task_id atau -1
+
 void syscall_init();
 uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx);
 

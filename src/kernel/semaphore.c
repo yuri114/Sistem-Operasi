@@ -1,4 +1,5 @@
 #include "semaphore.h"
+#include "task.h"
 
 static Semaphore sems[SEM_MAX];
 
@@ -30,11 +31,9 @@ void sem_free(int id) {
 }
 
 // sem_wait: kurangi nilai semaphore.
-// Jika nilai sudah 0 (kritis sedang dipakai), busy-wait sampai bebas.
-// Menggunakan disable interrupt (cli/sti) agar operasi atomik.
+// Jika nilai sudah 0 (kritis sedang dipakai), tidur 10ms lalu coba lagi.
 int sem_wait(int id) {
     if (id < 0 || id >= SEM_MAX || !sems[id].used) return -1;
-    // Busy-wait: tunggu sampai value > 0
     while (1) {
         __asm__ volatile ("cli");
         if (sems[id].value > 0) {
@@ -43,8 +42,7 @@ int sem_wait(int id) {
             return 0;
         }
         __asm__ volatile ("sti");
-        // beri kesempatan task lain berjalan
-        __asm__ volatile ("hlt");
+        task_sleep(10); // tidur 10ms, beri kesempatan task lain berjalan
     }
 }
 

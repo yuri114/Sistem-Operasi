@@ -8,6 +8,8 @@
 #include "pipe.h"
 #include "device.h"
 #include "graphics.h"
+#include "vmm.h"
+#include "elf_loader.h"
 
 extern void print(const char *str); // dari kernel.c
 extern void clear_screen();         // dari kernel.c
@@ -170,6 +172,42 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
     if (eax == SYS_CLR_SCREEN) {
         clear_screen();
         return 0;
+    }
+
+    // SYS_GETPID(27): kembalikan id task yang sedang berjalan
+    if (eax == SYS_GETPID) {
+        return (uint32_t)task_get_current();
+    }
+
+    // SYS_YIELD(28): lepas sisa slot CPU ke task lain pada tick berikutnya
+    if (eax == SYS_YIELD) {
+        task_yield();
+        __asm__ volatile ("sti");
+        __asm__ volatile ("hlt"); // tunggu satu timer tick
+        return 0;
+    }
+
+    // SYS_SLEEP(29): tidur ebx milidetik
+    if (eax == SYS_SLEEP) {
+        task_sleep(ebx);
+        return 0;
+    }
+
+    // SYS_EXEC(30): muat dan jalankan program dari FS: ebx=nama (user ptr)
+    // return: task_id jika sukses, (uint32_t)-1 jika gagal
+    if (eax == SYS_EXEC) {
+        if (!is_user_ptr(ebx)) return (uint32_t)-1;
+        const char *name = (const char*)ebx;
+        uint32_t sz = 0;
+        const uint8_t *data = fs_read_bin(name, &sz);
+        if (!data || sz == 0) return (uint32_t)-1;
+        uint32_t *proc_dir = vmm_create_page_dir();
+        uint32_t entry = elf_load(data, sz, proc_dir);
+        if (!entry) return (uint32_t)-1;
+        uint32_t stack_phys = pmm_alloc_frame();
+        vmm_map_page(proc_dir, 0x400000, stack_phys, 7);
+        int tid = task_create_user(entry, proc_dir, 0x400000 + 0x1000, name);
+        return (uint32_t)tid;
     }
 
     return (uint32_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal

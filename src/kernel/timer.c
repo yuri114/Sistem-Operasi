@@ -1,4 +1,5 @@
 #include "timer.h"
+#include "task.h"
 #define PIT_CHANNEL0 0x40  // port data channel 0
 #define PIT_COMMAND  0x43  //Port command
 #define PIT_FREQUENCY 1193180 //frekuensi dasar PIT dalam Hz
@@ -10,6 +11,7 @@ static inline void outb(uint16_t port, uint8_t value) {
 
 void timer_handler() {
     tick++; //naikkan counter setiap timer interrupt
+    task_check_sleepers(); //bangunkan task sleeping yang waktunya habis
 }
 
 void timer_init(uint32_t frequency) {

@@ -314,8 +314,8 @@ static void shell_execute(){
         int i;
         int cur = task_get_current();
         set_color(14, 0);
-        print("ID  PRIO  STATUS    NAMA\n");
-        print("--- ----- --------- ----------------\n");
+        print("ID  PRIO  STATUS     NAMA\n");
+        print("--- ----- ---------- ----------------\n");
         set_color(15, 0);
         for (i = 0; i < task_get_max(); i++) {
             if (!task_is_used(i)) continue;
@@ -327,13 +327,20 @@ static void shell_execute(){
             else if (prio == 2) set_color(14, 0); // kuning = normal
             else                set_color(7,  0); // abu = rendah
             itoa(prio, buf); print(buf); print("     ");
-            // status
+            // status berdasarkan nilai sesungguhnya
+            int st = task_get_status(i);
             if (i == cur) {
                 set_color(10, 0);
-                print("running   ");
+                print("running    ");
+            } else if (st == TASK_SLEEPING) {
+                set_color(9, 0);
+                print("sleeping   ");
+            } else if (st == TASK_BLOCKED) {
+                set_color(12, 0);
+                print("blocked    ");
             } else {
                 set_color(7, 0);
-                print("ready     ");
+                print("ready      ");
             }
             set_color(15, 0);
             print(task_get_name(i));
@@ -466,9 +473,76 @@ static void shell_execute(){
         }
     }
     else {
-        print(input_buffer);
-        print("\n");
-        set_color(15,0); //kembalikan warna putih di hitam
+        /* Cek apakah ada operator ' | ' (pipe inline) */
+        int pipe_pos = -1;
+        int slen = str_len(input_buffer);
+        int pi;
+        for (pi = 1; pi < slen - 2; pi++) {
+            if (input_buffer[pi]   == ' ' &&
+                input_buffer[pi+1] == '|' &&
+                input_buffer[pi+2] == ' ') {
+                pipe_pos = pi;
+                break;
+            }
+        }
+
+        if (pipe_pos > 0) {
+            /* Sintaks: prog1 | prog2 */
+            char prog1[32], prog2[32];
+            int j;
+            for (j = 0; j < pipe_pos && j < 31; j++) prog1[j] = input_buffer[j];
+            prog1[j] = '\0';
+            const char *r2 = input_buffer + pipe_pos + 3;
+            for (j = 0; r2[j] && j < 31; j++) prog2[j] = r2[j];
+            prog2[j] = '\0';
+
+            int pipe_fd = pipe_alloc();
+            if (pipe_fd < 0) {
+                set_color(12, 0);
+                print("pipe: gagal alokasi pipe (slot penuh)\n");
+                set_color(15, 0);
+            } else {
+                uint32_t sz1, sz2;
+                const uint8_t *d1 = fs_read_bin(prog1, &sz1);
+                const uint8_t *d2 = fs_read_bin(prog2, &sz2);
+                if (!d1 || !d2) {
+                    pipe_free(pipe_fd);
+                    set_color(12, 0);
+                    if (!d1) { print("pipe: file tidak ditemukan: "); print(prog1); print("\n"); }
+                    if (!d2) { print("pipe: file tidak ditemukan: "); print(prog2); print("\n"); }
+                    set_color(15, 0);
+                } else {
+                    uint32_t *dir1 = vmm_create_page_dir();
+                    uint32_t entry1 = elf_load(d1, sz1, dir1);
+                    if (entry1) {
+                        uint32_t sp1 = pmm_alloc_frame();
+                        vmm_map_page(dir1, 0x400000, sp1, 7);
+                        int tid1 = task_create_user(entry1, dir1, 0x400000 + PAGE_SIZE, prog1);
+                        task_set_pipe(tid1, pipe_fd);
+                    }
+                    uint32_t *dir2 = vmm_create_page_dir();
+                    uint32_t entry2 = elf_load(d2, sz2, dir2);
+                    if (entry2) {
+                        uint32_t sp2 = pmm_alloc_frame();
+                        vmm_map_page(dir2, 0x400000, sp2, 7);
+                        int tid2 = task_create_user(entry2, dir2, 0x400000 + PAGE_SIZE, prog2);
+                        task_set_pipe(tid2, pipe_fd);
+                    }
+                    if (entry1 && entry2) {
+                        set_color(10, 0);
+                        print(prog1); print(" | "); print(prog2);
+                        print(" dimulai (pipe id=");
+                        char pbuf[8]; itoa(pipe_fd, pbuf); print(pbuf);
+                        print(")\n");
+                        set_color(15, 0);
+                    }
+                }
+            }
+        } else {
+            print(input_buffer);
+            print("\n");
+            set_color(15,0); //kembalikan warna putih di hitam
+        }
     }
 }
 

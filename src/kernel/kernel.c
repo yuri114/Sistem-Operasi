@@ -5,6 +5,7 @@
 #include "memory.h"
 #include "timer.h"
 #include "fs.h"
+#include "ata.h"
 #include "paging.h"
 #include "task.h"
 #include "syscall.h"
@@ -324,6 +325,7 @@ void kernel_main(){
     shell_init();
     mem_init();
     pmm_init();
+    ata_init();
     fs_init();
     ipc_init();
     sem_init_all();

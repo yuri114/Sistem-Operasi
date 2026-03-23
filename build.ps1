@@ -107,7 +107,8 @@ gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/ker
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/vmm.c       -o build/vmm.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/elf_loader.c -o build/elf_loader.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/ipc.c        -o build/ipc.o
-ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o build/device.o build/drv_vga.o build/drv_kbd.o build/vbe.o build/graphics.o -o build/kernel.elf
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/ata.c        -o build/ata.o
+ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o build/device.o build/drv_vga.o build/drv_kbd.o build/vbe.o build/graphics.o build/ata.o -o build/kernel.elf
 objcopy -O binary build/kernel.elf build/kernel.bin
 echo done
 "@
@@ -147,17 +148,28 @@ function Build-Image {
 }
 
 function Run-QEMU {
-    $os_img = "$BUILD\os.img"
+    $os_img   = "$BUILD\os.img"
+    $disk_img = "$BUILD\disk.img"
 
     if (-not (Test-Path $os_img)) {
         Write-Host "[ERROR] OS image belum ada. Jalankan: .\build.ps1 build" -ForegroundColor Red
         exit 1
     }
 
+    # Buat disk.img kosong (1MB) jika belum ada
+    if (-not (Test-Path $disk_img)) {
+        $zeros = New-Object byte[] (1024 * 1024)
+        [System.IO.File]::WriteAllBytes($disk_img, $zeros)
+        Write-Host "[DISK]  disk.img blank 1MB dibuat" -ForegroundColor Green
+    }
+
     Write-Host "[QEMU] Menjalankan OS di emulator..." -ForegroundColor Cyan
     Write-Host "       Tekan Ctrl+Alt+G untuk release mouse dari QEMU" -ForegroundColor Yellow
     Write-Host "       Zoom: View > Zoom In/Out di menu QEMU (GTK)" -ForegroundColor Yellow
-    & $QEMU -machine pc -drive format=raw,file=$os_img -display gtk,zoom-to-fit=on
+    & $QEMU -machine pc `
+        -drive format=raw,file=$os_img,index=0,if=ide `
+        -drive format=raw,file=$disk_img,index=1,if=ide `
+        -display gtk,zoom-to-fit=on
 }
 
 function Clean-Build {

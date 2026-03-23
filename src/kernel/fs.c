@@ -1,6 +1,81 @@
 #include "fs.h"
+#include "ata.h"
 
 static FSFile files[FS_MAX_FILES];
+
+/* ===== Disk layout (Primary Slave) =====
+ * Sector 0        : superblock  (magic='MYFS' + reserved)
+ * Sector 1+i*17   : header file ke-i  (name[32], size[4], used[1], pad)
+ * Sectors 2+i*17 .. 17+i*17 : data file ke-i  (16 x 512 = 8192 bytes)
+ * Total: 1 + 16*17 = 273 sectors = 139 KB
+ */
+#define FS_MAGIC_B0 'M'
+#define FS_MAGIC_B1 'Y'
+#define FS_MAGIC_B2 'F'
+#define FS_MAGIC_B3 'S'
+
+static uint32_t fs_hdr_sector(int i)  { return (uint32_t)(1 + i * 17); }
+static uint32_t fs_data_sector(int i, int chunk) { return (uint32_t)(2 + i * 17 + chunk); }
+
+/* Tulis satu file ke disk */
+static void fs_disk_save(int i) {
+    uint8_t buf[512];
+    int j;
+    if (!ata_disk_present()) return;
+
+    /* --- header sector --- */
+    for (j = 0; j < 512; j++) buf[j] = 0;
+    for (j = 0; j < FS_MAX_NAME; j++) buf[j] = (uint8_t)files[i].name[j];
+    buf[32] = (uint8_t)(files[i].size & 0xFFu);
+    buf[33] = (uint8_t)((files[i].size >> 8)  & 0xFFu);
+    buf[34] = (uint8_t)((files[i].size >> 16) & 0xFFu);
+    buf[35] = (uint8_t)((files[i].size >> 24) & 0xFFu);
+    buf[36] = files[i].used;
+    ata_write_sector(fs_hdr_sector(i), buf);
+
+    /* --- data sectors (16 x 512 = 8192 bytes) --- */
+    int k;
+    for (k = 0; k < 16; k++) {
+        for (j = 0; j < 512; j++) {
+            uint32_t off = (uint32_t)(k * 512 + j);
+            buf[j] = (off < FS_MAX_DATA) ? files[i].data[off] : 0;
+        }
+        ata_write_sector(fs_data_sector(i, k), buf);
+    }
+}
+
+/* Tulis magic ke sektor 0 */
+static void fs_disk_write_magic() {
+    uint8_t buf[512];
+    int j;
+    for (j = 0; j < 512; j++) buf[j] = 0;
+    buf[0] = FS_MAGIC_B0; buf[1] = FS_MAGIC_B1;
+    buf[2] = FS_MAGIC_B2; buf[3] = FS_MAGIC_B3;
+    ata_write_sector(0, buf);
+}
+
+/* Muat semua file dari disk (dipanggil saat boot) */
+static void fs_disk_load() {
+    uint8_t buf[512];
+    int i, j, k;
+    for (i = 0; i < FS_MAX_FILES; i++) {
+        if (ata_read_sector(fs_hdr_sector(i), buf) != 0) continue;
+        files[i].used = buf[36];
+        if (!files[i].used) continue;
+        for (j = 0; j < FS_MAX_NAME; j++) files[i].name[j] = (char)buf[j];
+        files[i].size = (uint32_t)buf[32] |
+                        ((uint32_t)buf[33] << 8)  |
+                        ((uint32_t)buf[34] << 16) |
+                        ((uint32_t)buf[35] << 24);
+        for (k = 0; k < 16; k++) {
+            if (ata_read_sector(fs_data_sector(i, k), buf) != 0) break;
+            for (j = 0; j < 512; j++) {
+                uint32_t off = (uint32_t)(k * 512 + j);
+                if (off < FS_MAX_DATA) files[i].data[off] = buf[j];
+            }
+        }
+    }
+}
 
 static int fs_strcmp(const char *a, const char *b) {
     int i=0;
@@ -24,6 +99,19 @@ void fs_init() {
     for (i = 0; i < FS_MAX_FILES; i++) {
         files[i].used = 0;
     }
+    if (!ata_disk_present()) return; /* tidak ada disk sekunder, pakai RAM saja */
+
+    uint8_t sb[512];
+    if (ata_read_sector(0, sb) != 0) return; /* gagal baca */
+
+    if (sb[0] == FS_MAGIC_B0 && sb[1] == FS_MAGIC_B1 &&
+        sb[2] == FS_MAGIC_B2 && sb[3] == FS_MAGIC_B3) {
+        /* Disk sudah diformat — muat semua file */
+        fs_disk_load();
+    } else {
+        /* Disk baru — tulis magic agar boot berikutnya bisa load */
+        fs_disk_write_magic();
+    }
 }
 
 int fs_write(const char *name, const char * data) {
@@ -31,6 +119,7 @@ int fs_write(const char *name, const char * data) {
     for (i = 0; i < FS_MAX_FILES; i++) {
         if (files[i].used && fs_strcmp(files[i].name, name)) {
             fs_strcpy(files[i].data, data, FS_MAX_DATA);
+            fs_disk_save(i);
             return 1; //sukses
         }
     }
@@ -39,6 +128,7 @@ int fs_write(const char *name, const char * data) {
             fs_strcpy(files[i].name, name, FS_MAX_NAME);
             fs_strcpy(files[i].data, data, FS_MAX_DATA);
             files[i].used = 1;
+            fs_disk_save(i);
             return 1; //sukses
         }
     }
@@ -59,6 +149,7 @@ int fs_delete(const char *name) {
     for (i = 0; i < FS_MAX_FILES; i++) {
         if (files[i].used && fs_strcmp(files[i].name, name)) {
             files[i].used = 0;
+            fs_disk_save(i); /* tulis used=0 ke disk */
             return 1; //sukses
         }
     }
@@ -118,6 +209,7 @@ int fs_write_bin(const char *name, const uint8_t *data, uint32_t size) {
         if (files[i].used && fs_strcmp(files[i].name, name)) {
             fs_memcpy(files[i].data, data, size);
             files[i].size = size;
+            fs_disk_save(i);
             return 1; //sukses
         }
     }
@@ -127,6 +219,7 @@ int fs_write_bin(const char *name, const uint8_t *data, uint32_t size) {
             fs_memcpy(files[i].data, data, size);
             files[i].size = size;
             files[i].used = 1;
+            fs_disk_save(i);
             return 1; //sukses
         }
     }

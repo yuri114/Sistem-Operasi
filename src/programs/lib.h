@@ -34,6 +34,12 @@
 #define SYS_DRAW_LINE   25
 #define SYS_CLR_SCREEN  26
 
+// Syscall manajemen proses (Phase B/C)
+#define SYS_GETPID 27  // kembalikan pid task saat ini
+#define SYS_YIELD  28  // lepas sisa slot CPU
+#define SYS_SLEEP  29  // tidur N milidetik
+#define SYS_EXEC   30  // jalankan program dari FS: arg=nama
+
 // Device ID (harus sama dengan device.h)
 #define DEV_VGA  0
 #define DEV_KBD  1
@@ -319,6 +325,31 @@ static inline void gfx_fill(unsigned char color) {
 // Bersihkan layar dan reset posisi kursor teks ke (0,0)
 static inline void gfx_clear() {
     syscall0(SYS_CLR_SCREEN);
+}
+
+// ============================================================
+// Manajemen proses
+// ============================================================
+
+// Kembalikan id proses (task) saat ini
+static inline int getpid() {
+    return syscall0(SYS_GETPID);
+}
+
+// Lepas sisa slot CPU ke task lain (kooperatif yield)
+static inline void yield() {
+    syscall0(SYS_YIELD);
+}
+
+// Tidur selama ms milidetik
+static inline void sleep_ms(unsigned int ms) {
+    syscall1(SYS_SLEEP, (int)ms);
+}
+
+// Muat dan jalankan program dari filesystem (nama=string null-terminated)
+// Return: task_id jika sukses, -1 jika gagal
+static inline int exec(const char *name) {
+    return syscall1(SYS_EXEC, (int)name);
 }
 
 // Gambar persegi panjang terisi menggunakan struct pointer
