@@ -45,6 +45,18 @@
 #define SYS_DRAW_STR   32  // gambar string 8x8: ebx=ptr GfxStr
 #define SYS_MOUSE_GET  33  // baca posisi+tombol mouse: ebx=ptr MouseState (output)
 
+// Window Manager syscalls
+#define SYS_WIN_CREATE  34  // buat window: ebx=ptr WinCreateArgs → return id
+#define SYS_WIN_DESTROY 35  // tutup window: ebx=id
+#define SYS_WIN_DRAW    36  // gambar teks di konten: ebx=ptr WinDrawArgs
+#define SYS_WIN_CLEAR   37  // bersihkan konten: ebx=id, edx=warna_bg
+#define SYS_WIN_EVENT   38  // poll event: ebx=id → return WIN_EVENT_*
+
+// Event type konstanta
+#define WIN_EVENT_NONE   0
+#define WIN_EVENT_CLOSE  1
+#define WIN_EVENT_CLICK  2
+
 // Device ID (harus sama dengan device.h)
 #define DEV_VGA  0
 #define DEV_KBD  1
@@ -405,6 +417,42 @@ static inline void gfx_str(int x, int y, const char *s, unsigned char fg, unsign
 // Baca posisi dan status tombol mouse ke *ms
 static inline void mouse_get(MouseState *ms) {
     syscall1(SYS_MOUSE_GET, (int)ms);
+}
+
+// ============================================================
+// Window Manager
+// ============================================================
+
+// Struct argumen window — layout harus cocok dengan window.h di kernel
+typedef struct { int x, y, w, h; const char *title; } WinCreateArgs;
+typedef struct { int id, x, y; const char *s; unsigned char fg, bg; } WinDrawArgs;
+
+// Buat window baru, kembalikan id (0-15) atau -1 jika gagal
+static inline int win_create(int x, int y, int w, int h, const char *title) {
+    WinCreateArgs a = {x, y, w, h, title};
+    return syscall1(SYS_WIN_CREATE, (int)&a);
+}
+
+// Tutup dan hapus window
+static inline void win_destroy(int id) {
+    syscall1(SYS_WIN_DESTROY, id);
+}
+
+// Gambar teks di area konten window pada offset piksel (px, py)
+static inline void win_draw(int id, int px, int py, const char *s,
+                             unsigned char fg, unsigned char bg) {
+    WinDrawArgs d = {id, px, py, s, fg, bg};
+    syscall1(SYS_WIN_DRAW, (int)&d);
+}
+
+// Bersihkan area konten window dengan warna bg
+static inline void win_clear(int id, unsigned char bg) {
+    syscall2(SYS_WIN_CLEAR, id, (int)bg);
+}
+
+// Poll event: kembalikan WIN_EVENT_* (0=tidak ada event)
+static inline int win_poll(int id) {
+    return syscall1(SYS_WIN_EVENT, id);
 }
 
 #endif

@@ -7,6 +7,7 @@
 #include "fs.h"
 #include "ata.h"
 #include "mouse.h"
+#include "window.h"
 #include "paging.h"
 #include "task.h"
 #include "syscall.h"
@@ -21,6 +22,7 @@
 #include "pipe_receiver_elf_data.h"
 #include "devtest_elf_data.h"
 #include "gfxtest_elf_data.h"
+#include "gui_demo_elf_data.h"
 #include "ipc.h"
 #include "semaphore.h"
 #include "pipe.h"
@@ -222,6 +224,7 @@ void programs_init() {
     fs_write_bin("pipe_receiver", build_pipe_receiver_elf, build_pipe_receiver_elf_len);
     fs_write_bin("devtest",       build_devtest_elf,       build_devtest_elf_len);
     fs_write_bin("gfxtest",       build_gfxtest_elf,       build_gfxtest_elf_len);
+    fs_write_bin("gui_demo",      build_gui_demo_elf,      build_gui_demo_elf_len);
 }
 
 /* Deklarasi handler dari isr.asm */
@@ -374,6 +377,7 @@ void kernel_main(){
     /* IRQ12 — PS/2 Mouse (INT 44 = slave IRQ4) */
     extern void irq12();
     idt_set_gate(44, (uint32_t)irq12);
+    wm_init();
     mouse_init();
     /* Tidak membuat background task — task_count=1, task_switch selalu early return.
      * Background task menyebabkan task switch aktif, yang mengubah CR3 dan ESP

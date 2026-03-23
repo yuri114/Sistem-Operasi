@@ -42,6 +42,13 @@
 #define SYS_DRAW_STR   32  // gambar string di framebuffer: ebx=ptr GfxStr
 #define SYS_MOUSE_GET  33  // baca state mouse: ebx=ptr MouseState (output)
 
+// Window Manager syscalls
+#define SYS_WIN_CREATE  34  // buat window: ebx=ptr WinCreateArgs → return id
+#define SYS_WIN_DESTROY 35  // tutup window: ebx=id
+#define SYS_WIN_DRAW    36  // gambar teks di konten: ebx=ptr WinDrawArgs
+#define SYS_WIN_CLEAR   37  // bersihkan konten: ebx=id, edx=warna_bg
+#define SYS_WIN_EVENT   38  // poll event: ebx=id → return WIN_EVENT_*
+
 void syscall_init();
 uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx);
 

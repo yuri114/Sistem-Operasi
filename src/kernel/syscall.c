@@ -11,6 +11,7 @@
 #include "vmm.h"
 #include "elf_loader.h"
 #include "mouse.h"
+#include "window.h"
 
 extern void print(const char *str); // dari kernel.c
 extern void clear_screen();         // dari kernel.c
@@ -223,6 +224,42 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
         if (!is_user_ptr(ebx)) return (uint32_t)-1;
         mouse_get_state((MouseState*)ebx);
         return 0;
+    }
+
+    // SYS_WIN_CREATE(34): buat window baru
+    // ebx = ptr ke WinCreateArgs { int x, y, w, h; const char *title; }
+    // return: window id (0..MAX_WINDOWS-1) atau -1 jika gagal
+    if (eax == SYS_WIN_CREATE) {
+        if (!is_user_ptr(ebx)) return (uint32_t)-1;
+        WinCreateArgs *a = (WinCreateArgs*)ebx;
+        if (a->title && !is_user_ptr((uint32_t)a->title)) return (uint32_t)-1;
+        return (uint32_t)wm_create(a->x, a->y, a->w, a->h, a->title);
+    }
+    // SYS_WIN_DESTROY(35): tutup window, bebaskan slot
+    // ebx = window id
+    if (eax == SYS_WIN_DESTROY) {
+        wm_destroy((int)ebx);
+        return 0;
+    }
+    // SYS_WIN_DRAW(36): gambar teks di area konten window
+    // ebx = ptr ke WinDrawArgs { int id, x, y; const char *s; uint8_t fg, bg; }
+    if (eax == SYS_WIN_DRAW) {
+        if (!is_user_ptr(ebx)) return (uint32_t)-1;
+        WinDrawArgs *d = (WinDrawArgs*)ebx;
+        if (!is_user_ptr((uint32_t)d->s)) return (uint32_t)-1;
+        wm_draw_text(d->id, d->x, d->y, d->s, d->fg, d->bg);
+        return 0;
+    }
+    // SYS_WIN_CLEAR(37): bersihkan area konten window dengan warna bg
+    // ebx = window id, edx = warna background
+    if (eax == SYS_WIN_CLEAR) {
+        wm_clear_content((int)ebx, (uint8_t)edx);
+        return 0;
+    }
+    // SYS_WIN_EVENT(38): ambil event dari antrian window
+    // ebx = window id; return WIN_EVENT_NONE/CLOSE/CLICK
+    if (eax == SYS_WIN_EVENT) {
+        return (uint32_t)wm_poll_event((int)ebx);
     }
 
     // SYS_EXEC(30): muat dan jalankan program dari FS: ebx=nama (user ptr)

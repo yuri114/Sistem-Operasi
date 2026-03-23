@@ -12,6 +12,7 @@
  */
 #include "mouse.h"
 #include "graphics.h"   /* SCREEN_W, SCREEN_H, gfx_lfb_addr */
+#include "window.h"     /* wm_mouse_event() */
 
 /* ------------------------------------------------------------------ */
 /* I/O helpers lokal                                                   */
@@ -210,8 +211,12 @@ void mouse_handler(void) {
     if (mouse_x >= SCREEN_W)  mouse_x = SCREEN_W - 1;
     if (mouse_y >= SCREEN_H)  mouse_y = SCREEN_H - 1;
 
+    uint8_t prev_buttons = mouse_buttons;
     mouse_buttons = (uint8_t)(flags & 0x07u);
 
+    /* Beri tahu window manager tentang pergerakan / klik mouse */
+    wm_mouse_event(mouse_x, mouse_y, mouse_buttons, prev_buttons);
+
     cursor_draw(mouse_x, mouse_y);
-    (void)flags; /* suppress potential warning */
+    (void)flags;
 }
