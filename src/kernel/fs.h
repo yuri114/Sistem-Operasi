@@ -21,5 +21,7 @@ const uint8_t* fs_read_bin(const char *name, uint32_t *out_size);
 const char* fs_read(const char *name);
 int fs_delete(const char *name);
 void fs_list(void (*print_fn)(const char*));
+// Cari satu file yang namanya diawali prefix; 1=ditemukan unik, 0=tidak ada/ambigu
+int fs_find_prefix(const char *prefix, char *out_name);
 
 #endif

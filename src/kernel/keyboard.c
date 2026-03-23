@@ -77,6 +77,11 @@ void keyboard_handler(){
         return;
     }
 
+    if (scancode == 0x0F) {              // Tab
+        shell_process_char('\x03');
+        return;
+    }
+
     if (scancode == 0x0E) { //scancode 0x0E = backspace
         key_push('\b'); //push karakter backspace ke buffer
         shell_process_char('\b');

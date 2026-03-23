@@ -14,7 +14,13 @@
 #include "elf_loader.h"
 #include "hello_elf_data.h"
 #include "sender_elf_data.h"
+#include "writer_elf_data.h"
+#include "piper_elf_data.h"
+#include "pipe_sender_elf_data.h"
+#include "pipe_receiver_elf_data.h"
 #include "ipc.h"
+#include "semaphore.h"
+#include "pipe.h"
 
 #define VGA_ADDRESS 0xB8000
 #define VGA_COLS 80
@@ -223,8 +229,12 @@ void user_task() {
 }
 
 void programs_init() {
-    fs_write_bin("hello",  build_hello_elf,  build_hello_elf_len);  //simpan ELF receiver
-    fs_write_bin("sender", build_sender_elf, build_sender_elf_len); //simpan ELF sender
+    fs_write_bin("hello",         build_hello_elf,         build_hello_elf_len);
+    fs_write_bin("sender",        build_sender_elf,        build_sender_elf_len);
+    fs_write_bin("writer",        build_writer_elf,        build_writer_elf_len);
+    fs_write_bin("piper",         build_piper_elf,         build_piper_elf_len);
+    fs_write_bin("pipe_sender",   build_pipe_sender_elf,   build_pipe_sender_elf_len);
+    fs_write_bin("pipe_receiver", build_pipe_receiver_elf, build_pipe_receiver_elf_len);
 }
 
 /* Deklarasi handler dari isr.asm */
@@ -244,6 +254,8 @@ void kernel_main(){
     pmm_init();
     fs_init();
     ipc_init();
+    sem_init_all();
+    pipe_init_all();
     programs_init();
     timer_init(100);
     paging_init();

@@ -13,7 +13,16 @@
 #define SYS_FS_WRITE 6
 #define SYS_MSG_SEND 7
 #define SYS_MSG_RECV 8
-#define SYS_KILL     9
+#define SYS_KILL      9
+#define SYS_SEM_ALLOC  10
+#define SYS_SEM_FREE   11
+#define SYS_SEM_WAIT   12
+#define SYS_SEM_POST   13
+#define SYS_PIPE_OPEN  14
+#define SYS_PIPE_WRITE 15
+#define SYS_PIPE_READ  16
+#define SYS_PIPE_CLOSE 17
+#define SYS_PIPE_GETID 18
 
 // ============================================================
 // syscall — memanggil kernel lewat int 0x80
@@ -27,6 +36,17 @@ static inline int syscall1(int num, int arg) {
         "int $0x80"
         : "=a"(ret)
         : "a"(num), "b"(arg)
+    );
+    return ret;
+}
+
+// syscall2: eax=num, ebx=arg1, edx=arg2 (3 argumen)
+static inline int syscall2(int num, int arg1, int arg2) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(num), "b"(arg1), "d"(arg2)
     );
     return ret;
 }
@@ -164,6 +184,57 @@ static inline int msg_recv(char *buf) {
 // return 1 sukses, 0 gagal (id tidak valid / dilindungi)
 static inline int kill(int id) {
     return syscall1(SYS_KILL, id);
+}
+
+// Alokasi semaphore baru dengan nilai awal (1=mutex tersedia, 0=terkunci)
+// return: id semaphore untuk dipakai di sem_wait/sem_post/sem_free
+static inline int sem_alloc(int initial_value) {
+    return syscall1(SYS_SEM_ALLOC, initial_value);
+}
+
+// Bebaskan slot semaphore (panggil setelah selesai pakai)
+static inline void sem_free(int id) {
+    syscall1(SYS_SEM_FREE, id);
+}
+
+// Tunggu sampai semaphore tersedia lalu kunci (masuk critical section)
+static inline int sem_wait(int id) {
+    return syscall1(SYS_SEM_WAIT, id);
+}
+
+// Lepas kunci semaphore (keluar critical section)
+static inline int sem_post(int id) {
+    return syscall1(SYS_SEM_POST, id);
+}
+
+// ============================================================
+// Pipe — anonymous channel untuk komunikasi antar proses
+// ============================================================
+
+// Buka (alokasi) pipe baru — return id pipe, atau -1 jika penuh
+static inline int pipe_open() {
+    return syscall0(SYS_PIPE_OPEN);
+}
+
+// Tulis string ke pipe (id = id pipe yang didapat dari pipe_open atau pipe_get_id)
+static inline int pipe_write(int id, const char *msg) {
+    return syscall2(SYS_PIPE_WRITE, id, (int)msg);
+}
+
+// Baca satu pesan dari pipe ke buf — return bytes dibaca, 0 jika kosong
+static inline int pipe_read(int id, char *buf) {
+    return syscall2(SYS_PIPE_READ, id, (int)buf);
+}
+
+// Tutup (bebaskan) pipe
+static inline void pipe_close(int id) {
+    syscall1(SYS_PIPE_CLOSE, id);
+}
+
+// Ambil pipe_id yang diwarisi dari shell (untuk program yang dijalankan via 'pipe' command)
+// Return -1 jika tidak ada pipe yang di-assign
+static inline int pipe_get_id() {
+    return syscall0(SYS_PIPE_GETID);
 }
 
 #endif

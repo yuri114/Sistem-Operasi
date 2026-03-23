@@ -61,6 +61,24 @@ gcc -m32 -nostdlib -nostartfiles -fno-builtin -fno-pic \
 -T src/programs/user.ld src/programs/sender.c \
     -o build/sender.elf
 xxd -i build/sender.elf > src/kernel/sender_elf_data.h
+gcc -m32 -nostdlib -nostartfiles -fno-builtin -fno-pic \
+-T src/programs/user.ld src/programs/writer.c \
+    -o build/writer.elf
+xxd -i build/writer.elf > src/kernel/writer_elf_data.h
+gcc -m32 -nostdlib -nostartfiles -fno-builtin -fno-pic \
+-T src/programs/user.ld src/programs/piper.c \
+    -o build/piper.elf
+xxd -i build/piper.elf > src/kernel/piper_elf_data.h
+gcc -m32 -nostdlib -nostartfiles -fno-builtin -fno-pic \
+-T src/programs/user.ld src/programs/pipe_sender.c \
+    -o build/pipe_sender.elf
+xxd -i build/pipe_sender.elf > src/kernel/pipe_sender_elf_data.h
+gcc -m32 -nostdlib -nostartfiles -fno-builtin -fno-pic \
+-T src/programs/user.ld src/programs/pipe_receiver.c \
+    -o build/pipe_receiver.elf
+xxd -i build/pipe_receiver.elf > src/kernel/pipe_receiver_elf_data.h
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/semaphore.c  -o build/semaphore.o
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/pipe.c       -o build/pipe.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/kernel.c    -o build/kernel.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/idt.c       -o build/idt.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/pic.c       -o build/pic.o
@@ -76,7 +94,7 @@ gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/ker
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/vmm.c       -o build/vmm.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/elf_loader.c -o build/elf_loader.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/ipc.c        -o build/ipc.o
-ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o -o build/kernel.elf
+ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o -o build/kernel.elf
 objcopy -O binary build/kernel.elf build/kernel.bin
 echo done
 "@

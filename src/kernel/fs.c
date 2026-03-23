@@ -69,7 +69,7 @@ void fs_list(void (*print_fn)(const char*)) {
     int i, count = 0;
     for (i = 0; i < FS_MAX_FILES; i++) {
         if (files[i].used) {
-            print_fn(files[i].name); //panggil fungsi cetak untuk setiap nama file yang digunakan
+            print_fn(files[i].name);
             print_fn("\n");
             count++;
         }
@@ -77,6 +77,30 @@ void fs_list(void (*print_fn)(const char*)) {
     if (count == 0) {
         print_fn("Tidak ada file\n");
     }
+}
+
+int fs_find_prefix(const char *prefix, char *out_name) {
+    int i, found = 0;
+    for (i = 0; i < FS_MAX_FILES; i++) {
+        if (!files[i].used) continue;
+        // cek apakah nama file dimulai dengan prefix
+        int j = 0;
+        int match = 1;
+        while (prefix[j]) {
+            if (files[i].name[j] != prefix[j]) { match = 0; break; }
+            j++;
+        }
+        if (!match) continue;
+        if (found) return 0; // lebih dari satu cocok = ambigu
+        found = 1;
+        j = 0;
+        while (files[i].name[j] && j < FS_MAX_NAME - 1) {
+            out_name[j] = files[i].name[j];
+            j++;
+        }
+        out_name[j] = '\0';
+    }
+    return found;
 }
 
 static void fs_memcpy(uint8_t *dst, const uint8_t *src, uint32_t n) {

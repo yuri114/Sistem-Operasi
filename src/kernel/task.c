@@ -25,7 +25,10 @@ void task_init() {
 
 void task_set_main() {
     task_count = 1;
-    tasks[0].used = 1;
+    tasks[0].used     = 1;
+    tasks[0].priority = 3;  // shell: prioritas tinggi
+    tasks[0].ticks    = 3;
+    tasks[0].pipe_id  = -1;
     str_copy_n(tasks[0].name, "[shell]", 32);
 }
 
@@ -35,7 +38,10 @@ void task_set_main() {
     }
 
     int id = task_count++;
-    tasks[id].used = 1;
+    tasks[id].used     = 1;
+    tasks[id].priority = 1;  // kernel task: prioritas rendah
+    tasks[id].ticks    = 1;
+    tasks[id].pipe_id  = -1;
     str_copy_n(tasks[id].name, "[idle]", 32);
     tasks[id].page_dir = vmm_create_page_dir();
     //Inisialisasi stack untuk task baru
@@ -62,25 +68,34 @@ void task_set_main() {
  }
 
  void task_switch() {
-    if (task_count < 2 ) return; //tidak ada task lain untuk switch
-
-    int next = (current_task + 1) % task_count; //pilih task berikutnya secara round-robin
-
-    //skip task yang tidak digunakan (seharusnya tidak terjadi karena task_count sudah dihitung)
-    int i;
-    for (i = 0; i < task_count; i++)
-    {
-        if (tasks[next].used) {
-            break;
-        }
-        next = (next + 1) % task_count;
-    }
-    if (!tasks[next].used)return; //tidak ada task lain yang aktif
-    if (next == current_task) return; //hanya ada satu task yang aktif
-
-    //Simpan konteks task saat ini (esp)
+    // Selalu clear dulu — semua early return harus aman (irq0 skip save/load jika NULL)
     extern uint32_t *current_esp;
     extern uint32_t *next_esp;
+    current_esp = 0;
+    next_esp    = 0;
+
+    if (task_count < 2) return;
+
+    // Priority weighted round-robin:
+    // kurangi ticks task saat ini; jika masih ada, tetap di task ini
+    if (tasks[current_task].used && tasks[current_task].ticks > 1) {
+        tasks[current_task].ticks--;
+        return;  // early return aman: current_esp/next_esp sudah NULL
+    }
+
+    // reset ticks task lama
+    tasks[current_task].ticks = tasks[current_task].priority;
+
+    // cari task berikutnya yang aktif (round-robin dari posisi sekarang)
+    int next = (current_task + 1) % task_count;
+    int i;
+    for (i = 0; i < task_count; i++) {
+        if (tasks[next].used) break;
+        next = (next + 1) % task_count;
+    }
+    if (!tasks[next].used) return;  // aman: current_esp/next_esp = NULL
+    if (next == current_task) return;  // aman: NULL
+
     current_esp = &tasks[current_task].esp; //simpan esp task saat ini
     next_esp = &tasks[next].esp; //siapkan esp untuk task berikutnya
     current_task = next; //update task yang sedang berjalan
@@ -96,11 +111,19 @@ void task_set_main() {
  }
  
 int task_create_user(uint32_t entry, uint32_t *page_dir, uint32_t user_esp, const char *name) {
-    if (task_count >= MAX_TASKS) return -1;
-
-    int id = task_count++;
-    tasks[id].used = 1;
+    // Cari slot bebas (used=0) agar slot lama bisa dipakai ulang
+    int id = -1;
+    int i;
+    for (i = 1; i < MAX_TASKS; i++) {  // mulai 1: slot 0 = shell, jangan disentuh
+        if (!tasks[i].used) { id = i; break; }
+    }
+    if (id == -1) return -1;  // semua slot penuh
+    if (id >= task_count) task_count = id + 1;  // perluas jika perlu
+    tasks[id].used     = 1;
     tasks[id].page_dir = page_dir;
+    tasks[id].priority = 2;  // user program: prioritas normal
+    tasks[id].ticks    = 2;
+    tasks[id].pipe_id  = -1;
     str_copy_n(tasks[id].name, name ? name : "?", 32);
 
     uint32_t *stack_top = (uint32_t*)(stacks[id] + STACK_SIZE);
@@ -140,6 +163,23 @@ int task_get_max()         { return MAX_TASKS; }
 int task_is_used(int id)   { return (id >= 0 && id < MAX_TASKS) ? tasks[id].used : 0; }
 const char *task_get_name(int id) { return (id >= 0 && id < MAX_TASKS) ? tasks[id].name : ""; }
 int task_get_current()     { return current_task; }
+int task_get_priority(int id) { return (id >= 0 && id < MAX_TASKS) ? tasks[id].priority : 0; }
+int task_set_priority(int id, int prio) {
+    if (id < 0 || id >= MAX_TASKS || !tasks[id].used) return 0;
+    if (prio < 1 || prio > 3) return 0;
+    tasks[id].priority = (uint8_t)prio;
+    tasks[id].ticks    = (uint8_t)prio; // reset counter sekarang
+    return 1;
+}
+
+void task_set_pipe(int id, int pipe_id) {
+    if (id >= 0 && id < MAX_TASKS)
+        tasks[id].pipe_id = pipe_id;
+}
+
+int task_get_current_pipe() {
+    return tasks[current_task].pipe_id;
+}
 
 // kill: matikan task dengan id tertentu
 // tidak boleh kill id 0 (shell)
