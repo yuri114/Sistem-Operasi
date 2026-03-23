@@ -37,6 +37,11 @@
 #define SYS_SLEEP  29  // tidur ebx milidetik
 #define SYS_EXEC   30  // jalankan program dari FS: ebx=nama, return task_id atau -1
 
+// Syscall grafis teks dan mouse
+#define SYS_DRAW_CHAR  31  // gambar 1 karakter di framebuffer: ebx=x|(y<<16), edx=c|(fg<<8)|(bg<<16)
+#define SYS_DRAW_STR   32  // gambar string di framebuffer: ebx=ptr GfxStr
+#define SYS_MOUSE_GET  33  // baca state mouse: ebx=ptr MouseState (output)
+
 void syscall_init();
 uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx);
 

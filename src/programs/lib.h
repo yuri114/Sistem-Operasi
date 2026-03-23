@@ -40,6 +40,11 @@
 #define SYS_SLEEP  29  // tidur N milidetik
 #define SYS_EXEC   30  // jalankan program dari FS: arg=nama
 
+// Syscall grafis teks + mouse (Phase Mouse+Font)
+#define SYS_DRAW_CHAR  31  // gambar 1 karakter 8x8: ebx=x|(y<<16), edx=c|(fg<<8)|(bg<<16)
+#define SYS_DRAW_STR   32  // gambar string 8x8: ebx=ptr GfxStr
+#define SYS_MOUSE_GET  33  // baca posisi+tombol mouse: ebx=ptr MouseState (output)
+
 // Device ID (harus sama dengan device.h)
 #define DEV_VGA  0
 #define DEV_KBD  1
@@ -373,6 +378,33 @@ static inline void gfx_rect(int x, int y, int w, int h, unsigned char color) {
 static inline void gfx_line(int x1, int y1, int x2, int y2, unsigned char color) {
     GfxLine l = {x1, y1, x2, y2, color};
     syscall1(SYS_DRAW_LINE, (int)&l);
+}
+
+// ============================================================
+// Teks grafis (font 8x8) dan Mouse
+// ============================================================
+
+// Struct untuk menggambar string — layout harus cocok dengan GfxStr di graphics.h
+typedef struct { int x, y; const char *s; unsigned char fg, bg; } GfxStr;
+
+// State mouse — layout harus cocok dengan MouseState di mouse.h
+typedef struct { int x, y; unsigned char buttons; } MouseState;
+
+// Gambar satu karakter 8x8 di framebuffer pada (x,y)
+static inline void gfx_char(int x, int y, char c, unsigned char fg, unsigned char bg) {
+    syscall2(SYS_DRAW_CHAR, x | (y << 16),
+             (int)((unsigned char)c | ((unsigned int)fg << 8) | ((unsigned int)bg << 16)));
+}
+
+// Gambar string null-terminated dengan font 8x8 di (x,y)
+static inline void gfx_str(int x, int y, const char *s, unsigned char fg, unsigned char bg) {
+    GfxStr g = {x, y, s, fg, bg};
+    syscall1(SYS_DRAW_STR, (int)&g);
+}
+
+// Baca posisi dan status tombol mouse ke *ms
+static inline void mouse_get(MouseState *ms) {
+    syscall1(SYS_MOUSE_GET, (int)ms);
 }
 
 #endif

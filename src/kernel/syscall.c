@@ -10,6 +10,7 @@
 #include "graphics.h"
 #include "vmm.h"
 #include "elf_loader.h"
+#include "mouse.h"
 
 extern void print(const char *str); // dari kernel.c
 extern void clear_screen();         // dari kernel.c
@@ -190,6 +191,37 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
     // SYS_SLEEP(29): tidur ebx milidetik
     if (eax == SYS_SLEEP) {
         task_sleep(ebx);
+        return 0;
+    }
+
+    // SYS_DRAW_CHAR(31): gambar satu karakter 8x8 di framebuffer
+    // ebx = x | (y<<16)  — koordinat piksel
+    // edx = char | (fg<<8) | (bg<<16)
+    if (eax == SYS_DRAW_CHAR) {
+        int x  = (int)(ebx & 0xFFFFu);
+        int y  = (int)((ebx >> 16) & 0xFFFFu);
+        char c = (char)(edx & 0xFFu);
+        uint8_t fg = (uint8_t)((edx >> 8)  & 0xFFu);
+        uint8_t bg = (uint8_t)((edx >> 16) & 0xFFu);
+        draw_char_gfx(x, y, c, fg, bg);
+        return 0;
+    }
+
+    // SYS_DRAW_STR(32): gambar string di framebuffer
+    // ebx = ptr ke GfxStr { int x, y; const char *s; uint8_t fg, bg; }
+    if (eax == SYS_DRAW_STR) {
+        if (!is_user_ptr(ebx)) return (uint32_t)-1;
+        GfxStr *gs = (GfxStr*)ebx;
+        if (!is_user_ptr((uint32_t)gs->s)) return (uint32_t)-1;
+        draw_string_gfx(gs->x, gs->y, gs->s, gs->fg, gs->bg);
+        return 0;
+    }
+
+    // SYS_MOUSE_GET(33): baca state mouse ke struct MouseState
+    // ebx = ptr ke MouseState { int x, y; uint8_t buttons; }
+    if (eax == SYS_MOUSE_GET) {
+        if (!is_user_ptr(ebx)) return (uint32_t)-1;
+        mouse_get_state((MouseState*)ebx);
         return 0;
     }
 

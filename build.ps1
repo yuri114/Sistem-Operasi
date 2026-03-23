@@ -108,7 +108,8 @@ gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/ker
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/elf_loader.c -o build/elf_loader.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/ipc.c        -o build/ipc.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/ata.c        -o build/ata.o
-ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o build/device.o build/drv_vga.o build/drv_kbd.o build/vbe.o build/graphics.o build/ata.o -o build/kernel.elf
+gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/mouse.c      -o build/mouse.o
+ld -m elf_i386 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o build/device.o build/drv_vga.o build/drv_kbd.o build/vbe.o build/graphics.o build/ata.o build/mouse.o -o build/kernel.elf
 objcopy -O binary build/kernel.elf build/kernel.bin
 echo done
 "@

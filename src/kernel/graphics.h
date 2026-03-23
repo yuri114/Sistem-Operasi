@@ -32,6 +32,7 @@ extern uint32_t gfx_lfb_addr;
 /* Struct argumen untuk syscall grafis kompleks */
 typedef struct { int x, y, w, h; uint8_t color; } GfxRect;
 typedef struct { int x1, y1, x2, y2; uint8_t color; } GfxLine;
+typedef struct { int x, y; const char *s; uint8_t fg, bg; } GfxStr;
 
 void graphics_init();
 void graphics_set_fb(uint32_t addr); /* set alamat LFB runtime */

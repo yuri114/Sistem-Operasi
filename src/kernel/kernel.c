@@ -6,6 +6,7 @@
 #include "timer.h"
 #include "fs.h"
 #include "ata.h"
+#include "mouse.h"
 #include "paging.h"
 #include "task.h"
 #include "syscall.h"
@@ -340,7 +341,6 @@ void kernel_main(){
     idt_init();
     idt_set_gate(32, (uint32_t)irq0);
     idt_set_gate(33, (uint32_t)irq1);
-    idt_set_gate(0x80, (uint32_t)int80_handler); //set handler untuk syscall di interrupt 0x80
 
     /* Exception handlers INT 0-14 — tanpa ini CPU exception → triple fault → reboot */
     idt_set_gate(0,  (uint32_t)exc0);
@@ -370,6 +370,11 @@ void kernel_main(){
     tss_init(task_get_esp0(0));
     //register syscall dengan DPL = 3 agar ring-3 bisa memanggil int 0x80
     idt_set_gate_user(0x80, (uint32_t)int80_handler);
+
+    /* IRQ12 — PS/2 Mouse (INT 44 = slave IRQ4) */
+    extern void irq12();
+    idt_set_gate(44, (uint32_t)irq12);
+    mouse_init();
     /* Tidak membuat background task — task_count=1, task_switch selalu early return.
      * Background task menyebabkan task switch aktif, yang mengubah CR3 dan ESP
      * secara tidak terduga saat shell berada di tengah drawing loop → crash. */

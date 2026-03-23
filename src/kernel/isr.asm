@@ -8,6 +8,7 @@ global irq1
 ; Import handler dari keyboard.c
 extern keyboard_handler
 extern timer_handler
+extern mouse_handler
 
 ; ----------------------------------------------------
 ; idt_load - dipanggil dari idt.c
@@ -95,6 +96,35 @@ irq1:
     mov fs, ax
     mov gs, ax
 
+    popa
+    iret
+
+; ----------------------------------------------------
+; IRQ12 - PS/2 Mouse (interrupt 44 = slave IRQ4)
+; Kirim EOI ke slave (0xA0) DAN master (0x20)
+; ----------------------------------------------------
+global irq12
+irq12:
+    pusha
+    mov ax, ds
+    push eax
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    call mouse_handler
+
+    mov al, 0x20
+    out 0xA0, al        ; EOI ke slave PIC
+    out 0x20, al        ; EOI ke master PIC
+
+    pop eax
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
     popa
     iret
 
