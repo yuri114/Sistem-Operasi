@@ -94,8 +94,10 @@ void keyboard_handler(){
 
     if (extended) {
         extended = 0;
-        if (scancode == 0x48)       key_push('\x01'); /* ↑ up */
-        else if (scancode == 0x50)  key_push('\x02'); /* ↓ down */
+        if      (scancode == 0x48) key_push('\x01'); /* ↑ up    */
+        else if (scancode == 0x50) key_push('\x02'); /* ↓ down  */
+        else if (scancode == 0x4B) key_push('\x04'); /* ← left  */
+        else if (scancode == 0x4D) key_push('\x05'); /* → right */
         return;
     }
 

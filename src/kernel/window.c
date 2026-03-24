@@ -176,13 +176,14 @@ static void wm_draw_window(int id) {
             break;
         }
     }
-    uint8_t tb_color = focused ? GFX_BLUE : GFX_DGRAY;
+    uint8_t tb_color  = focused ? GFX_BLUE  : GFX_DGRAY;
+    uint8_t bdr_color = focused ? GFX_LCYAN : GFX_LGRAY;
 
-    /* --- Border (1px, abu-abu terang) --- */
-    fill_rect(w->x,                      w->y,                       w->w, BORDER_W, GFX_LGRAY);
-    fill_rect(w->x,                      w->y + w->h - BORDER_W,     w->w, BORDER_W, GFX_LGRAY);
-    fill_rect(w->x,                      w->y,                       BORDER_W, w->h, GFX_LGRAY);
-    fill_rect(w->x + w->w - BORDER_W,    w->y,                       BORDER_W, w->h, GFX_LGRAY);
+    /* --- Border (1px) — cyan saat focused, abu-abu saat tidak --- */
+    fill_rect(w->x,                      w->y,                       w->w, BORDER_W, bdr_color);
+    fill_rect(w->x,                      w->y + w->h - BORDER_W,     w->w, BORDER_W, bdr_color);
+    fill_rect(w->x,                      w->y,                       BORDER_W, w->h, bdr_color);
+    fill_rect(w->x + w->w - BORDER_W,    w->y,                       BORDER_W, w->h, bdr_color);
 
     /* --- Title bar --- */
     int tb_x = w->x + BORDER_W;
@@ -837,9 +838,22 @@ void wm_fill_rect(int id, int cx, int cy, int rw, int rh, uint8_t color) {
                 w->pixel_buf[fy * w->pb_w + fx] = 0xFF;
     }
 
-    for (int y = 0; y < rh; y++)
-        for (int x = 0; x < rw; x++)
-            draw_pixel(ca_x + cx + x, ca_y + cy + y, color);
+    for (int y = 0; y < rh; y++) {
+        for (int x = 0; x < rw; x++) {
+            int sx = ca_x + cx + x, sy = ca_y + cy + y;
+            /* Cek z-order: skip piksel yang tertutup window lain */
+            int covered = 0;
+            for (int zi = z_count - 1; zi >= 0; zi--) {
+                int zid = z_order[zi];
+                if (zid == id) break;
+                WinSlot *zw = &windows[zid];
+                if (!zw->alive || zw->minimized) continue;
+                if (sx >= zw->x && sx < zw->x + zw->w &&
+                    sy >= zw->y && sy < zw->y + zw->h) { covered = 1; break; }
+            }
+            if (!covered) draw_pixel(sx, sy, color);
+        }
+    }
     cursor_update_region(ca_x + cx, ca_y + cy, rw, rh, color);
 }
 

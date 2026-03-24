@@ -20,6 +20,9 @@
 #define LINE_H           10   /* tinggi per baris (font 8px + 2px spasi) */
 #define VISIBLE_LINES    28   /* jumlah baris yang terlihat sekaligus */
 #define STATUS_Y        306   /* TEXT_Y + VISIBLE_LINES*LINE_H + 2 */
+#define SCROLL_X        512   /* x scrollbar (CA_W-8 = 520-8) */
+#define SCROLL_W          8   /* lebar strip scrollbar */
+#define SCROLL_TRACK_H  280   /* VISIBLE_LINES * LINE_H */
 
 /* ---- Indeks tombol ---- */
 #define BTN_NEW    0
@@ -122,6 +125,24 @@ static void do_enter(void) {
     if (cur_line >= top_line + VISIBLE_LINES) top_line++;
 }
 
+/* ---- Scrollbar ---- */
+static void draw_scrollbar(int id) {
+    /* Track */
+    win_fill_rect(id, SCROLL_X, TEXT_Y, SCROLL_W, SCROLL_TRACK_H, GFX_DGRAY);
+    /* Border kiri track */
+    win_fill_rect(id, SCROLL_X, TEXT_Y, 1, SCROLL_TRACK_H, GFX_BLACK);
+    if (line_count <= VISIBLE_LINES) {
+        /* Semua baris muat: thumb penuh */
+        win_fill_rect(id, SCROLL_X+1, TEXT_Y, SCROLL_W-1, SCROLL_TRACK_H, GFX_LGRAY);
+    } else {
+        int thumb_h = SCROLL_TRACK_H * VISIBLE_LINES / line_count;
+        if (thumb_h < 6) thumb_h = 6;
+        int max_scroll = line_count - VISIBLE_LINES;
+        int thumb_y = TEXT_Y + (SCROLL_TRACK_H - thumb_h) * top_line / max_scroll;
+        win_fill_rect(id, SCROLL_X+1, thumb_y, SCROLL_W-1, thumb_h, GFX_LGRAY);
+    }
+}
+
 /* ---- Render ---- */
 static void do_render(int id) {
     int i;
@@ -168,6 +189,7 @@ static void do_render(int id) {
     while (slen < 62) st[slen++] = ' ';
     st[62] = '\0';
     win_draw(id, 0, STATUS_Y, st, GFX_WHITE, GFX_DGRAY);
+    draw_scrollbar(id);
 }
 
 /* ---- Load / Save ---- */
@@ -244,6 +266,39 @@ void _start(void) {
                 do_backspace();
             } else if (c == '\r' || c == '\n') {
                 do_enter();
+            } else if (c == '\x01') {       /* ↑ up */
+                if (cur_line > 0) {
+                    cur_line--;
+                    int len = np_len(lines[cur_line]);
+                    if (cur_col > len) cur_col = len;
+                    if (cur_line < top_line) top_line = cur_line;
+                }
+            } else if (c == '\x02') {       /* ↓ down */
+                if (cur_line < line_count - 1) {
+                    cur_line++;
+                    int len = np_len(lines[cur_line]);
+                    if (cur_col > len) cur_col = len;
+                    if (cur_line >= top_line + VISIBLE_LINES)
+                        top_line = cur_line - VISIBLE_LINES + 1;
+                }
+            } else if (c == '\x04') {       /* ← left */
+                if (cur_col > 0) {
+                    cur_col--;
+                } else if (cur_line > 0) {
+                    cur_line--;
+                    cur_col = np_len(lines[cur_line]);
+                    if (cur_line < top_line) top_line = cur_line;
+                }
+            } else if (c == '\x05') {       /* → right */
+                int len = np_len(lines[cur_line]);
+                if (cur_col < len) {
+                    cur_col++;
+                } else if (cur_line < line_count - 1) {
+                    cur_line++;
+                    cur_col = 0;
+                    if (cur_line >= top_line + VISIBLE_LINES)
+                        top_line = cur_line - VISIBLE_LINES + 1;
+                }
             } else if (c >= 32 && c < 127) {
                 insert_char(c);
             } else if (c == 17) {       /* Ctrl+Q: keluar */
@@ -257,7 +312,19 @@ void _start(void) {
         if (t == WIN_EVENT_CLICK) {
             int cx, cy;
             win_click_pos(id, &cx, &cy);
-            if (cy >= TEXT_Y && cy < STATUS_Y) {
+            /* Klik di area scrollbar */
+            if (cx >= SCROLL_X && cy >= TEXT_Y && cy < TEXT_Y + SCROLL_TRACK_H) {
+                if (line_count > VISIBLE_LINES) {
+                    int rel = cy - TEXT_Y;
+                    top_line = rel * (line_count - VISIBLE_LINES) / (SCROLL_TRACK_H - 1);
+                    if (top_line > line_count - VISIBLE_LINES)
+                        top_line = line_count - VISIBLE_LINES;
+                    if (cur_line < top_line) cur_line = top_line;
+                    if (cur_line >= top_line + VISIBLE_LINES)
+                        cur_line = top_line + VISIBLE_LINES - 1;
+                }
+                do_render(id);
+            } else if (cy >= TEXT_Y && cy < STATUS_Y) {
                 int clicked_line = top_line + (cy - TEXT_Y) / LINE_H;
                 if (clicked_line >= 0 && clicked_line < line_count) {
                     cur_line = clicked_line;

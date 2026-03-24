@@ -52,9 +52,17 @@ void free(void *ptr) {
     if (!ptr) return;
     BlockHeader *block = (BlockHeader*)((uint8_t*)ptr - HEADER_SIZE);
     block->free = 1;
-    /* Gabung dengan blok berikutnya jika juga bebas (coalescing) */
-    if (block->next && block->next->free) {
-        block->size += HEADER_SIZE + block->next->size;
-        block->next  = block->next->next;
+    /* Coalescing pass: telusuri dari heap_head dan gabung semua blok bebas
+     * yang bersebelahan. Menangani kasus blok sebelumnya maupun sesudahnya. */
+    BlockHeader *curr = heap_head;
+    while (curr) {
+        if (curr->free && curr->next && curr->next->free) {
+            /* Gabung curr dengan blok berikutnya */
+            curr->size += HEADER_SIZE + curr->next->size;
+            curr->next  = curr->next->next;
+            /* Cek ulang curr (mungkin ada lebih banyak blok bebas setelahnya) */
+        } else {
+            curr = curr->next;
+        }
     }
 }

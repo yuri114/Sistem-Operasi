@@ -12,6 +12,7 @@
 #include "elf_loader.h"
 #include "mouse.h"
 #include "window.h"
+#include "timer.h"
 
 extern void print(const char *str); // dari kernel.c
 extern void clear_screen();         // dari kernel.c
@@ -331,6 +332,11 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
     if (eax == SYS_FS_DELETE) {
         if (!is_user_ptr(ebx)) return 0;
         return (uint32_t)fs_delete((const char*)ebx);
+    }
+
+    // SYS_GET_TICKS(48): kembalikan jumlah timer tick sejak boot
+    if (eax == SYS_GET_TICKS) {
+        return get_ticks();
     }
 
     // SYS_EXEC(30): muat dan jalankan program dari FS: ebx=nama (user ptr)

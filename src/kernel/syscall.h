@@ -57,6 +57,7 @@
 #define SYS_WIN_RESTORE    45 // restore window dari minimized: ebx=id
 #define SYS_FS_LIST        46 // list nama file ke buffer: ebx=ptr, edx=bufsz → return count
 #define SYS_FS_DELETE      47 // hapus file: ebx=ptr nama → return 1/0
+#define SYS_GET_TICKS      48 // kembalikan jumlah timer tick sejak boot → return uint32_t
 
 void syscall_init();
 uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx);

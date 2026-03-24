@@ -60,6 +60,7 @@
 #define SYS_WIN_RESTORE    45 // restore window dari minimized: ebx=id
 #define SYS_FS_LIST        46 // list nama file ke buffer: ebx=ptr, edx=bufsz → return count
 #define SYS_FS_DELETE      47 // hapus file: ebx=ptr nama → return 1/0
+#define SYS_GET_TICKS      48 // timer tick sejak boot → return uint32_t
 
 // Event type konstanta
 #define WIN_EVENT_NONE   0
@@ -532,6 +533,11 @@ static inline int fs_list(char *buf, int bufsz) {
 // Hapus file berdasarkan nama, return 1 jika sukses
 static inline int fs_delete(const char *name) {
     return syscall1(SYS_FS_DELETE, (int)name);
+}
+
+// Kembalikan jumlah timer tick sejak boot (18.2 tick/detik)
+static inline unsigned int get_ticks(void) {
+    return (unsigned int)syscall0(SYS_GET_TICKS);
 }
 
 // Tampilkan kotak pesan modal dengan pesan dan tombol OK
