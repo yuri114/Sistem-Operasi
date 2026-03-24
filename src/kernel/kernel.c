@@ -38,7 +38,7 @@
 #include "vbe.h"
 #include "keyboard.h"
 
-/* Bochs VBE 640x480 @ 8bpp: font 8x8 = 80 kolom x 60 baris */
+/* Bochs VBE 640x480 @ 32bpp: font 8x8 = 80 kolom x 60 baris */
 #define VGA_COLS 80
 #define VGA_ROWS 60
 
@@ -51,17 +51,16 @@ void scroll();
 void update_cursor();
 void itoa(uint32_t num, char *buf);
 
-/* Warna teks saat ini (fg/bg sebagai indeks palette Mode 13h 0-255) */
-uint8_t current_color = 0x0f;  /* packed: bg<<4|fg (untuk kompatibilitas drv_vga) */
-uint8_t fg_color = GFX_LGRAY;  /* warna foreground karakter */
-uint8_t bg_color = GFX_BLACK;  /* warna background sel */
+/* Warna teks saat ini (32bpp True Color) */
+uint8_t current_color = 0x0f;  /* legacy compat drv_vga */
+uint32_t fg_color = GFX_LGRAY;  /* warna foreground karakter */
+uint32_t bg_color = GFX_BLACK;  /* warna background sel */
 
-void vga_put_char_at(int col, int row, char c, uint8_t color);
+void vga_put_char_at(int col, int row, char c, uint32_t color);
 
-void set_color(uint8_t fg, uint8_t bg) {
-    fg_color = fg & 0x0F;
-    bg_color = bg & 0x0F;
-    current_color = (bg_color << 4) | fg_color;
+void set_color(uint32_t fg, uint32_t bg) {
+    fg_color = fg;
+    bg_color = bg;
 }
 
 /*fungsi: hapus seluruh layar*/
@@ -102,21 +101,17 @@ void backspace_char() {
 }
 
 void scroll() {
-    /* Geser framebuffer ke atas 8 baris — tulis 32-bit sekaligus agar cepat.
-     * 640*(480-8) = 301,120 byte = 75,280 dword yang di-copy */
+    /* Geser framebuffer ke atas 8 baris — 32bpp: tiap word = 1 piksel.
+     * stride = SCREEN_W (640 word per baris) */
     uint32_t *fb32  = (uint32_t *)FB_ADDR;
-    uint32_t stride = SCREEN_W / 4;  /* dword per baris */
+    uint32_t stride = SCREEN_W;  /* uint32_t per baris (32bpp) */
     int i;
     /* Copy baris 8..479 ke baris 0..471 */
-    for (i = 0; i < stride * (SCREEN_H - 8); i++)
+    for (i = 0; i < (int)(stride * (SCREEN_H - 8)); i++)
         fb32[i] = fb32[i + stride * 8];
     /* Hapus 8 baris terakhir dengan warna background */
-    uint32_t bval = (uint32_t)bg_color
-                  | ((uint32_t)bg_color << 8)
-                  | ((uint32_t)bg_color << 16)
-                  | ((uint32_t)bg_color << 24);
-    for (i = stride * (SCREEN_H - 8); i < stride * SCREEN_H; i++)
-        fb32[i] = bval;
+    for (i = (int)(stride * (SCREEN_H - 8)); i < (int)(stride * SCREEN_H); i++)
+        fb32[i] = bg_color;
     cursor_row = VGA_ROWS - 1;
 }
 
@@ -139,7 +134,7 @@ void print(const char *str){
     }
 }
 
-void vga_put_char_at(int col, int row, char c, uint8_t color) {
+void vga_put_char_at(int col, int row, char c, uint32_t color) {
     draw_char_gfx(col * 8, row * 8, c, color, bg_color);
 }
 
@@ -328,7 +323,7 @@ void kernel_main(){
     vga_dbg[5] = 0x0F4D; /* 'M' = map OK */
 
     /* 3. Set mode grafis 640x480, update pointer framebuffer, inisialisasi */
-    vbe_set_mode(640, 480, 8);
+    vbe_set_mode(640, 480, 32);
     graphics_set_fb(lfb_addr);
     graphics_init();
     clear_screen();

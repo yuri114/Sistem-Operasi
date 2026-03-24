@@ -28,13 +28,13 @@
 typedef struct {
     int     x, y;
     char    s[WIN_TEXTBUF_STR];
-    uint8_t fg, bg;
+    uint32_t fg, bg;
 } WinText;
 
 /* Satu entri backing store fill_rect — disimpan tiap kali wm_fill_rect dipanggil */
 typedef struct {
     short   x, y, w, h;
-    uint8_t color;
+    uint32_t color;
 } WinRectEntry;
 
 typedef struct {
@@ -46,7 +46,7 @@ typedef struct {
 typedef struct {
     int x, y, w, h;
     char title[32];
-    uint8_t content_bg;
+    uint32_t content_bg;
     int alive;
     /* antrian event ring-buffer (int agar bisa muat event gabungan) */
     int ev_q[WIN_EVQ_SIZE];
@@ -68,9 +68,9 @@ typedef struct {
     WinRectEntry rect_buf[WIN_RECTBUF];
     int          rect_count;
     /* pixel content buffer: dialokasi saat wm_draw_pixel pertama dipanggil.
-     * Ukuran = ca_w * ca_h, index [cy * ca_w + cx]. Nilai 0xFF = belum ditulis. */
-    uint8_t *pixel_buf;   /* NULL = belum dialokasi */
-    int      pb_w, pb_h;  /* dimensi pixel_buf (= ca_w, ca_h saat alokasi) */
+     * Ukuran = ca_w * ca_h, index [cy * ca_w + cx]. Nilai 0xFFFFFFFF = belum ditulis. */
+    uint32_t *pixel_buf;  /* NULL = belum dialokasi */
+    int       pb_w, pb_h;  /* dimensi pixel_buf (= ca_w, ca_h saat alokasi) */
 } WinSlot;
 
 static WinSlot windows[MAX_WINDOWS];
@@ -95,7 +95,7 @@ static int resize_orig_w, resize_orig_h, resize_orig_mx, resize_orig_my;
 /* desktop icons */
 #define DESKTOP_ICON_COUNT 5
 #define DESKTOP_ICON_W     44
-typedef struct { int x, y; const char *label; const char *prog; uint8_t color; } DesktopIcon;
+typedef struct { int x, y; const char *label; const char *prog; uint32_t color; } DesktopIcon;
 static const DesktopIcon desktop_icons[DESKTOP_ICON_COUNT] = {
     {  10, 10, "Paint",  "paint",       GFX_LRED    },
     {  64, 10, "Calc",   "calc",        GFX_LGREEN  },
@@ -157,7 +157,7 @@ static void z_raise(int id) {
  * ============================================================ */
 
 /* Gambar string dengan batas piksel max_px (agar tidak melampaui area) */
-static void wm_drawstr(int x, int y, const char *s, uint8_t fg, uint8_t bg, int max_px) {
+static void wm_drawstr(int x, int y, const char *s, uint32_t fg, uint32_t bg, int max_px) {
     int cx = x;
     for (int i = 0; s[i] && (cx + 8 <= x + max_px); i++, cx += 8)
         draw_char_gfx(cx, y, s[i], fg, bg);
@@ -176,8 +176,8 @@ static void wm_draw_window(int id) {
             break;
         }
     }
-    uint8_t tb_color  = focused ? GFX_BLUE  : GFX_DGRAY;
-    uint8_t bdr_color = focused ? GFX_LCYAN : GFX_LGRAY;
+    uint32_t tb_color  = focused ? GFX_BLUE  : GFX_DGRAY;
+    uint32_t bdr_color = focused ? GFX_LCYAN : GFX_LGRAY;
 
     /* --- Border (1px) — cyan saat focused, abu-abu saat tidak --- */
     fill_rect(w->x,                      w->y,                       w->w, BORDER_W, bdr_color);
@@ -241,8 +241,8 @@ static void wm_draw_window(int id) {
         int bh = w->pb_h < ca_h ? w->pb_h : ca_h;
         for (int py2 = 0; py2 < bh; py2++) {
             for (int px2 = 0; px2 < bw; px2++) {
-                uint8_t c = w->pixel_buf[py2 * w->pb_w + px2];
-                if (c != 0xFF)  /* 0xFF = belum pernah ditulis */
+                uint32_t c = w->pixel_buf[py2 * w->pb_w + px2];
+                if (c != 0xFFFFFFFFu)  /* sentinel: belum pernah ditulis */
                     draw_pixel(ca_x + px2, ca_y + py2, c);
             }
         }
@@ -490,7 +490,7 @@ static int is_focused(int id) {
     return 0;
 }
 
-void wm_draw_text(int id, int px, int py, const char *s, uint8_t fg, uint8_t bg) {
+void wm_draw_text(int id, int px, int py, const char *s, uint32_t fg, uint32_t bg) {
     if (id < 0 || id >= MAX_WINDOWS || !windows[id].alive || !s) return;
     WinSlot *w  = &windows[id];
 
@@ -530,16 +530,16 @@ void wm_draw_text(int id, int px, int py, const char *s, uint8_t fg, uint8_t bg)
     wm_drawstr(sx, sy, s, fg, bg, max_px);
 }
 
-void wm_clear_content(int id, uint8_t bg) {
+void wm_clear_content(int id, uint32_t bg) {
     if (id < 0 || id >= MAX_WINDOWS || !windows[id].alive) return;
     WinSlot *w = &windows[id];
     w->content_bg  = bg;
     w->text_count  = 0;
     w->rect_count  = 0;
-    /* Reset pixel buffer ke content_bg */
+    /* Reset pixel buffer ke sentinel "belum ditulis" */
     if (w->pixel_buf) {
         int total = w->pb_w * w->pb_h;
-        for (int i = 0; i < total; i++) w->pixel_buf[i] = 0xFF;
+        for (int i = 0; i < total; i++) w->pixel_buf[i] = 0xFFFFFFFFu;
     }
     if (is_focused(id))
         wm_draw_window(id);
@@ -741,7 +741,7 @@ void wm_get_click_pos(int id, int *out_x, int *out_y) {
     *out_y = windows[id].last_click_y;
 }
 
-void wm_draw_pixel(int id, int cx, int cy, uint8_t color) {
+void wm_draw_pixel(int id, int cx, int cy, uint32_t color) {
     if (id < 0 || id >= MAX_WINDOWS || !windows[id].alive) return;
     WinSlot *w = &windows[id];
     int ca_x = w->x + BORDER_W;
@@ -753,12 +753,12 @@ void wm_draw_pixel(int id, int cx, int cy, uint8_t color) {
     /* Alokasi pixel buffer secara lazy saat pertama kali digunakan */
     if (!w->pixel_buf) {
         uint32_t sz = (uint32_t)ca_w * (uint32_t)ca_h;
-        w->pixel_buf = (uint8_t*)malloc(sz);
+        w->pixel_buf = (uint32_t*)malloc(sz * sizeof(uint32_t));
         if (!w->pixel_buf) return;  /* kehabisan heap — skip */
         w->pb_w = ca_w;
         w->pb_h = ca_h;
-        /* Isi dengan 0xFF (sentinel: belum ditulis) */
-        for (uint32_t i = 0; i < sz; i++) w->pixel_buf[i] = 0xFF;
+        /* Isi dengan sentinel 0xFFFFFFFF (belum ditulis) */
+        for (uint32_t i = 0; i < sz; i++) w->pixel_buf[i] = 0xFFFFFFFFu;
     }
 
     /* Simpan ke pixel buffer (backing store) */
@@ -795,7 +795,7 @@ int wm_mouse_rel(int id, int *out_x, int *out_y) {
     return is_focused(id) ? (int)g_mouse_btn : 0;
 }
 
-void wm_fill_rect(int id, int cx, int cy, int rw, int rh, uint8_t color) {
+void wm_fill_rect(int id, int cx, int cy, int rw, int rh, uint32_t color) {
     if (id < 0 || id >= MAX_WINDOWS || !windows[id].alive) return;
     WinSlot *w = &windows[id];
     int ca_x = w->x + BORDER_W;
@@ -835,7 +835,7 @@ void wm_fill_rect(int id, int cx, int cy, int rw, int rh, uint8_t color) {
         int fx_end = cx + rw < w->pb_w ? cx + rw : w->pb_w;
         for (int fy = cy; fy < fy_end; fy++)
             for (int fx = cx; fx < fx_end; fx++)
-                w->pixel_buf[fy * w->pb_w + fx] = 0xFF;
+                w->pixel_buf[fy * w->pb_w + fx] = 0xFFFFFFFFu;
     }
 
     for (int y = 0; y < rh; y++) {

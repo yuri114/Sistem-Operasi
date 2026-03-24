@@ -34,14 +34,16 @@
 /* Brush size (piksel, kotak NxN) */
 #define BRUSH  3
 
-/* 16 warna standar */
-static const unsigned char palette[16] = {
-    0, 1, 2, 3, 4, 5, 6, 7,
-    8, 9, 10, 11, 12, 13, 14, 15
+/* 16 warna standar (32bpp) */
+static const unsigned int palette[16] = {
+    GFX_BLACK, GFX_BLUE,   GFX_GREEN,   GFX_CYAN,
+    GFX_RED,   GFX_MAGENTA,GFX_BROWN,   GFX_LGRAY,
+    GFX_DGRAY, GFX_LBLUE,  GFX_LGREEN,  GFX_LCYAN,
+    GFX_LRED,  GFX_LMAGENTA,GFX_YELLOW, GFX_WHITE,
 };
 
 static int win_id = -1;
-static unsigned char cur_color = 4;   /* merah sebagai warna awal */
+static unsigned int cur_color = GFX_RED;  /* merah sebagai warna awal */
 
 /* ------------------------------------------------------------------ */
 /* Gambar strip palet warna di bawah kanvas                            */
@@ -55,11 +57,11 @@ static void draw_palette(void) {
         /* Tandai warna aktif dengan border putih */
         if (palette[i] == cur_color) {
             /* Garis atas & bawah */
-            win_fill_rect(win_id, px, PALETTE_Y, sw - 1, 1, 15);
-            win_fill_rect(win_id, px, PALETTE_Y + PALETTE_AREA_H - 3, sw - 1, 1, 15);
+            win_fill_rect(win_id, px, PALETTE_Y, sw - 1, 1, GFX_WHITE);
+            win_fill_rect(win_id, px, PALETTE_Y + PALETTE_AREA_H - 3, sw - 1, 1, GFX_WHITE);
             /* Garis kiri & kanan */
-            win_fill_rect(win_id, px, PALETTE_Y, 1, PALETTE_AREA_H - 2, 15);
-            win_fill_rect(win_id, px + sw - 2, PALETTE_Y, 1, PALETTE_AREA_H - 2, 15);
+            win_fill_rect(win_id, px, PALETTE_Y, 1, PALETTE_AREA_H - 2, GFX_WHITE);
+            win_fill_rect(win_id, px + sw - 2, PALETTE_Y, 1, PALETTE_AREA_H - 2, GFX_WHITE);
         }
     }
 }
@@ -74,7 +76,7 @@ static void paint_at(int cx, int cy) {
 /* Bersihkan kanvas (putih) */
 static void clear_canvas(void) {
     /* Satu syscall untuk isi kanvas putih */
-    win_fill_rect(win_id, 0, 0, CA_W, CANVAS_H, 15);
+    win_fill_rect(win_id, 0, 0, CA_W, CANVAS_H, GFX_WHITE);
     /* Redraw palet setelah clear */
     draw_palette();
 }

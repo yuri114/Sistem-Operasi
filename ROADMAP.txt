@@ -1,0 +1,205 @@
+================================================================
+  MyOS — ROADMAP PENGEMBANGAN SISTEM
+  Dibuat: 24 Maret 2026
+================================================================
+
+KONDISI SAAT INI (baseline)
+------------------------------------------------------------
+- Arsitektur  : x86 32-bit Protected Mode (i386)
+- Resolusi    : 640x480 @ 8bpp (256 warna palette)
+- Memori      : identity-mapped 0–16MB, heap 2MB (0x100000–0x2FFFFF)
+- Multitasking: round-robin priority, MAX_TASKS=16, STACK=8KB (heap)
+- Filesystem  : 32 file, 16KB/file, magic MFS2
+- GUI         : Window Manager (16 window), taskbar, 5 built-in apps
+- Kernel size : ~172KB
+- Platform    : QEMU Bochs VBE, build via WSL cross-compiler
+
+================================================================
+TAHAP A — 32bpp TRUE COLOR
+Status: [ ] BELUM
+----------------------------------------------------------------
+Tujuan     : Mengubah framebuffer dari 8bpp (palette 256 warna)
+             ke 32bpp (16 juta warna). Syarat wajib sebelum
+             resolusi tinggi karena display HD tidak masuk akal
+             dengan hanya 256 warna.
+
+LFB Size   : 640x480x4 = 1.228.800 byte (~1.2MB) → masih muat
+             dalam 1 page table (4MB mapping), tidak perlu ubah
+             paging.
+
+File yang diubah:
+  [A1] src/kernel/vbe.c
+       - vbe_set_mode(..., 8) → vbe_set_mode(..., 32)
+
+  [A2] src/kernel/graphics.h
+       - Hapus definisi warna palette 0-15
+       - Tambah definisi warna 32-bit: #define GFX_BLACK 0x000000
+       - uint8_t color → uint32_t color di semua struct/prototype
+       - SCREEN_BPP 32
+
+  [A3] src/kernel/graphics.c
+       - fb pointer: uint8_t* → uint32_t*
+       - draw_pixel: tulis 4 byte per pixel
+       - fill_screen, fill_rect: tulis uint32_t
+       - draw_char_gfx: tulis 32-bit fg/bg per pixel
+       - draw_char_4x8: sama
+
+  [A4] src/kernel/window.c
+       - pixel_buf: uint8_t* → uint32_t*
+       - Semua warna: ganti ke 32-bit
+       - Sentinal pixel_buf bukan 0xFF lagi, pakai 0xFFFFFFFF
+         atau flag terpisah untuk "kosong"
+
+  [A5] src/kernel/taskbar.c
+       - Warna ke 32-bit
+
+  [A6] src/kernel/kernel.c
+       - scroll(): tulis uint32_t per 4 byte sudah (tinggal sesuaikan
+         warna bg_color jadi 32-bit)
+       - bg_color, fg_color: uint8_t → uint32_t
+
+  [A7] src/kernel/syscall.c
+       - SYS_DRAW_PIXEL: extract warna 32-bit dari argumen
+       - SYS_WIN_DRAW_PIXEL: encoding ulang (saat ini color 8-bit)
+         Opsi: kirim lewat struct pointer seperti win_fill_rect
+
+  [A8] src/programs/lib.h
+       - Warna: uint8_t → uint32_t di semua wrapper
+       - win_draw_pixel encoding ulang
+
+  [A9] Semua program user (notepad, paint, calc, filemanager,
+       gui_term, gui_demo, gfxtest, dll.)
+       - Ganti semua referensi GFX_* ke nilai 32-bit baru
+
+Risiko    : Perubahan masif tapi mekanis (search & replace warna).
+            Setelah selesai layar harus tampil normal dengan
+            warna lebih kaya.
+
+================================================================
+TAHAP B — RESOLUSI 1280x720
+Status: [ ] BELUM
+Prasyarat: Tahap A selesai
+----------------------------------------------------------------
+Tujuan     : Naikan resolusi dari 640x480 ke 1280x720 (HD Ready).
+
+LFB Size   : 1280x720x4 = 3.686.400 byte (~3.7MB) → masih muat
+             dalam 1 page table (4MB mapping). Tidak perlu ubah
+             paging_map_vbe().
+
+File yang diubah:
+  [B1] src/kernel/graphics.h
+       - SCREEN_W 640 → 1280
+       - SCREEN_H 480 → 720
+
+  [B2] src/kernel/vbe.c
+       - vbe_set_mode(640, 480, 32) → vbe_set_mode(1280, 720, 32)
+
+  [B3] src/kernel/kernel.c
+       - VGA_COLS = SCREEN_W/8 = 160, VGA_ROWS = SCREEN_H/8 = 90
+       - Sesuaikan scroll() jika hardcode
+
+  [B4] src/kernel/window.c / taskbar.c
+       - Posisi taskbar: SCREEN_H - 16 (sudah pakai konstanta, ok)
+       - Desktop icons: perlu geser koordinat
+       - MAX_WINDOWS tetap 16, tapi layar lebih lega
+
+  [B5] src/programs/* — layout koordinat window perlu disesuaikan
+       (window yang sekarang di 640px, di 1280px tampak kecil di
+       kiri — bisa dibiarkan dulu atau di-center)
+
+  [B6] build.ps1 — os.img tidak perlu ubah, kernel binary tetap
+       sama ukurannya
+
+Catatan   : Setelah tahap ini OS sudah 32bpp + 1280x720.
+            Resolusi 1920x1080 cukup ubah B1+B2 saja karena
+            LFB 1080p = 8.3MB → perlu extend paging_map_vbe()
+            dengan vbe_page_table2.
+
+================================================================
+TAHAP B+ — RESOLUSI 1920x1080 (opsional setelah B)
+Status: [ ] BELUM
+Prasyarat: Tahap B selesai
+----------------------------------------------------------------
+LFB Size   : 1920x1080x4 = 8.294.400 byte (~8.3MB)
+             Melebihi 1 page table (4MB) → butuh 2 page tables.
+
+  [B+1] src/kernel/paging.c
+        - Tambah vbe_page_table2[1024]
+        - paging_map_vbe(): loop map dua page table berurutan
+          (pd_index dan pd_index+1)
+
+  [B+2] graphics.h: SCREEN_W=1920, SCREEN_H=1080
+  [B+3] vbe.c: vbe_set_mode(1920,1080,32)
+  [B+4] Layout program: sesuaikan (opsional, bisa bertahap)
+
+================================================================
+TAHAP C — 64-BIT LONG MODE (penulisan ulang arsitektur)
+Status: [ ] BELUM
+Prasyarat: Tahap B/B+ selesai dan stabil
+----------------------------------------------------------------
+Tujuan     : Migrasi dari i386 32-bit PM ke x86_64 Long Mode.
+             Ini adalah penulisan ulang besar, bukan modifikasi.
+
+Sub-tahap:
+
+  [C1] Bootloader baru (16-bit → Long Mode)
+       - real mode → protected mode → long mode
+       - Setup PAE: CR4.PAE=1
+       - Setup EFER: IA32_EFER.LME=1
+       - 4-level page tables: PML4 → PDPT → PD → PT
+       - Load kernel 64-bit, jump ke entry point 64-bit
+       - File: src/boot/boot.asm (rewrite total)
+
+  [C2] Kernel entry 64-bit
+       - kernel_entry.asm: [BITS 64], register 64-bit
+       - GDT 64-bit (base/limit diabaikan, hanya attr yang berlaku)
+       - File: src/kernel/kernel_entry.asm (rewrite)
+
+  [C3] IDT 64-bit
+       - Gate descriptor 16 byte (bukan 8 byte)
+       - ISR wrapper: push rax/rbx/rcx/rdx/rsi/rdi/r8-r15
+       - File: src/kernel/idt.c, src/kernel/isr.asm (rewrite)
+
+  [C4] Paging 64-bit
+       - 4-level paging: PML4[512], PDPT[512], PD[512], PT[512]
+       - Virtual address space: user di 0x0000_0000_0000_0000
+                                kernel di 0xFFFF_8000_0000_0000
+       - Canonical address 48-bit
+       - File: src/kernel/paging.c (rewrite)
+
+  [C5] Multitasking 64-bit
+       - Context switch: save/restore 64-bit registers
+       - TSS 64-bit (IST entries untuk exception stack)
+       - File: src/kernel/task.c, task.h, tss.c (rewrite)
+
+  [C6] Syscall via SYSCALL/SYSRET
+       - Menggunakan instruksi SYSCALL (lebih cepat dari int 0x80)
+       - LSTAR = alamat kernel syscall handler
+       - File: src/kernel/syscall.c, lib.h (update calling convention)
+
+  [C7] Compiler target
+       - Saat ini: -m32 (gcc 32-bit)
+       - Nanti: -m64 atau target x86_64-elf (perlu cross-compiler baru)
+       - build.ps1: ganti semua -m32 → -m64 (-mcmodel=kernel dll.)
+
+  [C8] Memory map 64-bit dengan UEFI (opsional)
+       - Saat ini boot lewat BIOS (INT 13h)
+       - Untuk hardware modern: bisa pakai UEFI GOP untuk framebuffer
+         (tidak butuh Bochs VBE lagi)
+       - Ini opsional — BIOS/Bochs VBE tetap bisa dipakai di QEMU
+         bahkan untuk 64-bit
+
+Estimasi waktu: 2-4 minggu tergantung kompleksitas
+
+================================================================
+RINGKASAN URUTAN
+================================================================
+
+  [DONE] Kernel foundation (heap, task stack, BSS fix, malloc lock)
+  [DONE] FS 32 file, magic MFS2, SYS_FS_READ copy ke userspace
+  [ A  ] 32bpp True Color              ← DIKERJAKAN SEKARANG
+  [ B  ] Resolusi 1280x720
+  [ B+ ] Resolusi 1920x1080 (opsional)
+  [ C  ] 64-bit Long Mode
+
+================================================================

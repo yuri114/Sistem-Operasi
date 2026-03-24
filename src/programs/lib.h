@@ -41,7 +41,7 @@
 #define SYS_EXEC   30  // jalankan program dari FS: arg=nama
 
 // Syscall grafis teks + mouse (Phase Mouse+Font)
-#define SYS_DRAW_CHAR  31  // gambar 1 karakter 8x8: ebx=x|(y<<16), edx=c|(fg<<8)|(bg<<16)
+#define SYS_DRAW_CHAR  31  // gambar 1 karakter 8x8: ebx=ptr DrawCharArgs {int x,y; char c; char _pad[3]; uint32_t fg,bg;}
 #define SYS_DRAW_STR   32  // gambar string 8x8: ebx=ptr GfxStr
 #define SYS_MOUSE_GET  33  // baca posisi+tombol mouse: ebx=ptr MouseState (output)
 
@@ -53,7 +53,7 @@
 #define SYS_WIN_EVENT   38  // poll event: ebx=id → return WIN_EVENT_* (encode char/btn di byte atas)
 #define SYS_WIN_BTN_ADD   39  // tambah tombol ke window: ebx=ptr WinBtnArgs → return btn_idx
 #define SYS_WIN_CLICK_POS 40  // koordinat klik konten terakhir: ebx=id, edx=ptr int[2]
-#define SYS_WIN_DRAW_PIXEL 41 // gambar piksel di konten window: ebx=id, edx=x|(y<<12)|(color<<24)
+#define SYS_WIN_DRAW_PIXEL 41 // gambar piksel di konten window: ebx=id, edx=ptr WinPixelArgs
 #define SYS_WIN_FILL_RECT  42 // isi persegi di konten window: ebx=id, edx=ptr WinFillArgs
 #define SYS_WIN_MOUSE_REL  43 // posisi mouse relatif konten: ebx=id, edx=ptr int[3] → [rel_x, rel_y, btn]
 #define SYS_WIN_MINIMIZE   44 // minimize window: ebx=id
@@ -86,27 +86,27 @@
 // Keyboard ioctl commands
 #define KBD_IOCTL_FLUSH      0  // kosongkan buffer keyboard
 
-// Warna Mode 13h palette (0-15 = CGA/EGA standard)
-#define GFX_BLACK     0
-#define GFX_BLUE      1
-#define GFX_GREEN     2
-#define GFX_CYAN      3
-#define GFX_RED       4
-#define GFX_MAGENTA   5
-#define GFX_BROWN     6
-#define GFX_LGRAY     7
-#define GFX_DGRAY     8
-#define GFX_LBLUE     9
-#define GFX_LGREEN   10
-#define GFX_LCYAN    11
-#define GFX_LRED     12
-#define GFX_LMAGENTA 13
-#define GFX_YELLOW   14
-#define GFX_WHITE    15
+// Warna 32bpp True Color (0x00RRGGBB) — cocok dengan VBE 32bpp linear frame buffer
+#define GFX_BLACK    0x00000000u
+#define GFX_BLUE     0x000000AAu
+#define GFX_GREEN    0x0000AA00u
+#define GFX_CYAN     0x0000AAAAu
+#define GFX_RED      0x00AA0000u
+#define GFX_MAGENTA  0x00AA00AAu
+#define GFX_BROWN    0x00AA5500u
+#define GFX_LGRAY    0x00AAAAAAu
+#define GFX_DGRAY    0x00555555u
+#define GFX_LBLUE    0x005555FFu
+#define GFX_LGREEN   0x0055FF55u
+#define GFX_LCYAN    0x0055FFFFu
+#define GFX_LRED     0x00FF5555u
+#define GFX_LMAGENTA 0x00FF55FFu
+#define GFX_YELLOW   0x00FFFF55u
+#define GFX_WHITE    0x00FFFFFFu
 
 // Struct argumen syscall grafis — layout harus cocok dengan GfxRect/GfxLine di graphics.h
-typedef struct { int x, y, w, h; unsigned char color; } GfxRect;
-typedef struct { int x1, y1, x2, y2; unsigned char color; } GfxLine;
+typedef struct { int x, y, w, h; unsigned int color; } GfxRect;
+typedef struct { int x1, y1, x2, y2; unsigned int color; } GfxLine;
 
 // ============================================================
 // syscall — memanggil kernel lewat int 0x80
@@ -344,17 +344,18 @@ static inline int dev_ioctl(int dev_id, int cmd, int arg) {
 }
 
 // ============================================================
-// Grafis Mode 13h — akses framebuffer 320x200 via syscall
+// Grafis Mode 32bpp VBE — akses framebuffer via syscall
 // ============================================================
 
-// Gambar satu piksel di (x, y) dengan warna 0-255
-// edx = (y << 16) | color  → y mendukung 0–479, color 0–255
-static inline void gfx_pixel(int x, int y, unsigned char color) {
-    syscall2(SYS_DRAW_PIXEL, x, (y << 16) | (int)color);
+// Gambar satu piksel di (x, y) dengan warna 32bpp
+typedef struct { int x, y; unsigned int color; } DrawPixelArgs;
+static inline void gfx_pixel(int x, int y, unsigned int color) {
+    DrawPixelArgs a = {x, y, color};
+    syscall1(SYS_DRAW_PIXEL, (int)&a);
 }
 
 // Isi seluruh layar dengan satu warna
-static inline void gfx_fill(unsigned char color) {
+static inline void gfx_fill(unsigned int color) {
     syscall1(SYS_FILL_SCREEN, (int)color);
 }
 
@@ -400,13 +401,13 @@ static inline void gfx_line_s(GfxLine *l) {
 }
 
 // Shorthand: gambar persegi panjang tanpa deklarasi struct terpisah
-static inline void gfx_rect(int x, int y, int w, int h, unsigned char color) {
+static inline void gfx_rect(int x, int y, int w, int h, unsigned int color) {
     GfxRect r = {x, y, w, h, color};
     syscall1(SYS_FILL_RECT, (int)&r);
 }
 
 // Shorthand: gambar garis tanpa deklarasi struct terpisah
-static inline void gfx_line(int x1, int y1, int x2, int y2, unsigned char color) {
+static inline void gfx_line(int x1, int y1, int x2, int y2, unsigned int color) {
     GfxLine l = {x1, y1, x2, y2, color};
     syscall1(SYS_DRAW_LINE, (int)&l);
 }
@@ -416,19 +417,20 @@ static inline void gfx_line(int x1, int y1, int x2, int y2, unsigned char color)
 // ============================================================
 
 // Struct untuk menggambar string — layout harus cocok dengan GfxStr di graphics.h
-typedef struct { int x, y; const char *s; unsigned char fg, bg; } GfxStr;
+typedef struct { int x, y; const char *s; unsigned int fg, bg; } GfxStr;
 
 // State mouse — layout harus cocok dengan MouseState di mouse.h
 typedef struct { int x, y; unsigned char buttons; } MouseState;
 
 // Gambar satu karakter 8x8 di framebuffer pada (x,y)
-static inline void gfx_char(int x, int y, char c, unsigned char fg, unsigned char bg) {
-    syscall2(SYS_DRAW_CHAR, x | (y << 16),
-             (int)((unsigned char)c | ((unsigned int)fg << 8) | ((unsigned int)bg << 16)));
+static inline void gfx_char(int x, int y, char c, unsigned int fg, unsigned int bg) {
+    typedef struct { int x, y; char c; char _pad[3]; unsigned int fg, bg; } DrawCharArgs;
+    DrawCharArgs a = {x, y, c, {0,0,0}, fg, bg};
+    syscall1(SYS_DRAW_CHAR, (int)&a);
 }
 
 // Gambar string null-terminated dengan font 8x8 di (x,y)
-static inline void gfx_str(int x, int y, const char *s, unsigned char fg, unsigned char bg) {
+static inline void gfx_str(int x, int y, const char *s, unsigned int fg, unsigned int bg) {
     GfxStr g = {x, y, s, fg, bg};
     syscall1(SYS_DRAW_STR, (int)&g);
 }
@@ -444,7 +446,7 @@ static inline void mouse_get(MouseState *ms) {
 
 // Struct argumen window — layout harus cocok dengan window.h di kernel
 typedef struct { int x, y, w, h; const char *title; } WinCreateArgs;
-typedef struct { int id, x, y; const char *s; unsigned char fg, bg; } WinDrawArgs;
+typedef struct { int id, x, y; const char *s; unsigned int fg, bg; } WinDrawArgs;
 typedef struct { int id, x, y, w, h; const char *label; } WinBtnArgs;
 
 // Buat window baru, kembalikan id (0-15) atau -1 jika gagal
@@ -460,13 +462,13 @@ static inline void win_destroy(int id) {
 
 // Gambar teks di area konten window pada offset piksel (px, py)
 static inline void win_draw(int id, int px, int py, const char *s,
-                             unsigned char fg, unsigned char bg) {
+                             unsigned int fg, unsigned int bg) {
     WinDrawArgs d = {id, px, py, s, fg, bg};
     syscall1(SYS_WIN_DRAW, (int)&d);
 }
 
 // Bersihkan area konten window dengan warna bg
-static inline void win_clear(int id, unsigned char bg) {
+static inline void win_clear(int id, unsigned int bg) {
     syscall2(SYS_WIN_CLEAR, id, (int)bg);
 }
 
@@ -494,14 +496,16 @@ static inline void win_click_pos(int id, int *out_x, int *out_y) {
 
 // Gambar piksel warna di koordinat area konten window
 // cx, cy: piksel relatif area konten (0,0 = pojok kiri atas konten)
-// color: indeks palette 0-15
-static inline void win_draw_pixel(int id, int cx, int cy, unsigned char color) {
-    syscall2(SYS_WIN_DRAW_PIXEL, id, (cx & 0xFFF) | ((cy & 0xFFF) << 12) | ((int)color << 24));
+// color: warna 32bpp (0x00RRGGBB)
+typedef struct { int cx, cy; unsigned int color; } WinPixelArgs;
+static inline void win_draw_pixel(int id, int cx, int cy, unsigned int color) {
+    WinPixelArgs a = {cx, cy, color};
+    syscall2(SYS_WIN_DRAW_PIXEL, id, (int)&a);
 }
 
 // Isi persegi panjang di area konten window dengan satu warna (jauh lebih cepat dari win_draw_pixel per-piksel)
-typedef struct { short x, y, w, h; unsigned char color; } WinFillArgs;
-static inline void win_fill_rect(int id, int x, int y, int w, int h, unsigned char color) {
+typedef struct { short x, y, w, h; unsigned int color; } WinFillArgs;
+static inline void win_fill_rect(int id, int x, int y, int w, int h, unsigned int color) {
     WinFillArgs a = { (short)x, (short)y, (short)w, (short)h, color };
     syscall2(SYS_WIN_FILL_RECT, id, (int)&a);
 }

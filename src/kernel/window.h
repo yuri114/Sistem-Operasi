@@ -18,7 +18,7 @@
 #define WIN_RECTBUF     48   /* maks entri backing store fill_rect per window */
 #define WIN_KEYQ_SIZE   32   /* kapasitas antrian karakter keyboard per window */
 
-#define WM_DESKTOP_BG    8   /* GFX_DGRAY — warna latar desktop */
+#define WM_DESKTOP_BG    0x00555555u  /* GFX_DGRAY — warna latar desktop */
 
 /* ---- Event Types ---- */
 #define WIN_EVENT_NONE   0   /* tidak ada event */
@@ -47,7 +47,7 @@ typedef struct {
     int       id;         /* id window tujuan       */
     int       x, y;       /* offset piksel di konten */
     const char *s;        /* string null-terminated  */
-    uint8_t   fg, bg;     /* warna teks / latar       */
+    uint32_t  fg, bg;     /* warna teks / latar       */
 } WinDrawArgs;
 
 /* Argumen SYS_WIN_BTN_ADD: tambah tombol ke window */
@@ -72,8 +72,8 @@ int  wm_has_focus(void);   /* return 1 jika ada window aktif */
 /* Syscall interface (dipanggil dari syscall.c) */
 int  wm_create(int x, int y, int w, int h, const char *title);
 void wm_destroy(int id);
-void wm_draw_text(int id, int px, int py, const char *s, uint8_t fg, uint8_t bg);
-void wm_clear_content(int id, uint8_t bg);
+void wm_draw_text(int id, int px, int py, const char *s, uint32_t fg, uint32_t bg);
+void wm_clear_content(int id, uint32_t bg);
 int  wm_poll_event(int id);   /* return WIN_EVENT_* dengan encoding di byte atas */
 int  wm_btn_add(int id, int x, int y, int w, int h, const char *label);
 
@@ -90,8 +90,8 @@ void        wm_restore_by_id(int id);
 void wm_get_click_pos(int id, int *out_x, int *out_y);
 
 /* Gambar piksel di koordinat konten window (mengikuti posisi window) */
-void wm_draw_pixel(int id, int cx, int cy, uint8_t color);
-void wm_fill_rect(int id, int cx, int cy, int rw, int rh, uint8_t color);
+void wm_draw_pixel(int id, int cx, int cy, uint32_t color);
+void wm_fill_rect(int id, int cx, int cy, int rw, int rh, uint32_t color);
 int  wm_mouse_rel(int id, int *out_x, int *out_y);
 
 #endif /* WINDOW_H */

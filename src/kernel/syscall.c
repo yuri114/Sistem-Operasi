@@ -148,18 +148,18 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
         return (uint32_t)dev_ioctl((int)ebx, cmd, arg);
     }
 
-    // SYS_DRAW_PIXEL(22): ebx=x, edx=(y<<16)|color
-    // y dikemas di bit 16–31 (mendukung 0–479), color di bit 0–7
+    // SYS_DRAW_PIXEL(22): gambar satu piksel di framebuffer
+    // ebx = ptr ke struct { int x, y; uint32_t color; }
     if (eax == SYS_DRAW_PIXEL) {
-        int x = (int)ebx;
-        int y = (int)((edx >> 16) & 0xFFFF);
-        uint8_t color = (uint8_t)(edx & 0xFF);
-        draw_pixel(x, y, color);
+        typedef struct { int x, y; uint32_t color; } DrawPixelArgs;
+        if (!is_user_ptr(ebx)) return (uint32_t)-1;
+        DrawPixelArgs *a = (DrawPixelArgs*)ebx;
+        draw_pixel(a->x, a->y, a->color);
         return 0;
     }
-    // SYS_FILL_SCREEN(23): ebx=color — isi seluruh layar
+    // SYS_FILL_SCREEN(23): ebx=color 32bpp — isi seluruh layar
     if (eax == SYS_FILL_SCREEN) {
-        fill_screen((uint8_t)ebx);
+        fill_screen((uint32_t)ebx);
         return 0;
     }
     // SYS_FILL_RECT(24): ebx=pointer ke GfxRect
@@ -202,20 +202,17 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
     }
 
     // SYS_DRAW_CHAR(31): gambar satu karakter 8x8 di framebuffer
-    // ebx = x | (y<<16)  — koordinat piksel
-    // edx = char | (fg<<8) | (bg<<16)
+    // ebx = ptr ke struct { int x, y; char c; char _pad[3]; uint32_t fg, bg; }
     if (eax == SYS_DRAW_CHAR) {
-        int x  = (int)(ebx & 0xFFFFu);
-        int y  = (int)((ebx >> 16) & 0xFFFFu);
-        char c = (char)(edx & 0xFFu);
-        uint8_t fg = (uint8_t)((edx >> 8)  & 0xFFu);
-        uint8_t bg = (uint8_t)((edx >> 16) & 0xFFu);
-        draw_char_gfx(x, y, c, fg, bg);
+        typedef struct { int x, y; char c; char _pad[3]; uint32_t fg, bg; } DrawCharArgs;
+        if (!is_user_ptr(ebx)) return (uint32_t)-1;
+        DrawCharArgs *a = (DrawCharArgs*)ebx;
+        draw_char_gfx(a->x, a->y, a->c, a->fg, a->bg);
         return 0;
     }
 
     // SYS_DRAW_STR(32): gambar string di framebuffer
-    // ebx = ptr ke GfxStr { int x, y; const char *s; uint8_t fg, bg; }
+    // ebx = ptr ke GfxStr { int x, y; const char *s; uint32_t fg, bg; }
     if (eax == SYS_DRAW_STR) {
         if (!is_user_ptr(ebx)) return (uint32_t)-1;
         GfxStr *gs = (GfxStr*)ebx;
@@ -248,7 +245,7 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
         return 0;
     }
     // SYS_WIN_DRAW(36): gambar teks di area konten window
-    // ebx = ptr ke WinDrawArgs { int id, x, y; const char *s; uint8_t fg, bg; }
+    // ebx = ptr ke WinDrawArgs { int id, x, y; const char *s; uint32_t fg, bg; }
     if (eax == SYS_WIN_DRAW) {
         if (!is_user_ptr(ebx)) return (uint32_t)-1;
         WinDrawArgs *d = (WinDrawArgs*)ebx;
@@ -256,10 +253,10 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
         wm_draw_text(d->id, d->x, d->y, d->s, d->fg, d->bg);
         return 0;
     }
-    // SYS_WIN_CLEAR(37): bersihkan area konten window dengan warna bg
-    // ebx = window id, edx = warna background
+    // SYS_WIN_CLEAR(37): bersihkan area konten window dengan warna bg 32bpp
+    // ebx = window id, edx = warna background (uint32_t)
     if (eax == SYS_WIN_CLEAR) {
-        wm_clear_content((int)ebx, (uint8_t)edx);
+        wm_clear_content((int)ebx, (uint32_t)edx);
         return 0;
     }
     // SYS_WIN_EVENT(38): ambil event dari antrian window
@@ -287,19 +284,19 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
     }
 
     // SYS_WIN_DRAW_PIXEL(41): gambar piksel di koordinat area konten window
-    // ebx = window id; edx = x | (y << 12) | (color << 24)
+    // ebx = window id; edx = ptr ke struct { int cx, cy; uint32_t color; }
     if (eax == SYS_WIN_DRAW_PIXEL) {
-        int cx    = (int)(edx & 0xFFF);
-        int cy    = (int)((edx >> 12) & 0xFFF);
-        uint8_t c = (uint8_t)((edx >> 24) & 0xFF);
-        wm_draw_pixel((int)ebx, cx, cy, c);
+        typedef struct { int cx, cy; uint32_t color; } WinPixelArgs;
+        if (!is_user_ptr(edx)) return (uint32_t)-1;
+        WinPixelArgs *a = (WinPixelArgs*)edx;
+        wm_draw_pixel((int)ebx, a->cx, a->cy, a->color);
         return 0;
     }
 
     // SYS_WIN_FILL_RECT(42): isi persegi di area konten window
-    // ebx = window id; edx = ptr ke struct { short x,y,w,h; uint8_t color; }
+    // ebx = window id; edx = ptr ke struct { short x,y,w,h; uint32_t color; }
     if (eax == SYS_WIN_FILL_RECT) {
-        typedef struct { short x, y, w, h; uint8_t color; } WinFillArgs;
+        typedef struct { short x, y, w, h; uint32_t color; } WinFillArgs;
         if (!is_user_ptr(edx)) return 0;
         WinFillArgs *a = (WinFillArgs*)edx;
         wm_fill_rect((int)ebx, a->x, a->y, a->w, a->h, a->color);

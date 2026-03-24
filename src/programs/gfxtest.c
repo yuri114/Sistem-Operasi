@@ -28,7 +28,7 @@ void _start() {
     for (i = 0; i < 16; i++) {
         GfxRect r;
         r.x = i * 20; r.y = 28; r.w = 20; r.h = 18;
-        r.color = (unsigned char)i;
+        r.color = (unsigned int)i;
         gfx_rect_s(&r);
     }
 

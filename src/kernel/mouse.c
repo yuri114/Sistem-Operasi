@@ -29,13 +29,13 @@ static inline uint8_t inb_m(uint16_t p) {
 /* ------------------------------------------------------------------ */
 /* Akses framebuffer langsung (tidak lewat draw_pixel agar lebih cepat)*/
 /* ------------------------------------------------------------------ */
-static uint8_t fb_get(int x, int y) {
+static uint32_t fb_get(int x, int y) {
     if (!gfx_lfb_addr) return 0;
-    return ((volatile uint8_t *)gfx_lfb_addr)[(uint32_t)(y * SCREEN_W + x)];
+    return ((volatile uint32_t *)gfx_lfb_addr)[(uint32_t)(y * SCREEN_W + x)];
 }
-static void fb_put(int x, int y, uint8_t c) {
+static void fb_put(int x, int y, uint32_t c) {
     if (!gfx_lfb_addr) return;
-    ((volatile uint8_t *)gfx_lfb_addr)[(uint32_t)(y * SCREEN_W + x)] = c;
+    ((volatile uint32_t *)gfx_lfb_addr)[(uint32_t)(y * SCREEN_W + x)] = c;
 }
 
 /* ------------------------------------------------------------------ */
@@ -64,7 +64,7 @@ static const uint8_t cursor_outline[8] = {
     0x74    /* 0111 0100 */
 };
 
-static uint8_t cursor_bg[8 * 8 + 2 * 8]; /* simpan area 10-baris (outline 1px kiri-kanan) */
+static uint32_t cursor_bg[8 * 8]; /* simpan area 8x8 piksel latar kursor */
 #define CSIZE 8  /* ukuran kursor piksel */
 
 static int cursor_visible = 0;
@@ -83,7 +83,7 @@ static void cursor_erase(void) {
 /* Update cursor_bg ketika pixel ditulis langsung ke framebuffer.
  * Dipanggil dari wm_draw_pixel/wm_fill_rect agar cursor_erase nanti
  * me-restore warna yang benar (paint color, bukan background lama). */
-void cursor_update_pixel(int x, int y, uint8_t color) {
+void cursor_update_pixel(int x, int y, uint32_t color) {
     if (!cursor_visible) return;
     int dx = x - cursor_sx;
     int dy = y - cursor_sy;
@@ -91,7 +91,7 @@ void cursor_update_pixel(int x, int y, uint8_t color) {
     cursor_bg[dy * CSIZE + dx] = color;
 }
 
-void cursor_update_region(int x, int y, int rw, int rh, uint8_t color) {
+void cursor_update_region(int x, int y, int rw, int rh, uint32_t color) {
     if (!cursor_visible) return;
     int ox1 = x > cursor_sx ? x : cursor_sx;
     int oy1 = y > cursor_sy ? y : cursor_sy;

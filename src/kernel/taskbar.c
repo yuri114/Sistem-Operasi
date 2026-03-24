@@ -108,13 +108,13 @@ void taskbar_draw(void) {
             /* Focused window (paling atas z-order) = warna terang */
             int focused   = (i == total - 1);
             int minimized = wm_is_minimized(id);
-            uint8_t bg = focused ? GFX_BLUE : (minimized ? GFX_DGRAY : GFX_LGRAY);
-            uint8_t fg = focused ? GFX_WHITE : GFX_BLACK;
+            uint32_t bg = focused ? GFX_BLUE : (minimized ? GFX_DGRAY : GFX_LGRAY);
+            uint32_t fg = focused ? GFX_WHITE : GFX_BLACK;
 
             fill_rect(bx, by, bw, bh, bg);
             /* Border 1px: sunken style untuk window yang diminimalkan */
-            uint8_t b_hi = minimized ? GFX_DGRAY : GFX_WHITE;
-            uint8_t b_lo = minimized ? GFX_WHITE : GFX_DGRAY;
+            uint32_t b_hi = minimized ? GFX_DGRAY : GFX_WHITE;
+            uint32_t b_lo = minimized ? GFX_WHITE : GFX_DGRAY;
             fill_rect(bx, by, bw, 1, b_hi);
             fill_rect(bx, by, 1, bh, b_hi);
             fill_rect(bx + bw - 1, by, 1, bh, b_lo);
