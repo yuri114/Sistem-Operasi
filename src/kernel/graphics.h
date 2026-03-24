@@ -3,8 +3,8 @@
 #include <stdint.h>
 
 /* Resolusi layar — compile-time constants */
-#define SCREEN_W  640
-#define SCREEN_H  480
+#define SCREEN_W  1280
+#define SCREEN_H  720
 #define SCREEN_BPP 32
 
 /* Alamat LFB: nilai default, diupdate saat runtime oleh graphics_set_fb().

@@ -16,7 +16,7 @@ KONDISI SAAT INI (baseline)
 
 ================================================================
 TAHAP A — 32bpp TRUE COLOR
-Status: [ ] BELUM
+Status: [SELESAI] ✓ Selesai 24 Maret 2026 — build 171,920 bytes, test QEMU OK
 ----------------------------------------------------------------
 Tujuan     : Mengubah framebuffer dari 8bpp (palette 256 warna)
              ke 32bpp (16 juta warna). Syarat wajib sebelum
@@ -77,8 +77,8 @@ Risiko    : Perubahan masif tapi mekanis (search & replace warna).
 
 ================================================================
 TAHAP B — RESOLUSI 1280x720
-Status: [ ] BELUM
-Prasyarat: Tahap A selesai
+Status: [DIKERJAKAN] ← sekarang (24 Maret 2026)
+Prasyarat: Tahap A selesai ✓
 ----------------------------------------------------------------
 Tujuan     : Naikan resolusi dari 640x480 ke 1280x720 (HD Ready).
 
@@ -197,8 +197,8 @@ RINGKASAN URUTAN
 
   [DONE] Kernel foundation (heap, task stack, BSS fix, malloc lock)
   [DONE] FS 32 file, magic MFS2, SYS_FS_READ copy ke userspace
-  [ A  ] 32bpp True Color              ← DIKERJAKAN SEKARANG
-  [ B  ] Resolusi 1280x720
+  [DONE] Tahap A — 32bpp True Color (selesai 24 Maret 2026)
+  [ B  ] Resolusi 1280x720             ← DIKERJAKAN SEKARANG
   [ B+ ] Resolusi 1920x1080 (opsional)
   [ C  ] 64-bit Long Mode
 

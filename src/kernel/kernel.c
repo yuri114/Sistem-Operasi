@@ -38,9 +38,9 @@
 #include "vbe.h"
 #include "keyboard.h"
 
-/* Bochs VBE 640x480 @ 32bpp: font 8x8 = 80 kolom x 60 baris */
-#define VGA_COLS 80
-#define VGA_ROWS 60
+/* Bochs VBE 1280x720 @ 32bpp: font 8x8 = 160 kolom x 90 baris */
+#define VGA_COLS 160
+#define VGA_ROWS 90
 
 /* posisi kursor teks saat ini (dalam satuan sel karakter 8x8) */
 int cursor_col = 0;
@@ -102,7 +102,7 @@ void backspace_char() {
 
 void scroll() {
     /* Geser framebuffer ke atas 8 baris — 32bpp: tiap word = 1 piksel.
-     * stride = SCREEN_W (640 word per baris) */
+     * stride = SCREEN_W (1280 word per baris) */
     uint32_t *fb32  = (uint32_t *)FB_ADDR;
     uint32_t stride = SCREEN_W;  /* uint32_t per baris (32bpp) */
     int i;
@@ -322,8 +322,8 @@ void kernel_main(){
     paging_map_vbe(lfb_addr);
     vga_dbg[5] = 0x0F4D; /* 'M' = map OK */
 
-    /* 3. Set mode grafis 640x480, update pointer framebuffer, inisialisasi */
-    vbe_set_mode(640, 480, 32);
+    /* 3. Set mode grafis 1280x720, update pointer framebuffer, inisialisasi */
+    vbe_set_mode(1280, 720, 32);
     graphics_set_fb(lfb_addr);
     graphics_init();
     clear_screen();

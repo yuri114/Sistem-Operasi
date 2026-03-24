@@ -116,8 +116,8 @@ void _start(void) {
     last_click_tick = 0;
     last_click_row  = -1;
 
-    int id = win_create((640 - WIN_W) / 2,
-                        (480 - 16 - WIN_H) / 2,
+    int id = win_create((SCREEN_W - WIN_W) / 2,
+                        (SCREEN_H - 16 - WIN_H) / 2,
                         WIN_W, WIN_H, "File Manager");
     if (id < 0) exit();
 
@@ -156,7 +156,7 @@ void _start(void) {
                 if (selected >= 0 && selected < file_count && fm_len(file_names[selected]) > 0) {
                     /* Dialog rename: window kecil untuk input nama baru */
                     int dw=300, dh=80;
-                    int did = win_create((640-dw)/2, (480-16-dh)/2, dw, dh, "Rename");
+                    int did = win_create((SCREEN_W-dw)/2, (SCREEN_H-16-dh)/2, dw, dh, "Rename");
                     if (did >= 0) {
                         win_draw(did, 4, 8, "Nama baru:", GFX_WHITE, GFX_BLACK);
                         /* Input sederhana: buffer + event loop mini */

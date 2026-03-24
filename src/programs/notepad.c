@@ -234,8 +234,8 @@ void _start(void) {
     clear_text();
     np_ncpy(filename, "note.txt", 32);
 
-    int id = win_create((640 - WIN_W) / 2,
-                        (480 - 16 - WIN_H) / 2,
+    int id = win_create((SCREEN_W - WIN_W) / 2,
+                        (SCREEN_H - 16 - WIN_H) / 2,
                         WIN_W, WIN_H, "Notepad");
     if (id < 0) exit();
 
