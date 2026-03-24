@@ -53,8 +53,15 @@
 #define SYS_WIN_DRAW_PIXEL 41 // gambar piksel di konten window: ebx=id, edx=x|(y<<12)|((color&0xF)<<24)
 #define SYS_WIN_FILL_RECT  42 // isi persegi di konten window: ebx=id, edx=ptr WinFillArgs {short x,y,w,h; u8 color}
 #define SYS_WIN_MOUSE_REL  43 // posisi mouse relatif konten: ebx=id, edx=ptr int[3] → [rel_x, rel_y, btn]
+#define SYS_WIN_MINIMIZE   44 // minimize window: ebx=id
+#define SYS_WIN_RESTORE    45 // restore window dari minimized: ebx=id
+#define SYS_FS_LIST        46 // list nama file ke buffer: ebx=ptr, edx=bufsz → return count
+#define SYS_FS_DELETE      47 // hapus file: ebx=ptr nama → return 1/0
 
 void syscall_init();
 uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx);
+
+/* Jalankan program dari FS langsung dari kernel (tanpa user syscall) */
+int kernel_exec(const char *name);
 
 #endif

@@ -171,6 +171,19 @@ void fs_list(void (*print_fn)(const char*)) {
     }
 }
 
+int fs_list_buf(char *buf, int bufsz) {
+    int pos = 0, cnt = 0;
+    for (int i = 0; i < FS_MAX_FILES; i++) {
+        if (!files[i].used) continue;
+        const char *nm = files[i].name;
+        for (int j = 0; nm[j] && pos < bufsz - 2; j++) buf[pos++] = nm[j];
+        if (pos < bufsz - 1) buf[pos++] = '\n';
+        cnt++;
+    }
+    if (pos < bufsz) buf[pos] = '\0';
+    return cnt;
+}
+
 int fs_find_prefix(const char *prefix, char *out_name) {
     int i, found = 0;
     for (i = 0; i < FS_MAX_FILES; i++) {

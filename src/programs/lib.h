@@ -56,6 +56,10 @@
 #define SYS_WIN_DRAW_PIXEL 41 // gambar piksel di konten window: ebx=id, edx=x|(y<<12)|(color<<24)
 #define SYS_WIN_FILL_RECT  42 // isi persegi di konten window: ebx=id, edx=ptr WinFillArgs
 #define SYS_WIN_MOUSE_REL  43 // posisi mouse relatif konten: ebx=id, edx=ptr int[3] → [rel_x, rel_y, btn]
+#define SYS_WIN_MINIMIZE   44 // minimize window: ebx=id
+#define SYS_WIN_RESTORE    45 // restore window dari minimized: ebx=id
+#define SYS_FS_LIST        46 // list nama file ke buffer: ebx=ptr, edx=bufsz → return count
+#define SYS_FS_DELETE      47 // hapus file: ebx=ptr nama → return 1/0
 
 // Event type konstanta
 #define WIN_EVENT_NONE   0
@@ -508,6 +512,45 @@ static inline int win_mouse_rel(int id, int *out_x, int *out_y) {
     *out_x = buf[0];
     *out_y = buf[1];
     return buf[2];
+}
+
+// Minimize window sendiri (sembunyikan dari layar)
+static inline void win_minimize(int id) {
+    syscall1(SYS_WIN_MINIMIZE, id);
+}
+
+// Restore window dari minimized
+static inline void win_restore(int id) {
+    syscall1(SYS_WIN_RESTORE, id);
+}
+
+// List nama file ke buffer (dipisah '\n'), return jumlah file
+static inline int fs_list(char *buf, int bufsz) {
+    return syscall2(SYS_FS_LIST, (int)buf, bufsz);
+}
+
+// Hapus file berdasarkan nama, return 1 jika sukses
+static inline int fs_delete(const char *name) {
+    return syscall1(SYS_FS_DELETE, (int)name);
+}
+
+// Tampilkan kotak pesan modal dengan pesan dan tombol OK
+// Blok hingga pengguna menutup atau klik OK
+static inline void win_msgbox(const char *title, const char *msg) {
+    int w = 300, h = 90;
+    int x = (640 - w) / 2;
+    int y = (480 - 16 - h) / 2;
+    int id = win_create(x, y, w, h, title);
+    if (id < 0) return;
+    win_draw(id, 8, 8, msg, GFX_WHITE, GFX_BLACK);
+    win_btn_add(id, (w - 2 - 60) / 2, 56, 60, 18, "OK");
+    for (;;) {
+        int ev = win_poll(id);
+        if (ev == WIN_EVENT_NONE) { yield(); continue; }
+        int t = WIN_EV_TYPE(ev);
+        if (t == WIN_EVENT_CLOSE || t == WIN_EVENT_BTN) break;
+    }
+    win_destroy(id);
 }
 
 #endif

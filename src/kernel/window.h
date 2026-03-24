@@ -8,11 +8,14 @@
 #define MAX_WINDOWS     16   /* maksimum window yang bisa hidup bersamaan */
 #define TITLEBAR_H      18   /* tinggi title bar dalam piksel */
 #define CLOSE_BTN_W     18   /* lebar tombol tutup (X) */
+#define MIN_BTN_W       18   /* lebar tombol minimize (-) */
+#define RESIZE_HANDLE   10   /* ukuran handle resize sudut kanan bawah */
 #define BORDER_W         1   /* tebal border window */
 #define WIN_EVQ_SIZE    16   /* kapasitas antrian event per window */
 #define WIN_TEXTBUF     32   /* maks baris teks yang disimpan per window (backing store) */
 #define WIN_TEXTBUF_STR 64   /* panjang maks string per entri backing store */
-#define WIN_BTN_MAX      8   /* maks tombol per window */
+#define WIN_BTN_MAX     20   /* maks tombol per window (calc butuh 16) */
+#define WIN_RECTBUF     48   /* maks entri backing store fill_rect per window */
 #define WIN_KEYQ_SIZE   32   /* kapasitas antrian karakter keyboard per window */
 
 #define WM_DESKTOP_BG    8   /* GFX_DGRAY — warna latar desktop */
@@ -79,6 +82,9 @@ int         wm_get_z_count(void);
 int         wm_get_z_id(int idx);
 const char *wm_get_title(int id);
 void        wm_raise_by_id(int id);
+int         wm_is_minimized(int id);
+void        wm_minimize_by_id(int id);
+void        wm_restore_by_id(int id);
 
 /* Koordinat klik terakhir di area konten window (piksel relatif konten) */
 void wm_get_click_pos(int id, int *out_x, int *out_y);

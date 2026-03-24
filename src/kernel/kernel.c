@@ -26,6 +26,8 @@
 #include "gui_term_elf_data.h"
 #include "paint_elf_data.h"
 #include "calc_elf_data.h"
+#include "notepad_elf_data.h"
+#include "filemanager_elf_data.h"
 #include "ipc.h"
 #include "semaphore.h"
 #include "pipe.h"
@@ -231,6 +233,8 @@ void programs_init() {
     fs_write_bin("gui_term",      build_gui_term_elf,      build_gui_term_elf_len);
     fs_write_bin("paint",         build_paint_elf,         build_paint_elf_len);
     fs_write_bin("calc",          build_calc_elf,          build_calc_elf_len);
+    fs_write_bin("notepad",       build_notepad_elf,       build_notepad_elf_len);
+    fs_write_bin("filemanager",   build_filemanager_elf,   build_filemanager_elf_len);
 }
 
 /* Deklarasi handler dari isr.asm */

@@ -101,6 +101,14 @@ gcc -m32 -nostdlib -nostartfiles -fno-builtin -fno-pic \
 -T src/programs/user.ld src/programs/calc.c \
     -o build/calc.elf
 xxd -i build/calc.elf > src/kernel/calc_elf_data.h
+gcc -m32 -nostdlib -nostartfiles -fno-builtin -fno-pic \
+-T src/programs/user.ld src/programs/notepad.c \
+    -o build/notepad.elf
+xxd -i build/notepad.elf > src/kernel/notepad_elf_data.h
+gcc -m32 -nostdlib -nostartfiles -fno-builtin -fno-pic \
+-T src/programs/user.ld src/programs/filemanager.c \
+    -o build/filemanager.elf
+xxd -i build/filemanager.elf > src/kernel/filemanager_elf_data.h
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/semaphore.c  -o build/semaphore.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/pipe.c       -o build/pipe.o
 gcc -m32 -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/device.c     -o build/device.o
