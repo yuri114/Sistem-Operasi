@@ -3,6 +3,7 @@
 #include "vmm.h"
 #include "tss.h"
 #include "paging.h"
+#include "memory.h"
 
 static void str_copy_n(char *dst, const char *src, int n) {
     int i;
@@ -11,7 +12,9 @@ static void str_copy_n(char *dst, const char *src, int n) {
 }
 
 static Task tasks[MAX_TASKS]; //array untuk menyimpan task
-static uint8_t stacks[MAX_TASKS][STACK_SIZE]; //stack untuk setiap task
+/* Stack setiap task dialokasikan dari heap di task_init() — tidak di BSS
+ * agar BSS (dimulai ~0x32000) tidak meluap ke area VGA 0xA0000+. */
+static uint8_t *stacks_base;
 static int current_task = 0; //id task yang sedang berjalan
 static int task_count = 0; //jumlah task yang telah dibuat
 uint32_t *current_esp; //pointer untuk menyimpan esp task saat ini
@@ -19,12 +22,13 @@ uint32_t *next_esp; //pointer untuk menyimpan esp task berikutnya
 
 void task_init() {
     int i;
+    /* Alokasikan pool stack dari heap (MAX_TASKS × STACK_SIZE bytes). */
+    stacks_base = (uint8_t*)malloc((uint32_t)(MAX_TASKS * STACK_SIZE));
     for (i = 0; i < MAX_TASKS; i++){
         tasks[i].used      = 0;
         tasks[i].status    = TASK_RUNNING;
         tasks[i].wake_tick = 0;
     }
-    
 }
 
 void task_set_main() {
@@ -58,7 +62,7 @@ void task_set_main() {
     str_copy_n(tasks[id].name, "[idle]", 32);
     tasks[id].page_dir = vmm_create_page_dir();
     //Inisialisasi stack untuk task baru
-    uint32_t *stack_top = (uint32_t*)(stacks[id] + STACK_SIZE); //mulai dari atas stack
+    uint32_t *stack_top = (uint32_t*)(stacks_base + (uint32_t)(id) * STACK_SIZE + STACK_SIZE); //mulai dari atas stack
 
     // Urutan: push eflags, cs, eip (seperti stack saat interrupt)
     // lalu pusha (8 register = 8x uint32_t)
@@ -118,7 +122,7 @@ void task_set_main() {
     current_task = next;
 
     // update TSS agar interrupt ring 3 menggunakan kernel stack task yang benar
-    tss_set_kernel_stack((uint32_t)(stacks[next] + STACK_SIZE));
+    tss_set_kernel_stack((uint32_t)(stacks_base + (uint32_t)(next) * STACK_SIZE + STACK_SIZE));
 
     // switch ke page directory task berikutnya
     extern void vmm_switch_dir(uint32_t*);
@@ -145,7 +149,7 @@ int task_create_user(uint32_t entry, uint32_t *page_dir, uint32_t user_esp, cons
     tasks[id].pipe_id   = -1;
     str_copy_n(tasks[id].name, name ? name : "?", 32);
 
-    uint32_t *stack_top = (uint32_t*)(stacks[id] + STACK_SIZE);
+    uint32_t *stack_top = (uint32_t*)(stacks_base + (uint32_t)(id) * STACK_SIZE + STACK_SIZE);
 
     // iret frame untuk transisi ke ring 3:
     // CPU pop eip, cs, eflags, esp_user, ss saat iret ke ring <= privilege level rendah
@@ -230,7 +234,7 @@ int task_kill(int id) {
 /* Kembalikan alamat puncak kernel stack task id (untuk TSS esp0) */
 uint32_t task_get_esp0(int id) {
     if (id < 0 || id >= MAX_TASKS) return 0;
-    return (uint32_t)(stacks[id] + STACK_SIZE);
+    return (uint32_t)(stacks_base + (uint32_t)(id) * STACK_SIZE + STACK_SIZE);
 }
 
 /* Tidurkan task saat ini selama ms milidetik (100Hz = 10ms per tick) */

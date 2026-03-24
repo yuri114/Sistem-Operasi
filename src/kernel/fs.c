@@ -1,19 +1,22 @@
 #include "fs.h"
 #include "ata.h"
+#include "memory.h"
 
-static FSFile files[FS_MAX_FILES];
+/* Dialokasikan dari heap di fs_init() — tidak disimpan di BSS agar BSS
+ * tidak meluap ke area VGA/BIOS (0xA0000+) dan merusak page tables. */
+static FSFile *files;
 
 /* ===== Disk layout (Primary Slave) =====
- * Sector 0              : superblock  (magic='MYFS' + reserved)
+ * Sector 0              : superblock  (magic='MFS2' + reserved)
  * Sector 1+i*(1+DATA_S) : header file ke-i  (name[32], size[4], used[1], pad)
  * Sectors 2+i*(1+DATA_S) .. (DATA_S+1)+i*(1+DATA_S) : data file ke-i
  *   DATA_S = FS_DATA_SECS = 32  → 32 x 512 = 16384 bytes per file
- * Total: 1 + 16*(1+32) = 529 sectors = 265 KB  (fits in 1 MB disk)
+ * Total: 1 + 32*(1+32) = 1057 sectors = 528 KB  (fits in 8 MB disk)
  */
 #define FS_MAGIC_B0 'M'
-#define FS_MAGIC_B1 'Y'
-#define FS_MAGIC_B2 'F'
-#define FS_MAGIC_B3 'S'
+#define FS_MAGIC_B1 'F'
+#define FS_MAGIC_B2 'S'
+#define FS_MAGIC_B3 '2'
 
 static uint32_t fs_hdr_sector(int i)             { return (uint32_t)(1 + i * (1 + FS_DATA_SECS)); }
 static uint32_t fs_data_sector(int i, int chunk) { return (uint32_t)(2 + i * (1 + FS_DATA_SECS) + chunk); }
@@ -97,6 +100,8 @@ static void fs_strcpy(char *dest, const char *src, int max) {
 
 void fs_init() {
     int i;
+    /* Alokasikan tabel file dari heap. Dipanggil setelah mem_init() — heap sudah siap. */
+    files = (FSFile*)malloc((uint32_t)(FS_MAX_FILES * (int)sizeof(FSFile)));
     for (i = 0; i < FS_MAX_FILES; i++) {
         files[i].used = 0;
     }

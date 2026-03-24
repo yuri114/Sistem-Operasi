@@ -194,8 +194,10 @@ static void do_render(int id) {
 
 /* ---- Load / Save ---- */
 static void do_load(void) {
-    const char *data = fs_read(filename);
-    if (!data || !data[0]) return;
+    static char load_buf[16384];
+    int loaded = fs_read(filename, load_buf, sizeof(load_buf));
+    if (loaded <= 0) return;
+    const char *data = load_buf;
     clear_text();
     int ci = 0, li = 0, col = 0;
     while (data[ci] && li < MAX_LINES) {

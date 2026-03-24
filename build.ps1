@@ -183,11 +183,11 @@ function Run-QEMU {
         exit 1
     }
 
-    # Buat disk.img kosong (1MB) jika belum ada
+    # Buat disk.img kosong (8MB) jika belum ada
     if (-not (Test-Path $disk_img)) {
-        $zeros = New-Object byte[] (1024 * 1024)
+        $zeros = New-Object byte[] (8 * 1024 * 1024)
         [System.IO.File]::WriteAllBytes($disk_img, $zeros)
-        Write-Host "[DISK]  disk.img blank 1MB dibuat" -ForegroundColor Green
+        Write-Host "[DISK]  disk.img blank 8MB dibuat" -ForegroundColor Green
     }
 
     Write-Host "[QEMU] Menjalankan OS di emulator..." -ForegroundColor Cyan

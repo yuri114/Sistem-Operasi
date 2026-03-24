@@ -2,8 +2,8 @@
 #define TASK_H
 #include <stdint.h>
 
-#define MAX_TASKS  8
-#define STACK_SIZE 4096
+#define MAX_TASKS  16
+#define STACK_SIZE 8192
 
 /* Status task */
 #define TASK_RUNNING  0

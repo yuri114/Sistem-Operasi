@@ -50,12 +50,17 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
         return 0; //kembalikan 0 untuk menandakan sukses
     }
 
-    // SYS_FS_READ(5): ebx = pointer nama file
-    // return: pointer ke isi file (string), atau 0 jika tidak ditemukan
+    // SYS_FS_READ(5): ebx = pointer nama file (userspace), edx = pointer buffer tujuan (userspace)
+    // Kernel menyalin isi file ke buffer user. Return: jumlah byte yang disalin, atau 0 jika gagal.
     if (eax == SYS_FS_READ) {
-        if (!is_user_ptr(ebx)) return 0;
+        if (!is_user_ptr(ebx) || !is_user_ptr(edx)) return 0;
         const char *data = fs_read((const char*)ebx);
-        return (uint32_t)data;
+        if (!data) return 0;
+        char *ubuf = (char*)edx;
+        uint32_t n = 0;
+        while (data[n] && n < FS_MAX_DATA - 1u) { ubuf[n] = data[n]; n++; }
+        ubuf[n] = '\0';
+        return n;
     }
     // SYS_FS_WRITE(6): ebx = pointer ke struct { const char *name; const char *data; }
     // return: 1 sukses, 0 gagal

@@ -197,20 +197,15 @@ void _start(void) {
                         }
                         win_destroy(did);
                         if (done == 1 && nn_len > 0) {
-                            /* Rename: fs_read mengembalikan pointer kernel — harus
-                             * disalin ke buffer userspace sebelum dipasang ke fs_write,
-                             * karena syscall fs_write menolak pointer < 0x300000. */
-                            static char rename_buf[4096];
-                            const char *src = fs_read(file_names[selected]);
-                            int rbi = 0;
-                            if (src) {
-                                while (src[rbi] && rbi < 4095) {
-                                    rename_buf[rbi] = src[rbi];
-                                    rbi++;
-                                }
+                            /* Rename: baca isi file lama ke buffer lokal, tulis dengan
+                             * nama baru, hapus file lama. fs_read menyalin langsung ke
+                             * buffer userspace sehingga fs_write dapat menerimanya. */
+                            static char rename_buf[16384];
+                            int rsz = fs_read(file_names[selected], rename_buf, sizeof(rename_buf));
+                            if (rsz >= 0) {
+                                rename_buf[rsz] = '\0';
+                                fs_write(new_name, rename_buf);
                             }
-                            rename_buf[rbi] = '\0';
-                            fs_write(new_name, rename_buf);
                             fs_delete(file_names[selected]);
                             refresh_list();
                             do_render(id);

@@ -233,9 +233,11 @@ static inline void print_int(unsigned int n) {
 // File I/O — akses filesystem kernel lewat syscall
 // ============================================================
 
-// Baca file: kembalikan pointer ke isi file (string), atau 0 jika tidak ditemukan
-static inline const char* fs_read(const char *name) {
-    return (const char*)syscall1(SYS_FS_READ, (int)name);
+// Baca file ke buffer user: salin isi file ke buf[0..bufsz-1], null-terminate.
+// Kembalikan jumlah byte yang disalin, atau 0 jika file tidak ditemukan.
+static inline int fs_read(const char *name, char *buf, int bufsz) {
+    (void)bufsz; /* kernel memvalidasi pointer; UI layer bertanggung jawab ukuran buf */
+    return (int)syscall2(SYS_FS_READ, (int)name, (int)buf);
 }
 
 // Tulis file: name = nama file, data = isi file (string)
