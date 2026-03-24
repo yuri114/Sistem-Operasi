@@ -4,18 +4,19 @@
 static FSFile files[FS_MAX_FILES];
 
 /* ===== Disk layout (Primary Slave) =====
- * Sector 0        : superblock  (magic='MYFS' + reserved)
- * Sector 1+i*17   : header file ke-i  (name[32], size[4], used[1], pad)
- * Sectors 2+i*17 .. 17+i*17 : data file ke-i  (16 x 512 = 8192 bytes)
- * Total: 1 + 16*17 = 273 sectors = 139 KB
+ * Sector 0              : superblock  (magic='MYFS' + reserved)
+ * Sector 1+i*(1+DATA_S) : header file ke-i  (name[32], size[4], used[1], pad)
+ * Sectors 2+i*(1+DATA_S) .. (DATA_S+1)+i*(1+DATA_S) : data file ke-i
+ *   DATA_S = FS_DATA_SECS = 32  → 32 x 512 = 16384 bytes per file
+ * Total: 1 + 16*(1+32) = 529 sectors = 265 KB  (fits in 1 MB disk)
  */
 #define FS_MAGIC_B0 'M'
 #define FS_MAGIC_B1 'Y'
 #define FS_MAGIC_B2 'F'
 #define FS_MAGIC_B3 'S'
 
-static uint32_t fs_hdr_sector(int i)  { return (uint32_t)(1 + i * 17); }
-static uint32_t fs_data_sector(int i, int chunk) { return (uint32_t)(2 + i * 17 + chunk); }
+static uint32_t fs_hdr_sector(int i)             { return (uint32_t)(1 + i * (1 + FS_DATA_SECS)); }
+static uint32_t fs_data_sector(int i, int chunk) { return (uint32_t)(2 + i * (1 + FS_DATA_SECS) + chunk); }
 
 /* Tulis satu file ke disk */
 static void fs_disk_save(int i) {
@@ -33,9 +34,9 @@ static void fs_disk_save(int i) {
     buf[36] = files[i].used;
     ata_write_sector(fs_hdr_sector(i), buf);
 
-    /* --- data sectors (16 x 512 = 8192 bytes) --- */
+    /* --- data sectors (FS_DATA_SECS x 512 = FS_MAX_DATA bytes) --- */
     int k;
-    for (k = 0; k < 16; k++) {
+    for (k = 0; k < FS_DATA_SECS; k++) {
         for (j = 0; j < 512; j++) {
             uint32_t off = (uint32_t)(k * 512 + j);
             buf[j] = (off < FS_MAX_DATA) ? files[i].data[off] : 0;
@@ -67,7 +68,7 @@ static void fs_disk_load() {
                         ((uint32_t)buf[33] << 8)  |
                         ((uint32_t)buf[34] << 16) |
                         ((uint32_t)buf[35] << 24);
-        for (k = 0; k < 16; k++) {
+        for (k = 0; k < FS_DATA_SECS; k++) {
             if (ata_read_sector(fs_data_sector(i, k), buf) != 0) break;
             for (j = 0; j < 512; j++) {
                 uint32_t off = (uint32_t)(k * 512 + j);

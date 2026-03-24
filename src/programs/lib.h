@@ -50,12 +50,24 @@
 #define SYS_WIN_DESTROY 35  // tutup window: ebx=id
 #define SYS_WIN_DRAW    36  // gambar teks di konten: ebx=ptr WinDrawArgs
 #define SYS_WIN_CLEAR   37  // bersihkan konten: ebx=id, edx=warna_bg
-#define SYS_WIN_EVENT   38  // poll event: ebx=id → return WIN_EVENT_*
+#define SYS_WIN_EVENT   38  // poll event: ebx=id → return WIN_EVENT_* (encode char/btn di byte atas)
+#define SYS_WIN_BTN_ADD   39  // tambah tombol ke window: ebx=ptr WinBtnArgs → return btn_idx
+#define SYS_WIN_CLICK_POS 40  // koordinat klik konten terakhir: ebx=id, edx=ptr int[2]
+#define SYS_WIN_DRAW_PIXEL 41 // gambar piksel di konten window: ebx=id, edx=x|(y<<12)|(color<<24)
+#define SYS_WIN_FILL_RECT  42 // isi persegi di konten window: ebx=id, edx=ptr WinFillArgs
+#define SYS_WIN_MOUSE_REL  43 // posisi mouse relatif konten: ebx=id, edx=ptr int[3] → [rel_x, rel_y, btn]
 
 // Event type konstanta
 #define WIN_EVENT_NONE   0
 #define WIN_EVENT_CLOSE  1
 #define WIN_EVENT_CLICK  2
+#define WIN_EVENT_KEY    3   /* ada input keyboard: (char << 8) | WIN_EVENT_KEY */
+#define WIN_EVENT_BTN    4   /* tombol diklik: (btn_idx << 8) | WIN_EVENT_BTN */
+
+// Macro decode event composite
+#define WIN_EV_TYPE(ev)  ((ev) & 0xFF)
+#define WIN_EV_CHAR(ev)  ((char)(((ev) >> 8) & 0xFF))
+#define WIN_EV_BTN(ev)   (((ev) >> 8) & 0xFF)
 
 // Device ID (harus sama dengan device.h)
 #define DEV_VGA  0
@@ -426,6 +438,7 @@ static inline void mouse_get(MouseState *ms) {
 // Struct argumen window — layout harus cocok dengan window.h di kernel
 typedef struct { int x, y, w, h; const char *title; } WinCreateArgs;
 typedef struct { int id, x, y; const char *s; unsigned char fg, bg; } WinDrawArgs;
+typedef struct { int id, x, y, w, h; const char *label; } WinBtnArgs;
 
 // Buat window baru, kembalikan id (0-15) atau -1 jika gagal
 static inline int win_create(int x, int y, int w, int h, const char *title) {
@@ -450,9 +463,51 @@ static inline void win_clear(int id, unsigned char bg) {
     syscall2(SYS_WIN_CLEAR, id, (int)bg);
 }
 
-// Poll event: kembalikan WIN_EVENT_* (0=tidak ada event)
+// Poll event: kembalikan WIN_EVENT_* gabungan
+// Untuk WIN_EVENT_KEY: gunakan WIN_EV_CHAR(ev) untuk dapat karakter
+// Untuk WIN_EVENT_BTN: gunakan WIN_EV_BTN(ev) untuk dapat indeks tombol
 static inline int win_poll(int id) {
     return syscall1(SYS_WIN_EVENT, id);
+}
+
+// Tambah tombol ke window — kembalikan idx tombol (0-7) atau -1 jika gagal
+static inline int win_btn_add(int id, int x, int y, int w, int h, const char *label) {
+    WinBtnArgs a = {id, x, y, w, h, label};
+    return syscall1(SYS_WIN_BTN_ADD, (int)&a);
+}
+
+// Ambil koordinat klik konten terakhir (piksel relatif area konten window)
+// Panggil setelah win_poll() return WIN_EVENT_CLICK
+static inline void win_click_pos(int id, int *out_x, int *out_y) {
+    int pos[2];
+    syscall2(SYS_WIN_CLICK_POS, id, (int)pos);
+    *out_x = pos[0];
+    *out_y = pos[1];
+}
+
+// Gambar piksel warna di koordinat area konten window
+// cx, cy: piksel relatif area konten (0,0 = pojok kiri atas konten)
+// color: indeks palette 0-15
+static inline void win_draw_pixel(int id, int cx, int cy, unsigned char color) {
+    syscall2(SYS_WIN_DRAW_PIXEL, id, (cx & 0xFFF) | ((cy & 0xFFF) << 12) | ((int)color << 24));
+}
+
+// Isi persegi panjang di area konten window dengan satu warna (jauh lebih cepat dari win_draw_pixel per-piksel)
+typedef struct { short x, y, w, h; unsigned char color; } WinFillArgs;
+static inline void win_fill_rect(int id, int x, int y, int w, int h, unsigned char color) {
+    WinFillArgs a = { (short)x, (short)y, (short)w, (short)h, color };
+    syscall2(SYS_WIN_FILL_RECT, id, (int)&a);
+}
+
+// Poll posisi mouse relatif area konten window + status tombol
+// out_x, out_y: koordinat relatif (negatif jika di luar)
+// return: button state (bit0=kiri, bit1=kanan)
+static inline int win_mouse_rel(int id, int *out_x, int *out_y) {
+    int buf[3];
+    syscall2(SYS_WIN_MOUSE_REL, id, (int)buf);
+    *out_x = buf[0];
+    *out_y = buf[1];
+    return buf[2];
 }
 
 #endif

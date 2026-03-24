@@ -23,6 +23,9 @@
 #include "devtest_elf_data.h"
 #include "gfxtest_elf_data.h"
 #include "gui_demo_elf_data.h"
+#include "gui_term_elf_data.h"
+#include "paint_elf_data.h"
+#include "calc_elf_data.h"
 #include "ipc.h"
 #include "semaphore.h"
 #include "pipe.h"
@@ -225,6 +228,9 @@ void programs_init() {
     fs_write_bin("devtest",       build_devtest_elf,       build_devtest_elf_len);
     fs_write_bin("gfxtest",       build_gfxtest_elf,       build_gfxtest_elf_len);
     fs_write_bin("gui_demo",      build_gui_demo_elf,      build_gui_demo_elf_len);
+    fs_write_bin("gui_term",      build_gui_term_elf,      build_gui_term_elf_len);
+    fs_write_bin("paint",         build_paint_elf,         build_paint_elf_len);
+    fs_write_bin("calc",          build_calc_elf,          build_calc_elf_len);
 }
 
 /* Deklarasi handler dari isr.asm */
@@ -396,6 +402,11 @@ void kernel_main(){
      * timer interrupt bisa masuk kapan saja — task switch aman, tidak ada crash. */
     while (1) {
         char c = keyboard_getchar();
-        if (c) shell_process_char(c);
+        if (c) {
+            if (wm_has_focus())
+                wm_key_event(c);   /* kirim ke window yang sedang fokus */
+            else
+                shell_process_char(c);
+        }
     }
 }

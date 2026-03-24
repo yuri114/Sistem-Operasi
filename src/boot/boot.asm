@@ -14,8 +14,7 @@ start:
     mov [boot_drive], dl
 
     ; load kernel dari disk ke memory
-    mov bx, KERNEL_OFFSET       ; ES:BX = alamat tujuan (0x0000:0x1000)
-    mov dh, KERNEL_SECTORS      ; jumlah sektor kernel (dihitung otomatis saat build)
+    mov word [kernel_total_sectors], KERNEL_SECTORS  ; simpan 16-bit penuh
     mov dl, [boot_drive]        ; gunakan drive number dari BIOS
     call disk_load
 
@@ -34,54 +33,56 @@ print_string:
     ret                     ; kembali ke pemanggil
 
 disk_load:
-    ; DL=drive, DH=total sektor — muat ke flat 0x8000 via INT 13h/42h (LBA)
+    ; DL=drive, [kernel_total_sectors]=total sektor 16-bit — muat ke flat 0x8000 via INT 13h/42h (LBA)
     ; LBA 0 = sektor 1 (bootloader), LBA 1 = sektor 2 (awal kernel)
-    push cx
+    push di
     push si
 
-    xor cx, cx              ; cx = sektor yang sudah dibaca
+    xor di, di              ; di = sektor yang sudah dibaca
 
 .dl_batch:
-    mov al, dh
-    sub al, cl              ; al = sisa sektor (8-bit, max ~200)
-    jbe .dl_done
+    mov ax, di
+    mov bx, word [kernel_total_sectors]
+    cmp ax, bx              ; done >= total?
+    jae .dl_done
 
-    cmp al, 63              ; baca maks 63 sektor per batch (aman di semua BIOS)
+    sub bx, ax              ; bx = sisa sektor
+    cmp bx, 63              ; baca maks 63 sektor per batch (aman di semua BIOS)
     jbe .dl_fit
-    mov al, 63
+    mov bx, 63
 .dl_fit:
     ; isi DAP sebelum setiap batch
-    mov byte [dap+2], al    ; jumlah sektor batch ini
+    mov byte [dap+2], bl    ; jumlah sektor batch ini
     mov byte [dap+3], 0
 
-    ; buffer: segment = 0x800 + cx*32  → flat = segment*16 = 0x8000 + cx*512
-    push ax
-    mov ax, cx
-    shl ax, 5               ; ax = cx * 32
+    ; buffer: segment = 0x800 + di*32  → flat = segment*16 = 0x8000 + di*512
+    push bx
+    mov ax, di
+    shl ax, 5               ; ax = di * 32
     add ax, 0x0800          ; ax = segment tujuan
     mov [dap+6], ax         ; segment buffer
     mov word [dap+4], 0     ; offset buffer = 0
-    ; LBA = 1 + cx  (kernel mulai dari LBA 1)
-    mov ax, cx
+    ; LBA = 1 + di  (kernel mulai dari LBA 1)
+    mov ax, di
     inc ax
     mov [dap+8], ax         ; LBA [15:0]
     mov word [dap+10], 0    ; LBA [31:16]
-    pop ax                  ; al = jumlah sektor yang diminta batch ini
+    pop bx
 
-    push ax
+    push bx
     mov ah, 0x42            ; Extended Read
     mov si, dap             ; DS:SI → DAP
     int 0x13
-    pop ax
+    pop bx
     jc disk_error           ; carry set = error
 
-    xor ah, ah
-    add cx, ax              ; cx += sektor yang dibaca
+    xor bh, bh
+    add di, bx              ; di += sektor yang dibaca
     jmp .dl_batch
 
 .dl_done:
     pop si
-    pop cx
+    pop di
     ret
 
 ; Disk Address Packet (DAP) untuk INT 13h/42h — 16 byte
@@ -103,6 +104,9 @@ disk_err_msg:
 
 boot_drive:
     db 0
+
+kernel_total_sectors:
+    dw 0
 
 msg:
     db 'Hello from MyOS!', 0x0D, 0x0A, 0

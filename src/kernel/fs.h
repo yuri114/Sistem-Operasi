@@ -3,8 +3,9 @@
 #include <stdint.h>
 
 #define FS_MAX_FILES 16
-#define FS_MAX_NAME 32
-#define FS_MAX_DATA 8192
+#define FS_MAX_NAME  32
+#define FS_MAX_DATA  16384   /* 32 sektor x 512 bytes per file */
+#define FS_DATA_SECS (FS_MAX_DATA / 512)  /* jumlah sektor data per file */
 
 typedef struct {
     char name[FS_MAX_NAME];

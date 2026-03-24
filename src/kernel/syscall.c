@@ -257,9 +257,56 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
         return 0;
     }
     // SYS_WIN_EVENT(38): ambil event dari antrian window
-    // ebx = window id; return WIN_EVENT_NONE/CLOSE/CLICK
+    // ebx = window id; return WIN_EVENT_* (encode char/btn di byte atas)
     if (eax == SYS_WIN_EVENT) {
         return (uint32_t)wm_poll_event((int)ebx);
+    }
+
+    // SYS_WIN_BTN_ADD(39): tambah tombol ke window
+    // ebx = ptr WinBtnArgs; return btn_idx atau -1
+    if (eax == SYS_WIN_BTN_ADD) {
+        if (!is_user_ptr(ebx)) return (uint32_t)-1;
+        WinBtnArgs *a = (WinBtnArgs*)ebx;
+        if (a->label && !is_user_ptr((uint32_t)a->label)) return (uint32_t)-1;
+        return (uint32_t)wm_btn_add(a->id, a->x, a->y, a->w, a->h, a->label);
+    }
+
+    // SYS_WIN_CLICK_POS(40): ambil koordinat klik konten terakhir
+    // ebx = window id; edx = ptr int[2] (output x, y relatif konten)
+    if (eax == SYS_WIN_CLICK_POS) {
+        if (!is_user_ptr(edx)) return (uint32_t)-1;
+        int *pos = (int*)edx;
+        wm_get_click_pos((int)ebx, &pos[0], &pos[1]);
+        return 0;
+    }
+
+    // SYS_WIN_DRAW_PIXEL(41): gambar piksel di koordinat area konten window
+    // ebx = window id; edx = x | (y << 12) | (color << 24)
+    if (eax == SYS_WIN_DRAW_PIXEL) {
+        int cx    = (int)(edx & 0xFFF);
+        int cy    = (int)((edx >> 12) & 0xFFF);
+        uint8_t c = (uint8_t)((edx >> 24) & 0xFF);
+        wm_draw_pixel((int)ebx, cx, cy, c);
+        return 0;
+    }
+
+    // SYS_WIN_FILL_RECT(42): isi persegi di area konten window
+    // ebx = window id; edx = ptr ke struct { short x,y,w,h; uint8_t color; }
+    if (eax == SYS_WIN_FILL_RECT) {
+        typedef struct { short x, y, w, h; uint8_t color; } WinFillArgs;
+        if (!is_user_ptr(edx)) return 0;
+        WinFillArgs *a = (WinFillArgs*)edx;
+        wm_fill_rect((int)ebx, a->x, a->y, a->w, a->h, a->color);
+        return 0;
+    }
+
+    // SYS_WIN_MOUSE_REL(43): posisi mouse relatif area konten window
+    // ebx = window id; edx = ptr int[3] → [rel_x, rel_y, btn_state]
+    if (eax == SYS_WIN_MOUSE_REL) {
+        if (!is_user_ptr(edx)) return 0;
+        int *out = (int*)edx;
+        out[2] = wm_mouse_rel((int)ebx, &out[0], &out[1]);
+        return 0;
     }
 
     // SYS_EXEC(30): muat dan jalankan program dari FS: ebx=nama (user ptr)

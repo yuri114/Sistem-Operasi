@@ -47,7 +47,12 @@
 #define SYS_WIN_DESTROY 35  // tutup window: ebx=id
 #define SYS_WIN_DRAW    36  // gambar teks di konten: ebx=ptr WinDrawArgs
 #define SYS_WIN_CLEAR   37  // bersihkan konten: ebx=id, edx=warna_bg
-#define SYS_WIN_EVENT   38  // poll event: ebx=id → return WIN_EVENT_*
+#define SYS_WIN_EVENT   38  // poll event: ebx=id → return WIN_EVENT_* (encode char/btn di byte atas)
+#define SYS_WIN_BTN_ADD 39  // tambah tombol ke window: ebx=ptr WinBtnArgs → return btn_idx
+#define SYS_WIN_CLICK_POS 40 // koordinat klik terakhir: ebx=id, edx=ptr int[2] → out[0]=x, out[1]=y
+#define SYS_WIN_DRAW_PIXEL 41 // gambar piksel di konten window: ebx=id, edx=x|(y<<12)|((color&0xF)<<24)
+#define SYS_WIN_FILL_RECT  42 // isi persegi di konten window: ebx=id, edx=ptr WinFillArgs {short x,y,w,h; u8 color}
+#define SYS_WIN_MOUSE_REL  43 // posisi mouse relatif konten: ebx=id, edx=ptr int[3] → [rel_x, rel_y, btn]
 
 void syscall_init();
 uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx);
