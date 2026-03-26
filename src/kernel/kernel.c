@@ -149,23 +149,23 @@ void my_background_task() {
     }
 }
 
-void enter_usermode(uint32_t eip, uint32_t user_esp) {
+void enter_usermode(uint64_t rip, uint64_t user_rsp) {
     __asm__ volatile (
-        "mov $0x23, %%ax\n" //segment selector untuk user data (GDT entry 4)
+        "mov $0x23, %%ax\n"
         "mov %%ax, %%ds\n"
         "mov %%ax, %%es\n"
         "mov %%ax, %%fs\n"
         "mov %%ax, %%gs\n"
-        "push $0x23\n" //segment selector untuk user data
-        "push %1\n" //stack pointer untuk user mode
-        "pushf\n" //eflags
-        "pop %%eax\n"
-        "or $0x200, %%eax\n" //set IF flag
-        "push %%eax\n"
-        "pushl $0x1B\n" //segment selector untuk user code (GDT entry 3)
-        "pushl %0\n" //eip untuk user mode
-        "iret\n" //lakukan iret untuk switch ke user mode
-        :: "r"(eip), "r"(user_esp) : "eax"
+        "pushq $0x23\n"         /* SS: user data */
+        "pushq %1\n"            /* RSP: user mode stack */
+        "pushfq\n"              /* RFLAGS */
+        "pop %%rax\n"
+        "or $0x200, %%rax\n"    /* set IF */
+        "push %%rax\n"
+        "pushq $0x1B\n"         /* CS: user code */
+        "pushq %0\n"            /* RIP */
+        "iretq\n"
+        :: "r"(rip), "r"(user_rsp) : "rax"
     );
 }
 
@@ -241,26 +241,23 @@ extern void exc3();  extern void exc4();  extern void exc5();
 extern void exc6();  extern void exc7();  extern void exc8();
 extern void exc9();  extern void exc10(); extern void exc11();
 extern void exc12(); extern void exc13(); extern void exc14();
-/* Dari task.c */
-extern uint32_t task_get_esp0(int id);
-
-/* Cetak nilai 32-bit dalam format hex 8 digit */
-static void print_hex32(uint32_t val) {
+/* Cetak nilai 64-bit dalam format hex 16 digit */
+static void print_hex64(uint64_t val) {
     const char *hex = "0123456789ABCDEF";
-    char buf[9];
+    char buf[17];
     int i;
-    for (i = 0; i < 8; i++) {
-        buf[7 - i] = hex[val & 0xF];
+    for (i = 0; i < 16; i++) {
+        buf[15 - i] = hex[val & 0xF];
         val >>= 4;
     }
-    buf[8] = '\0';
+    buf[16] = '\0';
     print(buf);
 }
 
 /* Dipanggil dari exc_common di isr.asm saat CPU exception terjadi.
  * Tampilkan layar merah dengan info exception, lalu halt sistem. */
-void exception_handler(uint32_t exc_num, uint32_t error_code,
-                       uint32_t eip,      uint32_t cr2) {
+void exception_handler(uint64_t exc_num, uint64_t error_code,
+                       uint64_t rip,      uint64_t cr2) {
     static const char *names[] = {
         "#DE Divide Error",         "#DB Debug",
         "NMI",                      "#BP Breakpoint",
@@ -282,12 +279,12 @@ void exception_handler(uint32_t exc_num, uint32_t error_code,
     print("Exception : ");
     print(exc_num < 15 ? names[exc_num] : "Unknown");
     print("  (INT ");
-    itoa(exc_num, num_buf); print(num_buf);
-    print(")\nErr Code  : 0x"); print_hex32(error_code);
-    print("\nEIP       : 0x"); print_hex32(eip);
+    itoa((uint32_t)exc_num, num_buf); print(num_buf);
+    print(")\nErr Code  : 0x"); print_hex64(error_code);
+    print("\nRIP       : 0x"); print_hex64(rip);
 
     if (exc_num == 14) {   /* Page Fault — CR2 berisi alamat yang menyebabkan fault */
-        print("\nCR2       : 0x"); print_hex32(cr2);
+        print("\nCR2       : 0x"); print_hex64(cr2);
         print("\nAccess    : ");
         print(error_code & 4 ? "User " : "Kernel ");
         print(error_code & 2 ? "Write "  : "Read ");
@@ -330,7 +327,7 @@ void kernel_main(){
     print("=================================");
     print("\n   Selamat datang di MyOS!   \n");
     print("=================================");
-    print("\nKernel berjalan di Protected Mode (32-bit)\n");
+    print("\nKernel berjalan di Long Mode (64-bit)\n");
     shell_init();
     mem_init();
     pmm_init();
@@ -347,25 +344,25 @@ void kernel_main(){
     timer_init(100);
     pic_init();
     idt_init();
-    idt_set_gate(32, (uint32_t)irq0);
-    idt_set_gate(33, (uint32_t)irq1);
+    idt_set_gate(32, (uint64_t)irq0);
+    idt_set_gate(33, (uint64_t)irq1);
 
-    /* Exception handlers INT 0-14 — tanpa ini CPU exception → triple fault → reboot */
-    idt_set_gate(0,  (uint32_t)exc0);
-    idt_set_gate(1,  (uint32_t)exc1);
-    idt_set_gate(2,  (uint32_t)exc2);
-    idt_set_gate(3,  (uint32_t)exc3);
-    idt_set_gate(4,  (uint32_t)exc4);
-    idt_set_gate(5,  (uint32_t)exc5);
-    idt_set_gate(6,  (uint32_t)exc6);
-    idt_set_gate(7,  (uint32_t)exc7);
-    idt_set_gate(8,  (uint32_t)exc8);
-    idt_set_gate(9,  (uint32_t)exc9);
-    idt_set_gate(10, (uint32_t)exc10);
-    idt_set_gate(11, (uint32_t)exc11);
-    idt_set_gate(12, (uint32_t)exc12);
-    idt_set_gate(13, (uint32_t)exc13);
-    idt_set_gate(14, (uint32_t)exc14);
+    /* Exception handlers INT 0-14 */
+    idt_set_gate(0,  (uint64_t)exc0);
+    idt_set_gate(1,  (uint64_t)exc1);
+    idt_set_gate(2,  (uint64_t)exc2);
+    idt_set_gate(3,  (uint64_t)exc3);
+    idt_set_gate(4,  (uint64_t)exc4);
+    idt_set_gate(5,  (uint64_t)exc5);
+    idt_set_gate(6,  (uint64_t)exc6);
+    idt_set_gate(7,  (uint64_t)exc7);
+    idt_set_gate(8,  (uint64_t)exc8);
+    idt_set_gate(9,  (uint64_t)exc9);
+    idt_set_gate(10, (uint64_t)exc10);
+    idt_set_gate(11, (uint64_t)exc11);
+    idt_set_gate(12, (uint64_t)exc12);
+    idt_set_gate(13, (uint64_t)exc13);
+    idt_set_gate(14, (uint64_t)exc14);
 
     input_start_row = cursor_row;
     input_start_col = cursor_col;
@@ -375,13 +372,13 @@ void kernel_main(){
     task_set_main(); //tandai task utama sudah ada
     /* TSS esp0 harus menunjuk ke puncak kernel stack task 0 (shell),
      * sehingga saat ring-3 → ring-0 transition, CPU memakai stack yang benar. */
-    tss_init(task_get_esp0(0));
-    //register syscall dengan DPL = 3 agar ring-3 bisa memanggil int 0x80
-    idt_set_gate_user(0x80, (uint32_t)int80_handler);
+    tss64_init(task_get_rsp0(0));
+    /* register syscall dengan DPL = 3 agar ring-3 bisa memanggil int 0x80 */
+    idt_set_gate_user(0x80, (uint64_t)int80_handler);
 
     /* IRQ12 — PS/2 Mouse (INT 44 = slave IRQ4) */
     extern void irq12();
-    idt_set_gate(44, (uint32_t)irq12);
+    idt_set_gate(44, (uint64_t)irq12);
     wm_init();
     mouse_init();
     /* Tidak membuat background task — task_count=1, task_switch selalu early return.

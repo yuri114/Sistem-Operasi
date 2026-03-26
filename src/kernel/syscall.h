@@ -60,7 +60,7 @@
 #define SYS_GET_TICKS      48 // kembalikan jumlah timer tick sejak boot → return uint32_t
 
 void syscall_init();
-uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx);
+uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);
 
 /* Jalankan program dari FS langsung dari kernel (tanpa user syscall) */
 int kernel_exec(const char *name);

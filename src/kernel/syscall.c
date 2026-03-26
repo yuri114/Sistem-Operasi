@@ -19,11 +19,11 @@ extern void clear_screen();         // dari kernel.c
 
 /* Validasi pointer dari user space: tolak NULL dan pointer ke kernel space (<0x300000).
  * User programs dimuat di 0x300000+. Stack user di 0x400000+. */
-static int is_user_ptr(uint32_t ptr) {
-    return (ptr != 0 && ptr >= 0x300000u);
+static int is_user_ptr(uint64_t ptr) {
+    return (ptr != 0 && ptr >= 0x300000ULL);
 }
 
-uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
+uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
     if (eax == SYS_PRINT){
         if (!is_user_ptr(ebx)) return (uint32_t)-1;
         print((const char*)ebx); //ebx berisi pointer ke string yang akan dicetak
@@ -67,7 +67,7 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
     if (eax == SYS_FS_WRITE) {
         if (!is_user_ptr(ebx)) return 0;
         const char **args = (const char**)ebx;
-        if (!is_user_ptr((uint32_t)args[0]) || !is_user_ptr((uint32_t)args[1])) return 0;
+        if (!is_user_ptr((uint64_t)args[0]) || !is_user_ptr((uint64_t)args[1])) return 0;
         const char *name = args[0];
         const char *data = args[1];
         return (uint32_t)fs_write(name, data);
@@ -216,7 +216,7 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
     if (eax == SYS_DRAW_STR) {
         if (!is_user_ptr(ebx)) return (uint32_t)-1;
         GfxStr *gs = (GfxStr*)ebx;
-        if (!is_user_ptr((uint32_t)gs->s)) return (uint32_t)-1;
+        if (!is_user_ptr((uint64_t)gs->s)) return (uint64_t)-1;
         draw_string_gfx(gs->x, gs->y, gs->s, gs->fg, gs->bg);
         return 0;
     }
@@ -235,8 +235,8 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
     if (eax == SYS_WIN_CREATE) {
         if (!is_user_ptr(ebx)) return (uint32_t)-1;
         WinCreateArgs *a = (WinCreateArgs*)ebx;
-        if (a->title && !is_user_ptr((uint32_t)a->title)) return (uint32_t)-1;
-        return (uint32_t)wm_create(a->x, a->y, a->w, a->h, a->title);
+        if (a->title && !is_user_ptr((uint64_t)a->title)) return (uint64_t)-1;
+        return (uint64_t)wm_create(a->x, a->y, a->w, a->h, a->title);
     }
     // SYS_WIN_DESTROY(35): tutup window, bebaskan slot
     // ebx = window id
@@ -249,7 +249,7 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
     if (eax == SYS_WIN_DRAW) {
         if (!is_user_ptr(ebx)) return (uint32_t)-1;
         WinDrawArgs *d = (WinDrawArgs*)ebx;
-        if (!is_user_ptr((uint32_t)d->s)) return (uint32_t)-1;
+        if (!is_user_ptr((uint64_t)d->s)) return (uint64_t)-1;
         wm_draw_text(d->id, d->x, d->y, d->s, d->fg, d->bg);
         return 0;
     }
@@ -270,8 +270,8 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
     if (eax == SYS_WIN_BTN_ADD) {
         if (!is_user_ptr(ebx)) return (uint32_t)-1;
         WinBtnArgs *a = (WinBtnArgs*)ebx;
-        if (a->label && !is_user_ptr((uint32_t)a->label)) return (uint32_t)-1;
-        return (uint32_t)wm_btn_add(a->id, a->x, a->y, a->w, a->h, a->label);
+        if (a->label && !is_user_ptr((uint64_t)a->label)) return (uint64_t)-1;
+        return (uint64_t)wm_btn_add(a->id, a->x, a->y, a->w, a->h, a->label);
     }
 
     // SYS_WIN_CLICK_POS(40): ambil koordinat klik konten terakhir
@@ -348,17 +348,17 @@ uint32_t syscall_handler(uint32_t eax, uint32_t ebx, uint32_t edx) {
         const char *name = (const char*)ebx;
         uint32_t sz = 0;
         const uint8_t *data = fs_read_bin(name, &sz);
-        if (!data || sz == 0) return (uint32_t)-1;
-        uint32_t *proc_dir = vmm_create_page_dir();
-        uint32_t entry = elf_load(data, sz, proc_dir);
-        if (!entry) return (uint32_t)-1;
-        uint32_t stack_phys = pmm_alloc_frame();
-        vmm_map_page(proc_dir, 0x400000, stack_phys, 7);
-        int tid = task_create_user(entry, proc_dir, 0x400000 + 0x1000, name);
-        return (uint32_t)tid;
+        if (!data || sz == 0) return (uint64_t)-1;
+        uint64_t *proc_dir = vmm_create_page_dir();
+        uint64_t entry = elf_load(data, sz, proc_dir);
+        if (!entry) return (uint64_t)-1;
+        uint64_t stack_phys = pmm_alloc_frame();
+        vmm_map_page(proc_dir, 0x600000, stack_phys, 7);
+        int tid = task_create_user(entry, proc_dir, 0x600000 + 0x1000, name);
+        return (uint64_t)tid;
     }
 
-    return (uint32_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal
+    return (uint64_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal
 }
 
 /* Jalankan program dari FS langsung dari kernel (dipakai taskbar quick-launch) */
@@ -366,10 +366,10 @@ int kernel_exec(const char *name) {
     uint32_t sz = 0;
     const uint8_t *data = fs_read_bin(name, &sz);
     if (!data || sz == 0) return -1;
-    uint32_t *proc_dir = vmm_create_page_dir();
-    uint32_t entry = elf_load(data, sz, proc_dir);
+    uint64_t *proc_dir = vmm_create_page_dir();
+    uint64_t entry = elf_load(data, sz, proc_dir);
     if (!entry) return -1;
-    uint32_t stack_phys = pmm_alloc_frame();
-    vmm_map_page(proc_dir, 0x400000, stack_phys, 7);
-    return task_create_user(entry, proc_dir, 0x400000 + 0x1000, name);
+    uint64_t stack_phys = pmm_alloc_frame();
+    vmm_map_page(proc_dir, 0x600000, stack_phys, 7);
+    return task_create_user(entry, proc_dir, 0x600000 + 0x1000, name);
 }

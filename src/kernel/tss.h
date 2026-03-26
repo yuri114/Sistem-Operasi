@@ -2,18 +2,20 @@
 #define TSS_H
 #include <stdint.h>
 
-typedef struct{
-    uint32_t prev_tss; //tidak digunakan, harus 0
-    uint32_t esp0; //stack pointer untuk ring 0 (kernel)
-    uint32_t ss0; //segment selector untuk stack ring 0
-    uint32_t esp1, ss1, esp2, ss2; //tidak digunakan, harus 0
-    uint32_t cr3, eip, eflags; //tidak digunakan, harus 0
-    uint32_t eax, ecx, edx, ebx, esp, ebp, esi, edi; //tidak digunakan, harus 0
-    uint32_t es, cs, ss, ds, fs, gs; //tidak digunakan, harus 0
-    uint32_t ldt; //tidak digunakan, harus 0
-    uint16_t trap, iomap_base; //tidak digunakan, harus 0
-} __attribute__((packed)) TSS;
+/* TSS minimalnya untuk 64-bit Long Mode
+ * Hanya rsp0 yang dipakai (stack ring-0 saat ring-3?ring-0 transition). */
+typedef struct {
+    uint32_t reserved0;
+    uint64_t rsp0;          /* kernel stack pointer untuk ring-3 -> ring-0 */
+    uint64_t rsp1;
+    uint64_t rsp2;
+    uint64_t reserved1;
+    uint64_t ist[7];        /* interrupt stack table (tidak dipakai, 0 semua) */
+    uint64_t reserved2;
+    uint16_t reserved3;
+    uint16_t iomap_base;    /* offset I/O bitmap (= sizeof TSS = no bitmap) */
+} __attribute__((packed)) TSS64;
 
-void tss_init(uint32_t kernel_stack);
-void tss_set_kernel_stack(uint32_t esp);
+void tss64_init(uint64_t kernel_stack);
+void tss64_set_kernel_stack(uint64_t rsp);
 #endif

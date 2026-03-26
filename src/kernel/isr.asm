@@ -1,220 +1,221 @@
-[BITS 32]
+; ==================================================================
+; isr.asm — Interrupt Service Routines (64-bit Long Mode)
+;
+; Konvensi push/pop register (15 GPR, 8 byte tiap):
+;   push rax, rbx, rcx, rdx, rsi, rdi, rbp, r8..r15
+; Offset dari RSP setelah semua 15 push:
+;   [rsp+ 0]=r15, [rsp+ 8]=r14, [rsp+16]=r13, [rsp+24]=r12,
+;   [rsp+32]=r11, [rsp+40]=r10, [rsp+48]=r9,  [rsp+56]=r8,
+;   [rsp+64]=rbp, [rsp+72]=rdi, [rsp+80]=rsi, [rsp+88]=rdx,
+;   [rsp+96]=rcx, [rsp+104]=rbx, [rsp+112]=rax
+; ==================================================================
 
-; Export fungsi ke C
+[BITS 64]
+
 global idt_load
 global irq0
 global irq1
+global irq12
+global int80_handler
 
-; Import handler dari keyboard.c
 extern keyboard_handler
 extern timer_handler
 extern mouse_handler
+extern task_switch
+extern current_rsp
+extern next_rsp
+extern syscall_handler
 
-; ----------------------------------------------------
-; idt_load - dipanggil dari idt.c
-; Menerima pointer ke idt_descriptor_t sebagai argumen
-; ----------------------------------------------------
+; ------------------------------------------------------------------
+; Macro simpan/pulihkan semua GPR
+; ------------------------------------------------------------------
+%macro SAVE_REGS 0
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+%endmacro
+
+%macro RESTORE_REGS 0
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+%endmacro
+
+; ------------------------------------------------------------------
+; idt_load — muat IDT (dipanggil dari idt.c)
+; Argumen (SysV AMD64): rdi = pointer ke idt_descriptor
+; ------------------------------------------------------------------
 idt_load:
-    mov eax, [esp + 4]  ; ambil argumen pertama (pointer ke idt_desc)
-    lidt [eax]          ; load IDT ke CPU
+    lidt [rdi]
     ret
 
-; ----------------------------------------------------
-; IRQ0 - Timer (interrupt 32)
-; Tidak perlu lakukan apa-apa selain kirim EOI
-; ----------------------------------------------------
+; ------------------------------------------------------------------
+; IRQ0 — Timer (interrupt 32)
+; Tangani timer tick lalu lakukan task switch jika perlu.
+; ------------------------------------------------------------------
 irq0:
-    pusha
-    mov ax, ds
-    push eax
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
+    SAVE_REGS
 
     call timer_handler
 
-    extern task_switch
-    extern current_esp
-    extern next_esp
-    call task_switch
+    call task_switch            ; mungkin set current_rsp / next_rsp
 
-    ; simpan ESP task sekarang (skip jika 0 = bootstrap task 0)
-    mov eax, [current_esp]
-    test eax, eax
-    jz .skip_save
-    mov [eax], esp          ; simpan ESP task lama
-
+    ; Simpan RSP task sekarang
+    mov  rax, [current_rsp]     ; rax = &tasks[current].rsp (atau 0)
+    test rax, rax
+    jz   .skip_save
+    mov  [rax], rsp             ; tasks[current].rsp = RSP kita sekarang
 .skip_save:
-    ; load ESP task berikutnya
-    mov eax, [next_esp]
-    test eax, eax
-    jz .no_switch
-    mov esp, [eax]          ; ganti stack ke task baru
 
+    ; Muat RSP task berikutnya
+    mov  rax, [next_rsp]        ; rax = &tasks[next].rsp (atau 0)
+    test rax, rax
+    jz   .no_switch
+    mov  rsp, [rax]             ; RSP = tasks[next].rsp
 .no_switch:
 
-    mov al, 0x20
-    out 0x20, al        ; kirim EOI ke master PIC
-    
-    pop eax
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-    popa
-    iret
+    mov  al, 0x20
+    out  0x20, al               ; EOI ke master PIC
 
-; ----------------------------------------------------
-; IRQ1 - Keyboard (interrupt 33)
-; Atur segment, panggil handler C, kirim EOI
-; ----------------------------------------------------
+    RESTORE_REGS
+    iretq
+
+; ------------------------------------------------------------------
+; IRQ1 — Keyboard (interrupt 33)
+; ------------------------------------------------------------------
 irq1:
-    pusha
+    SAVE_REGS
+    call keyboard_handler
+    mov  al, 0x20
+    out  0x20, al
+    RESTORE_REGS
+    iretq
 
-    ; simpan dan ganti data segment ke kernel segment
-    mov ax, ds
-    push eax
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-
-    call keyboard_handler   ; panggil handler keyboard di C
-
-    mov al, 0x20
-    out 0x20, al            ; kirim EOI ke master PIC
-
-    ; restore data segment
-    pop eax
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-
-    popa
-    iret
-
-; ----------------------------------------------------
-; IRQ12 - PS/2 Mouse (interrupt 44 = slave IRQ4)
-; Kirim EOI ke slave (0xA0) DAN master (0x20)
-; ----------------------------------------------------
-global irq12
+; ------------------------------------------------------------------
+; IRQ12 — PS/2 Mouse (interrupt 44 = slave IRQ4)
+; ------------------------------------------------------------------
 irq12:
-    pusha
-    mov ax, ds
-    push eax
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-
+    SAVE_REGS
     call mouse_handler
+    mov  al, 0x20
+    out  0xA0, al               ; EOI slave PIC
+    out  0x20, al               ; EOI master PIC
+    RESTORE_REGS
+    iretq
 
-    mov al, 0x20
-    out 0xA0, al        ; EOI ke slave PIC
-    out 0x20, al        ; EOI ke master PIC
-
-    pop eax
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-    popa
-    iret
-
-extern syscall_handler
-global int80_handler
-
+; ------------------------------------------------------------------
+; INT 0x80 — Syscall (ring 3 memanggil kernel)
+;
+; Konvensi (user space):
+;   rax = nomor syscall
+;   rbx = argumen ke-1
+;   rdx = argumen ke-2
+;
+; Konvensi SysV AMD64 untuk syscall_handler(rax, rbx, rdx):
+;   rdi = arg1, rsi = arg2, rdx = arg3
+; ------------------------------------------------------------------
 int80_handler:
-    pusha
-    push edx                ; argumen ke-3 (tidak dipakai sekarang)
-    push ebx                ; argumen ke-2 (pointer string dll)
-    push eax                ; argumen ke-1 (nomor syscall)
-    call syscall_handler
-    add esp, 12             ; bersihkan 3 argumen dari stack
-    mov [esp+28], eax
-    popa
-    iret
+    SAVE_REGS
 
-; ============================================================
-; Exception handlers INT 0-14 — CPU exceptions
-; ============================================================
+    ; Ambil rax/rbx/rdx asli dari stack (offset setelah 15 push):
+    ;   rax ada di [rsp+112], rbx di [rsp+104], rdx di [rsp+88]
+    mov  rdi, [rsp + 112]       ; nomor syscall  -> rdi
+    mov  rsi, [rsp + 104]       ; arg1 (ptr/val) -> rsi
+    mov  rdx, [rsp + 88]        ; arg2 (ptr/val) -> rdx (sudah di rdx, tapi aman)
+
+    call syscall_handler        ; return value di rax
+
+    ; Simpan return value ke slot rax di stack agar terpulihkan saat pop rax
+    mov  [rsp + 112], rax
+
+    mov  al, 0x20
+    out  0x20, al               ; EOI (int 0x80 pakai interrupt gate, tetap butuh EOI)
+
+    RESTORE_REGS
+    iretq
+
+; ==================================================================
+; Exception Handlers INT 0-14
+; ==================================================================
 extern exception_handler
 
-; Exception TANPA error code (CPU tidak push error code)
 %macro EXC_NOERR 1
 global exc%1
 exc%1:
-    push dword 0        ; fake error code
-    push dword %1       ; nomor exception
-    jmp exc_common
+    push qword 0            ; fake error code
+    push qword %1           ; nomor exception
+    jmp  exc_common
 %endmacro
 
-; Exception DENGAN error code (CPU sudah push error code sebelum kita dipanggil)
 %macro EXC_ERR 1
 global exc%1
 exc%1:
-    push dword %1       ; nomor exception (error code sudah ada di stack dari CPU)
-    jmp exc_common
+    push qword %1           ; nomor exception (error code sudah ada dari CPU)
+    jmp  exc_common
 %endmacro
 
-EXC_NOERR 0    ; #DE Divide Error
-EXC_NOERR 1    ; #DB Debug
-EXC_NOERR 2    ;     NMI
-EXC_NOERR 3    ; #BP Breakpoint
-EXC_NOERR 4    ; #OF Overflow
-EXC_NOERR 5    ; #BR Bound Range
-EXC_NOERR 6    ; #UD Invalid Opcode
-EXC_NOERR 7    ; #NM Device Not Available
-EXC_ERR   8    ; #DF Double Fault     (error code selalu 0)
-EXC_NOERR 9    ;     Coprocessor Segment Overrun
-EXC_ERR   10   ; #TS Invalid TSS
-EXC_ERR   11   ; #NP Segment Not Present
-EXC_ERR   12   ; #SS Stack Fault
-EXC_ERR   13   ; #GP General Protection Fault
-EXC_ERR   14   ; #PF Page Fault
+EXC_NOERR 0
+EXC_NOERR 1
+EXC_NOERR 2
+EXC_NOERR 3
+EXC_NOERR 4
+EXC_NOERR 5
+EXC_NOERR 6
+EXC_NOERR 7
+EXC_ERR   8
+EXC_NOERR 9
+EXC_ERR   10
+EXC_ERR   11
+EXC_ERR   12
+EXC_ERR   13
+EXC_ERR   14
 
 exc_common:
-    ; Posisi stack saat masuk (dari ESP[0] ke alamat lebih tinggi):
-    ;   [ESP+ 0] = exc_num         (kita push)
-    ;   [ESP+ 4] = error_code      (kita push 0, atau error code dari CPU)
-    ;   [ESP+ 8] = EIP             (CPU push, alamat instruksi yang salah)
-    ;   [ESP+12] = CS
-    ;   [ESP+16] = EFLAGS
-    ;   [ESP+20] = ESP_user, [ESP+24] = SS_user  (hanya jika ada perubahan privilege)
-    pusha               ; push 8 register = 32 bytes
-    mov ax, ds
-    push eax            ; simpan DS = 4 bytes
-    ; Sekarang: exc_num=[ESP+36], error_code=[ESP+40], EIP=[ESP+44]
+    ; Stack saat masuk:
+    ;   [rsp+ 0] = exc_num    (kita push)
+    ;   [rsp+ 8] = error_code (kita push 0, atau dari CPU)
+    ;   [rsp+16] = RIP   (CPU push)
+    ;   [rsp+24] = CS
+    ;   [rsp+32] = RFLAGS
+    ;   [rsp+40] = RSP_user
+    ;   [rsp+48] = SS_user
+    SAVE_REGS
+    ; Setelah 15 push (120 byte), offset +120:
+    ;   exc_num    = [rsp+120]
+    ;   error_code = [rsp+128]
+    ;   RIP        = [rsp+136]
 
-    mov ax, 0x10        ; kernel data segment
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
+    mov  rdi, [rsp + 120]       ; exc_num
+    mov  rsi, [rsp + 128]       ; error_code
+    mov  rdx, [rsp + 136]       ; RIP
+    mov  rcx, cr2               ; CR2 untuk page fault
 
-    mov eax, [esp + 36]   ; exc_num
-    mov ebx, [esp + 40]   ; error_code
-    mov ecx, [esp + 44]   ; EIP (alamat instruksi penyebab)
-    mov edx, cr2          ; CR2 = alamat akses yang menyebabkan #PF
+    call exception_handler      ; tidak pernah kembali
 
-    push edx              ; arg4: cr2
-    push ecx              ; arg3: eip
-    push ebx              ; arg2: error_code
-    push eax              ; arg1: exc_num
-    call exception_handler   ; tidak pernah kembali (cli+hlt di dalam)
-    add esp, 16
-
-    pop eax
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-
-    popa
-    add esp, 8          ; buang exc_num dan error_code
-    iret
+    RESTORE_REGS
+    add  rsp, 16                ; buang exc_num + error_code
+    iretq

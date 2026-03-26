@@ -298,14 +298,14 @@ static void shell_execute(){
             print("exec: file tidak ditemukan\n");
         } else {
             /* Buat page directory baru, isolasi penuh untuk proses ini */
-            uint32_t *proc_dir = vmm_create_page_dir();
-            uint32_t entry = elf_load(data, size, proc_dir);
+            uint64_t *proc_dir = vmm_create_page_dir();
+            uint64_t entry = elf_load(data, size, proc_dir);
             if (!entry) {
                 print("exec: gagal memuat ELF\n");
             } else {
-                uint32_t stack_phys = pmm_alloc_frame();
-                vmm_map_page(proc_dir, 0x400000, stack_phys, 7);
-                uint32_t user_esp = 0x400000 + PAGE_SIZE;
+                uint64_t stack_phys = pmm_alloc_frame();
+                vmm_map_page(proc_dir, 0x600000, stack_phys, 7);
+                uint64_t user_esp = 0x600000 + PAGE_SIZE;
                 task_create_user(entry, proc_dir, user_esp, name);
                 print("exec: program dimulai\n");
             }
@@ -432,22 +432,22 @@ static void shell_execute(){
                     set_color(GFX_WHITE, GFX_BLACK);
                 } else {
                 /* Buat dan jalankan prog1 (writer) */
-                uint32_t *dir1 = vmm_create_page_dir();
-                uint32_t entry1 = elf_load(d1, sz1, dir1);
+                uint64_t *dir1 = vmm_create_page_dir();
+                uint64_t entry1 = elf_load(d1, sz1, dir1);
                 if (entry1) {
-                    uint32_t sp1 = pmm_alloc_frame();
-                    vmm_map_page(dir1, 0x400000, sp1, 7);
-                    int tid1 = task_create_user(entry1, dir1, 0x400000 + PAGE_SIZE, prog1);
+                    uint64_t sp1 = pmm_alloc_frame();
+                    vmm_map_page(dir1, 0x600000, sp1, 7);
+                    int tid1 = task_create_user(entry1, dir1, 0x600000 + PAGE_SIZE, prog1);
                     task_set_pipe(tid1, pipe_fd);
                 }
 
                 /* Buat dan jalankan prog2 (reader) */
-                uint32_t *dir2 = vmm_create_page_dir();
-                uint32_t entry2 = elf_load(d2, sz2, dir2);
+                uint64_t *dir2 = vmm_create_page_dir();
+                uint64_t entry2 = elf_load(d2, sz2, dir2);
                 if (entry2) {
-                    uint32_t sp2 = pmm_alloc_frame();
-                    vmm_map_page(dir2, 0x400000, sp2, 7);
-                    int tid2 = task_create_user(entry2, dir2, 0x400000 + PAGE_SIZE, prog2);
+                    uint64_t sp2 = pmm_alloc_frame();
+                    vmm_map_page(dir2, 0x600000, sp2, 7);
+                    int tid2 = task_create_user(entry2, dir2, 0x600000 + PAGE_SIZE, prog2);
                     task_set_pipe(tid2, pipe_fd);
                 }
 
@@ -506,20 +506,20 @@ static void shell_execute(){
                     if (!d2) { print("pipe: file tidak ditemukan: "); print(prog2); print("\n"); }
                     set_color(GFX_WHITE, GFX_BLACK);
                 } else {
-                    uint32_t *dir1 = vmm_create_page_dir();
-                    uint32_t entry1 = elf_load(d1, sz1, dir1);
+                    uint64_t *dir1 = vmm_create_page_dir();
+                    uint64_t entry1 = elf_load(d1, sz1, dir1);
                     if (entry1) {
-                        uint32_t sp1 = pmm_alloc_frame();
-                        vmm_map_page(dir1, 0x400000, sp1, 7);
-                        int tid1 = task_create_user(entry1, dir1, 0x400000 + PAGE_SIZE, prog1);
+                        uint64_t sp1 = pmm_alloc_frame();
+                        vmm_map_page(dir1, 0x600000, sp1, 7);
+                        int tid1 = task_create_user(entry1, dir1, 0x600000 + PAGE_SIZE, prog1);
                         task_set_pipe(tid1, pipe_fd);
                     }
-                    uint32_t *dir2 = vmm_create_page_dir();
-                    uint32_t entry2 = elf_load(d2, sz2, dir2);
+                    uint64_t *dir2 = vmm_create_page_dir();
+                    uint64_t entry2 = elf_load(d2, sz2, dir2);
                     if (entry2) {
-                        uint32_t sp2 = pmm_alloc_frame();
-                        vmm_map_page(dir2, 0x400000, sp2, 7);
-                        int tid2 = task_create_user(entry2, dir2, 0x400000 + PAGE_SIZE, prog2);
+                        uint64_t sp2 = pmm_alloc_frame();
+                        vmm_map_page(dir2, 0x600000, sp2, 7);
+                        int tid2 = task_create_user(entry2, dir2, 0x600000 + PAGE_SIZE, prog2);
                         task_set_pipe(tid2, pipe_fd);
                     }
                     if (entry1 && entry2) {

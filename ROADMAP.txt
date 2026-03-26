@@ -1,18 +1,293 @@
 ================================================================
   MyOS — ROADMAP PENGEMBANGAN SISTEM
-  Dibuat: 24 Maret 2026
+  Dibuat: 24 Maret 2026 | Diperbarui: 26 Maret 2026
 ================================================================
 
-KONDISI SAAT INI (baseline)
+KONDISI SAAT INI (setelah Tahap C)
 ------------------------------------------------------------
-- Arsitektur  : x86 32-bit Protected Mode (i386)
-- Resolusi    : 640x480 @ 8bpp (256 warna palette)
-- Memori      : identity-mapped 0–16MB, heap 2MB (0x100000–0x2FFFFF)
-- Multitasking: round-robin priority, MAX_TASKS=16, STACK=8KB (heap)
-- Filesystem  : 32 file, 16KB/file, magic MFS2
+- Arsitektur  : x86_64 64-bit Long Mode (IA-32e)
+- Resolusi    : 1920×1080 @ 32bpp (VBE linear framebuffer ~8.3MB)
+- Memori      : 4-level paging, identity-mapped 4GB, heap 2MB (0x100000–0x2FFFFF)
+- Multitasking: round-robin, MAX_TASKS=16, context-switch 64-bit
+- Filesystem  : MFS2 — 32 file, 16KB/file
 - GUI         : Window Manager (16 window), taskbar, 5 built-in apps
-- Kernel size : ~172KB
-- Platform    : QEMU Bochs VBE, build via WSL cross-compiler
+- User space  : Ring-3 isolasi penuh, ELF64 loader, user stack @0x600000
+- Kernel size : ~178KB
+- Platform    : QEMU qemu-system-x86_64, build via WSL cross-compiler (x86_64-linux-gnu)
+
+================================================================
+TAHAP A — 32bpp TRUE COLOR
+Status: [SELESAI] ✓ Selesai 24 Maret 2026 — build 171,920 bytes, test QEMU OK
+----------------------------------------------------------------
+Tujuan     : Mengubah framebuffer dari 8bpp (palette 256 warna)
+             ke 32bpp (16 juta warna). Syarat wajib sebelum
+             resolusi tinggi karena display HD tidak masuk akal
+             dengan hanya 256 warna.
+
+LFB Size   : 640x480x4 = 1.228.800 byte (~1.2MB) → masih muat
+             dalam 1 page table (4MB mapping), tidak perlu ubah
+             paging.
+
+File yang diubah:
+  [A1] src/kernel/vbe.c           — vbe_set_mode bpp 8→32
+  [A2] src/kernel/graphics.h      — warna 8-bit → 32-bit, SCREEN_BPP 32
+  [A3] src/kernel/graphics.c      — fb: uint8_t* → uint32_t*, semua draw fn
+  [A4] src/kernel/window.c        — pixel_buf 32-bit, sentinal 0xFFFFFFFF
+  [A5] src/kernel/taskbar.c       — warna 32-bit
+  [A6] src/kernel/kernel.c        — scroll(), fg_color/bg_color 32-bit
+  [A7] src/kernel/syscall.c       — SYS_DRAW_PIXEL, SYS_WIN_DRAW_PIXEL 32-bit
+  [A8] src/programs/lib.h         — wrapper warna 32-bit
+  [A9] src/programs/*             — semua referensi GFX_* ke nilai 32-bit
+
+================================================================
+TAHAP B — RESOLUSI 1280×720
+Status: [SELESAI] ✓ Selesai 26 Maret 2026 — SCREEN_W 1280×720, build OK, test QEMU OK
+Prasyarat: Tahap A selesai ✓
+----------------------------------------------------------------
+File yang diubah:
+  [B1] src/kernel/graphics.h      — SCREEN_W 640→1280, SCREEN_H 480→720
+  [B2] src/kernel/vbe.c           — vbe_set_mode(1280, 720, 32)
+  [B3] src/kernel/kernel.c        — VGA_COLS=160, VGA_ROWS=90, scroll()
+  [B4] src/kernel/window.c / taskbar.c — layout 1280px
+  [B5] src/programs/*             — koordinat window disesuaikan
+
+================================================================
+TAHAP B+ — RESOLUSI 1920×1080
+Status: [SELESAI] ✓ Selesai 26 Maret 2026 — 8MB LFB mapping, build 172 KB, test QEMU OK
+Prasyarat: Tahap B selesai ✓
+----------------------------------------------------------------
+LFB Size   : 1920x1080x4 = 8.294.400 byte (~8.3MB) → butuh 2 page table
+
+File yang diubah:
+  [B+1] src/kernel/paging.c       — vbe_page_table2[1024], loop 2 PT
+  [B+2] src/kernel/graphics.h     — SCREEN_W=1920, SCREEN_H=1080
+  [B+3] src/kernel/vbe.c          — vbe_set_mode(1920, 1080, 32)
+  [B+4] src/programs/*            — layout program disesuaikan 1920px
+
+================================================================
+TAHAP C — 64-BIT LONG MODE (penulisan ulang arsitektur)
+Status: [SELESAI] ✓ Selesai 26 Maret 2026 — build 178 KB, boot ke Long Mode, GUI stabil
+Prasyarat: Tahap B/B+ selesai ✓
+----------------------------------------------------------------
+Tujuan     : Migrasi dari i386 32-bit Protected Mode ke x86_64
+             IA-32e Long Mode. Penulisan ulang penuh semua
+             komponen low-level kernel.
+
+Sub-tahap:
+
+  [C1] Bootloader & kernel entry 64-bit                           ✓
+       - boot.asm: Real Mode → Protected Mode (tidak berubah)
+       - kernel_entry.asm [BITS 32]: zero BSS, setup 4-level page
+         tables (PML4/PDPT/4xPD) di 0x1000–0x6FFF identity-map 4GB,
+         aktifkan PAE + EFER.LME + CR0.PG, load GDT64, far jmp
+       - kernel_entry.asm [BITS 64]: reload segs, RSP=0x90000,
+         call kernel_main()
+       - GDT64: null / kernel CS 0x08 / kernel DS 0x10 /
+                user CS 0x1B / user DS 0x23 / TSS64 0x28 (16-byte)
+       - Compiler: nasm -f elf64, x86_64-linux-gnu-ld -m elf_x86_64
+
+  [C2] Linker & build system 64-bit                               ✓
+       - linker.ld: OUTPUT_FORMAT(elf64-x86-64), . = 0x8000
+       - build.ps1: x86_64-linux-gnu-gcc -m64 -mno-red-zone
+         -mcmodel=small -fno-pic -no-pie, nasm -f elf64
+       - QEMU: ganti qemu-system-i386 → qemu-system-x86_64
+
+  [C3] IDT & ISR 64-bit                                           ✓
+       - idt.h / idt.c: gate descriptor 16-byte, offset_hi 32-bit
+       - isr.asm [BITS 64]: SAVE_REGS/RESTORE_REGS 15 GPR
+         (rax,rcx,rdx,rbx,rbp,rsi,rdi,r8-r15)
+       - irq0 timer: context switch current_rsp/next_rsp (uint64_t*)
+       - irq1 keyboard, irq12 mouse
+       - int80_handler: [rsp+112]=rax→rdi syscall dispatch
+       - exc_common: EXC_NOERR/EXC_ERR macros → exception_handler
+
+  [C4] TSS 64-bit                                                  ✓
+       - tss.h: struct TSS64 (rsp0/rsp1/rsp2, IST[7], iomap_base)
+       - tss.c: isi 16-byte GDT descriptor, ltr 0x28
+       - tss64_set_kernel_stack() dipanggil di setiap task_switch
+
+  [C5] Multitasking 64-bit                                         ✓
+       - task.h: uint64_t rsp, uint64_t *page_dir
+       - task.c: current_rsp/next_rsp (uint64_t*), iretq frame
+         ring-0 (3 qword: RFLAGS/CS/RIP) dan
+         ring-3 (5 qword: SS/RSP_user/RFLAGS/CS/RIP)
+       - task_switch: tss64_set_kernel_stack + vmm_switch_dir
+
+  [C6] VMM 4-level paging                                          ✓
+       - vmm.c: PMM bitmap 4096 frame (16MB), frame 0-767 pre-marked
+       - vmm_create_page_dir: PML4→PDPT→pd_low, boot PDs shared
+         pd_low[0]=0x000000|0x87 (0–2MB), pd_low[1]=0x200000|0x87 (2–4MB)
+       - vmm_map_page: walk 4-level, skip 2MB large pages (bit PS)
+       - vmm_free_user_memory: free PTs + frame ≥ 3MB + pd_low + pdpt + pml4
+       - paging.c: paging_init = no-op (4-level aktif dari kernel_entry)
+
+  [C7] ELF64 loader                                                ✓
+       - elf_loader.h/c: Elf64_Ehdr/Elf64_Phdr, e_machine=0x3E
+       - Load address: 0x400000 (pisah dari kernel heap)
+       - User stack: 0x600000 (1 frame 4KB)
+
+  [C8] Kernel C & syscall 64-bit                                   ✓
+       - kernel.c: enter_usermode iretq, exception_handler uint64_t
+         tss64_init, print_hex64
+       - syscall.c: is_user_ptr(uint64_t), semua return uint64_t,
+         kernel_exec / SYS_EXEC memakai uint64_t proc_dir/entry/stack
+       - lib.h: syscall0/1/2 return long, (long) pointer cast
+       - user.ld: OUTPUT_FORMAT(elf64-x86-64), . = 0x400000
+       - memory.c: saved_flags uint64_t (pushf/popf 64-bit)
+       - shell.c: uint64_t proc_dir/entry/sp1/sp2
+       - paging.c: paging_get_cr0 uint64_t temp register
+
+================================================================
+TAHAP D — KERNEL STABILITY & DRIVER (roadmap ke depan)
+Status: [ ] Belum dimulai
+Prasyarat: Tahap C selesai ✓
+----------------------------------------------------------------
+Tujuan     : Meningkatkan stabilitas, memperluas driver, dan
+             memperbaiki kualitas OS sebelum menambah fitur besar.
+
+  [D1] SYSCALL/SYSRET (ganti int 0x80)
+       - Aktifkan IA32_LSTAR, IA32_STAR MSR
+       - Handler syscall tanpa stack switch (lebih cepat)
+       - Update lib.h: syscall via SYSCALL instruction
+       - Keuntungan: latency syscall ~5x lebih rendah
+
+  [D2] Perbaikan PMM & heap
+       - PMM: naikkan TOTAL_FRAMES dari 4096 (16MB) ke 16384 (64MB)
+       - Kernel heap: pindah ke range yang tidak konflik dengan VBE LFB
+       - Tambah fungsi: BUDDY allocator (mengurangi fragmentasi)
+       - Guard page di batas heap
+
+  [D3] Demand paging (page fault handler yang berguna)
+       - Page-in on demand untuk user program
+       - Copy-on-write untuk fork() (opsional)
+
+  [D4] ATA / disk driver yang lebih robust
+       - DMA (Direct Memory Access) untuk read/write lebih cepat
+       - Sector boundary checking
+       - Deteksi drive type (HDD/CDROM)
+
+  [D5] Serial port driver (COM1 debug output)
+       - Print debug ke serial tanpa framebuffer
+       - Berguna untuk QEMU: -serial stdio
+
+  [D6] Keyboard & mouse improvements
+       - Scancode set 2 lengkap
+       - Shift/Ctrl/Alt key combination
+       - Mouse scroll wheel
+
+  [D7] Timer & sleep yang akurat
+       - High-resolution timer via HPET atau LAPIC timer
+       - sleep() dengan akurasi milidetik penuh
+
+================================================================
+TAHAP E — FILESYSTEM & I/O LANJUTAN
+Status: [ ] Belum dimulai
+Prasyarat: Tahap D (sebagian)
+----------------------------------------------------------------
+  [E1] Filesystem MFS2 improvements
+       - Naikkan dari 32 file × 16KB ke 256 file × 64KB
+       - Subdirectory support (folder)
+       - Metadata: timestamp, permission bits
+
+  [E2] ATA writing yang aman
+       - fsync() / flush buffer ke disk
+       - Journaling sederhana (write-ahead log) untuk menghindari
+         data corruption saat OS di-reset
+
+  [E3] Ramdisk / tmpfs
+       - Filesystem di RAM untuk file sementara
+       - Tidak perlu tulis ke disk, lebih cepat
+
+  [E4] Pipe & IPC lanjutan
+       - Named pipes (FIFO)
+       - Shared memory antar proses
+       - Signal (SIGKILL minimal)
+
+================================================================
+TAHAP F — USERSPACE & SHELL LANJUTAN
+Status: [ ] Belum dimulai
+Prasyarat: Tahap D, E
+----------------------------------------------------------------
+  [F1] Shell improvements
+       - Redirect: prog > file.txt
+       - Background process: prog &
+       - Environment variables ($PATH, $HOME)
+       - Built-in: cd, pwd, export, env
+
+  [F2] Standard C library (libc minimal)
+       - printf, sprintf, scanf (ke syscall SYS_PRINT/SYS_GETKEY)
+       - malloc/free tersedia di user space tanpa syscall (brk/mmap)
+       - string.h: memcpy, memset, memmove, strstr, strtok, dll.
+
+  [F3] Dynamic library loading (opsional)
+       - .so shared library sederhana
+       - libc.so agar setiap program tidak embed ulang string.h
+
+  [F4] Program user tambahan
+       - Text editor dengan kursor (bukan notepad sederhana)
+       - Calculator dengan ekspresi kompleks
+       - Image viewer (BMP format)
+       - Clock/calendar widget
+
+================================================================
+TAHAP G — NETWORKING (jangka panjang)
+Status: [ ] Belum dimulai
+Prasyarat: Tahap D, E
+----------------------------------------------------------------
+  [G1] NIC driver — RTL8139 atau E1000 (keduanya didukung QEMU)
+       - MMIO register access
+       - Transmit / receive ring buffer
+
+  [G2] Network stack minimal
+       - ARP, IP, ICMP (ping)
+       - UDP socket
+       - TCP minimal (tanpa congestion control penuh)
+
+  [G3] Socket API untuk user space
+       - socket(), bind(), send(), recv()
+       - Syscall baru: SYS_SOCK_OPEN, SYS_SOCK_SEND, SYS_SOCK_RECV
+
+  [G4] Aplikasi jaringan sederhana
+       - ping utility
+       - HTTP client sederhana (wget-like)
+
+================================================================
+TAHAP H — SMP / MULTI-CORE (jangka jauh)
+Status: [ ] Belum dimulai
+Prasyarat: Tahap D, G
+----------------------------------------------------------------
+  [H1] APIC & IOAPIC initialization
+       - Disable 8259 PIC, aktifkan LAPIC
+       - Per-core timer via LAPIC timer
+
+  [H2] SMP bootstrap
+       - Baca MADT dari ACPI
+       - Kirim INIT/SIPI ke Application Processors
+       - Per-AP GDT, IDT, TSS, stack
+
+  [H3] Spinlock & mutex yang benar
+       - Atomic instructions: LOCK CMPXCHG, XCHG
+       - Per-core scheduler queue
+
+  [H4] NUMA-aware memory allocator (opsional, sangat lanjut)
+
+================================================================
+RINGKASAN URUTAN & STATUS
+================================================================
+
+  [DONE] Foundation  — heap, BSS, interrupt, task, FS, IPC, GUI
+  [DONE] Tahap A     — 32bpp True Color        (24 Maret 2026)
+  [DONE] Tahap B     — Resolusi 1280×720        (26 Maret 2026)
+  [DONE] Tahap B+    — Resolusi 1920×1080       (26 Maret 2026)
+  [DONE] Tahap C     — 64-bit Long Mode         (26 Maret 2026)
+  [    ] Tahap D     — Kernel Stability & Driver
+  [    ] Tahap E     — Filesystem & I/O Lanjutan
+  [    ] Tahap F     — Userspace & Shell Lanjutan
+  [    ] Tahap G     — Networking
+  [    ] Tahap H     — SMP / Multi-core
+
+================================================================
+
 
 ================================================================
 TAHAP A — 32bpp TRUE COLOR

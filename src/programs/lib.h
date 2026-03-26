@@ -118,8 +118,8 @@ typedef struct { int x1, y1, x2, y2; unsigned int color; } GfxLine;
 //   ebx = argumen (pointer, nilai, dll)
 //   return value ada di eax setelah int 0x80
 // ============================================================
-static inline int syscall1(int num, int arg) {
-    int ret;
+static inline long syscall1(long num, long arg) {
+    long ret;
     __asm__ volatile (
         "int $0x80"
         : "=a"(ret)
@@ -129,8 +129,8 @@ static inline int syscall1(int num, int arg) {
 }
 
 // syscall2: eax=num, ebx=arg1, edx=arg2 (3 argumen)
-static inline int syscall2(int num, int arg1, int arg2) {
-    int ret;
+static inline long syscall2(long num, long arg1, long arg2) {
+    long ret;
     __asm__ volatile (
         "int $0x80"
         : "=a"(ret)
@@ -139,13 +139,13 @@ static inline int syscall2(int num, int arg1, int arg2) {
     return ret;
 }
 
-static inline int syscall0(int num) {
-    int ret;
+static inline long syscall0(long num) {
+    long ret;
     __asm__ volatile (
         "int $0x80"
         : "=a"(ret)
         : "a"(num)
-        : "ebx"
+        : "rbx"
     );
     return ret;
 }
@@ -156,7 +156,7 @@ static inline int syscall0(int num) {
 
 // Cetak string ke layar
 static inline void print(const char *msg) {
-    syscall1(SYS_PRINT, (int)msg);
+    syscall1(SYS_PRINT, (long)msg);
 }
 
 // Tunggu input keyboard, kembalikan karakter yang ditekan
@@ -172,12 +172,12 @@ static inline void exit() {
 
 // Alokasikan memori sejumlah size byte, kembalikan pointer (atau 0 jika gagal)
 static inline void* malloc(int size) {
-    return (void*)syscall1(SYS_ALLOC, size);
+    return (void*)syscall1(SYS_ALLOC, (long)size);
 }
 
 // Bebaskan memori yang sebelumnya dialokasikan dengan malloc
 static inline void free(void *ptr) {
-    syscall1(SYS_FREE, (int)ptr);
+    syscall1(SYS_FREE, (long)ptr);
 }
 
 // ============================================================
@@ -241,7 +241,7 @@ static inline void print_int(unsigned int n) {
 // Kembalikan jumlah byte yang disalin, atau 0 jika file tidak ditemukan.
 static inline int fs_read(const char *name, char *buf, int bufsz) {
     (void)bufsz; /* kernel memvalidasi pointer; UI layer bertanggung jawab ukuran buf */
-    return (int)syscall2(SYS_FS_READ, (int)name, (int)buf);
+    return (int)syscall2(SYS_FS_READ, (long)name, (long)buf);
 }
 
 // Tulis file: name = nama file, data = isi file (string)
@@ -251,7 +251,7 @@ static inline int fs_write(const char *name, const char *data) {
     const char *args[2];
     args[0] = name;
     args[1] = data;
-    return syscall1(SYS_FS_WRITE, (int)args);
+    return syscall1(SYS_FS_WRITE, (long)args);
 }
 
 // ============================================================
@@ -261,13 +261,13 @@ static inline int fs_write(const char *name, const char *data) {
 // Kirim pesan ke message queue kernel
 // return 1 sukses, 0 jika queue penuh (maks 8 pesan)
 static inline int msg_send(const char *msg) {
-    return syscall1(SYS_MSG_SEND, (int)msg);
+    return syscall1(SYS_MSG_SEND, (long)msg);
 }
 
 // Ambil satu pesan dari queue ke buffer buf (minimal 64 byte)
 // return 1 jika ada pesan, 0 jika queue kosong
 static inline int msg_recv(char *buf) {
-    return syscall1(SYS_MSG_RECV, (int)buf);
+    return syscall1(SYS_MSG_RECV, (long)buf);
 }
 
 // Kirim sinyal kill ke proses dengan id tertentu
@@ -308,12 +308,12 @@ static inline int pipe_open() {
 
 // Tulis string ke pipe (id = id pipe yang didapat dari pipe_open atau pipe_get_id)
 static inline int pipe_write(int id, const char *msg) {
-    return syscall2(SYS_PIPE_WRITE, id, (int)msg);
+    return syscall2(SYS_PIPE_WRITE, id, (long)msg);
 }
 
 // Baca satu pesan dari pipe ke buf — return bytes dibaca, 0 jika kosong
 static inline int pipe_read(int id, char *buf) {
-    return syscall2(SYS_PIPE_READ, id, (int)buf);
+    return syscall2(SYS_PIPE_READ, id, (long)buf);
 }
 
 // Tutup (bebaskan) pipe
@@ -333,13 +333,13 @@ static inline int pipe_get_id() {
 
 // Tulis string ke device (misal: print ke layar via DEV_VGA)
 static inline int dev_write(int dev_id, const char *msg) {
-    return syscall2(SYS_DEV_WRITE, dev_id, (int)msg);
+    return syscall2(SYS_DEV_WRITE, dev_id, (long)msg);
 }
 
 // Baca satu karakter dari device ke buf (misal: keyboard via DEV_KBD)
 // Return 1 jika ada karakter, 0 jika kosong
 static inline int dev_read(int dev_id, char *buf) {
-    return syscall2(SYS_DEV_READ, dev_id, (int)buf);
+    return syscall2(SYS_DEV_READ, dev_id, (long)buf);
 }
 
 // Kontrol khusus device (cmd dan arg dikemas dalam edx: cmd<<16 | arg)
@@ -355,7 +355,7 @@ static inline int dev_ioctl(int dev_id, int cmd, int arg) {
 typedef struct { int x, y; unsigned int color; } DrawPixelArgs;
 static inline void gfx_pixel(int x, int y, unsigned int color) {
     DrawPixelArgs a = {x, y, color};
-    syscall1(SYS_DRAW_PIXEL, (int)&a);
+    syscall1(SYS_DRAW_PIXEL, (long)&a);
 }
 
 // Isi seluruh layar dengan satu warna
@@ -384,36 +384,36 @@ static inline void yield() {
 
 // Tidur selama ms milidetik
 static inline void sleep_ms(unsigned int ms) {
-    syscall1(SYS_SLEEP, (int)ms);
+    syscall1(SYS_SLEEP, (long)ms);
 }
 
 // Muat dan jalankan program dari filesystem (nama=string null-terminated)
 // Return: task_id jika sukses, -1 jika gagal
 static inline int exec(const char *name) {
-    return syscall1(SYS_EXEC, (int)name);
+    return syscall1(SYS_EXEC, (long)name);
 }
 
 // Gambar persegi panjang terisi menggunakan struct pointer
 // (hindari variable length array di stack)
 static inline void gfx_rect_s(GfxRect *r) {
-    syscall1(SYS_FILL_RECT, (int)r);
+    syscall1(SYS_FILL_RECT, (long)r);
 }
 
 // Gambar garis lurus menggunakan struct pointer
 static inline void gfx_line_s(GfxLine *l) {
-    syscall1(SYS_DRAW_LINE, (int)l);
+    syscall1(SYS_DRAW_LINE, (long)l);
 }
 
 // Shorthand: gambar persegi panjang tanpa deklarasi struct terpisah
 static inline void gfx_rect(int x, int y, int w, int h, unsigned int color) {
     GfxRect r = {x, y, w, h, color};
-    syscall1(SYS_FILL_RECT, (int)&r);
+    syscall1(SYS_FILL_RECT, (long)&r);
 }
 
 // Shorthand: gambar garis tanpa deklarasi struct terpisah
 static inline void gfx_line(int x1, int y1, int x2, int y2, unsigned int color) {
     GfxLine l = {x1, y1, x2, y2, color};
-    syscall1(SYS_DRAW_LINE, (int)&l);
+    syscall1(SYS_DRAW_LINE, (long)&l);
 }
 
 // ============================================================
@@ -430,18 +430,18 @@ typedef struct { int x, y; unsigned char buttons; } MouseState;
 static inline void gfx_char(int x, int y, char c, unsigned int fg, unsigned int bg) {
     typedef struct { int x, y; char c; char _pad[3]; unsigned int fg, bg; } DrawCharArgs;
     DrawCharArgs a = {x, y, c, {0,0,0}, fg, bg};
-    syscall1(SYS_DRAW_CHAR, (int)&a);
+    syscall1(SYS_DRAW_CHAR, (long)&a);
 }
 
 // Gambar string null-terminated dengan font 8x8 di (x,y)
 static inline void gfx_str(int x, int y, const char *s, unsigned int fg, unsigned int bg) {
     GfxStr g = {x, y, s, fg, bg};
-    syscall1(SYS_DRAW_STR, (int)&g);
+    syscall1(SYS_DRAW_STR, (long)&g);
 }
 
 // Baca posisi dan status tombol mouse ke *ms
 static inline void mouse_get(MouseState *ms) {
-    syscall1(SYS_MOUSE_GET, (int)ms);
+    syscall1(SYS_MOUSE_GET, (long)ms);
 }
 
 // ============================================================
@@ -456,7 +456,7 @@ typedef struct { int id, x, y, w, h; const char *label; } WinBtnArgs;
 // Buat window baru, kembalikan id (0-15) atau -1 jika gagal
 static inline int win_create(int x, int y, int w, int h, const char *title) {
     WinCreateArgs a = {x, y, w, h, title};
-    return syscall1(SYS_WIN_CREATE, (int)&a);
+    return syscall1(SYS_WIN_CREATE, (long)&a);
 }
 
 // Tutup dan hapus window
@@ -468,7 +468,7 @@ static inline void win_destroy(int id) {
 static inline void win_draw(int id, int px, int py, const char *s,
                              unsigned int fg, unsigned int bg) {
     WinDrawArgs d = {id, px, py, s, fg, bg};
-    syscall1(SYS_WIN_DRAW, (int)&d);
+    syscall1(SYS_WIN_DRAW, (long)&d);
 }
 
 // Bersihkan area konten window dengan warna bg
@@ -486,14 +486,14 @@ static inline int win_poll(int id) {
 // Tambah tombol ke window — kembalikan idx tombol (0-7) atau -1 jika gagal
 static inline int win_btn_add(int id, int x, int y, int w, int h, const char *label) {
     WinBtnArgs a = {id, x, y, w, h, label};
-    return syscall1(SYS_WIN_BTN_ADD, (int)&a);
+    return syscall1(SYS_WIN_BTN_ADD, (long)&a);
 }
 
 // Ambil koordinat klik konten terakhir (piksel relatif area konten window)
 // Panggil setelah win_poll() return WIN_EVENT_CLICK
 static inline void win_click_pos(int id, int *out_x, int *out_y) {
     int pos[2];
-    syscall2(SYS_WIN_CLICK_POS, id, (int)pos);
+    syscall2(SYS_WIN_CLICK_POS, id, (long)pos);
     *out_x = pos[0];
     *out_y = pos[1];
 }
@@ -504,14 +504,14 @@ static inline void win_click_pos(int id, int *out_x, int *out_y) {
 typedef struct { int cx, cy; unsigned int color; } WinPixelArgs;
 static inline void win_draw_pixel(int id, int cx, int cy, unsigned int color) {
     WinPixelArgs a = {cx, cy, color};
-    syscall2(SYS_WIN_DRAW_PIXEL, id, (int)&a);
+    syscall2(SYS_WIN_DRAW_PIXEL, id, (long)&a);
 }
 
 // Isi persegi panjang di area konten window dengan satu warna (jauh lebih cepat dari win_draw_pixel per-piksel)
 typedef struct { short x, y, w, h; unsigned int color; } WinFillArgs;
 static inline void win_fill_rect(int id, int x, int y, int w, int h, unsigned int color) {
     WinFillArgs a = { (short)x, (short)y, (short)w, (short)h, color };
-    syscall2(SYS_WIN_FILL_RECT, id, (int)&a);
+    syscall2(SYS_WIN_FILL_RECT, id, (long)&a);
 }
 
 // Poll posisi mouse relatif area konten window + status tombol
@@ -519,7 +519,7 @@ static inline void win_fill_rect(int id, int x, int y, int w, int h, unsigned in
 // return: button state (bit0=kiri, bit1=kanan)
 static inline int win_mouse_rel(int id, int *out_x, int *out_y) {
     int buf[3];
-    syscall2(SYS_WIN_MOUSE_REL, id, (int)buf);
+    syscall2(SYS_WIN_MOUSE_REL, id, (long)buf);
     *out_x = buf[0];
     *out_y = buf[1];
     return buf[2];
@@ -537,12 +537,12 @@ static inline void win_restore(int id) {
 
 // List nama file ke buffer (dipisah '\n'), return jumlah file
 static inline int fs_list(char *buf, int bufsz) {
-    return syscall2(SYS_FS_LIST, (int)buf, bufsz);
+    return syscall2(SYS_FS_LIST, (long)buf, bufsz);
 }
 
 // Hapus file berdasarkan nama, return 1 jika sukses
 static inline int fs_delete(const char *name) {
-    return syscall1(SYS_FS_DELETE, (int)name);
+    return syscall1(SYS_FS_DELETE, (long)name);
 }
 
 // Kembalikan jumlah timer tick sejak boot (18.2 tick/detik)

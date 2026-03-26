@@ -30,7 +30,7 @@ void* malloc(uint32_t size) {
 
     /* Simpan IF flag lalu disable interrupt — restore setelah selesai.
      * Tidak memakai sti langsung agar aman dipanggil sebelum IDT siap. */
-    uint32_t saved_flags;
+    uint64_t saved_flags;
     __asm__ volatile ("pushf; pop %0; cli" : "=r"(saved_flags));
 
     BlockHeader *curr = heap_head;
@@ -58,7 +58,7 @@ void* malloc(uint32_t size) {
 
 void free(void *ptr) {
     if (!ptr) return;
-    uint32_t saved_flags;
+    uint64_t saved_flags;
     __asm__ volatile ("pushf; pop %0; cli" : "=r"(saved_flags));
     BlockHeader *block = (BlockHeader*)((uint8_t*)ptr - HEADER_SIZE);
     block->free = 1;
