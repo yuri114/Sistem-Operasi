@@ -77,7 +77,7 @@ Risiko    : Perubahan masif tapi mekanis (search & replace warna).
 
 ================================================================
 TAHAP B — RESOLUSI 1280x720
-Status: [DIKERJAKAN] ← sekarang (24 Maret 2026)
+Status: [SELESAI] ✓ Selesai 26 Maret 2026 — SCREEN_W 1280×720, build OK, test QEMU OK
 Prasyarat: Tahap A selesai ✓
 ----------------------------------------------------------------
 Tujuan     : Naikan resolusi dari 640x480 ke 1280x720 (HD Ready).
@@ -117,7 +117,7 @@ Catatan   : Setelah tahap ini OS sudah 32bpp + 1280x720.
 
 ================================================================
 TAHAP B+ — RESOLUSI 1920x1080 (opsional setelah B)
-Status: [ ] BELUM
+Status: [SELESAI] ✓ Selesai 26 Maret 2026 — SCREEN_W 1920×1080, 8MB LFB mapping, build 172 KB, test QEMU OK
 Prasyarat: Tahap B selesai
 ----------------------------------------------------------------
 LFB Size   : 1920x1080x4 = 8.294.400 byte (~8.3MB)
@@ -134,7 +134,7 @@ LFB Size   : 1920x1080x4 = 8.294.400 byte (~8.3MB)
 
 ================================================================
 TAHAP C — 64-BIT LONG MODE (penulisan ulang arsitektur)
-Status: [ ] BELUM
+Status: [DIKERJAKAN] ← sekarang (26 Maret 2026)
 Prasyarat: Tahap B/B+ selesai dan stabil
 ----------------------------------------------------------------
 Tujuan     : Migrasi dari i386 32-bit PM ke x86_64 Long Mode.
@@ -197,9 +197,9 @@ RINGKASAN URUTAN
 
   [DONE] Kernel foundation (heap, task stack, BSS fix, malloc lock)
   [DONE] FS 32 file, magic MFS2, SYS_FS_READ copy ke userspace
-  [DONE] Tahap A — 32bpp True Color (selesai 24 Maret 2026)
-  [ B  ] Resolusi 1280x720             ← DIKERJAKAN SEKARANG
-  [ B+ ] Resolusi 1920x1080 (opsional)
-  [ C  ] 64-bit Long Mode
+  [DONE] Tahap A  — 32bpp True Color       (selesai 24 Maret 2026)
+  [DONE] Tahap B  — Resolusi 1280×720      (selesai 26 Maret 2026)
+  [DONE] Tahap B+ — Resolusi 1920×1080     (selesai 26 Maret 2026)
+  [ C  ] 64-bit Long Mode                  ← DIKERJAKAN SEKARANG
 
 ================================================================
