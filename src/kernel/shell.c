@@ -1,3 +1,4 @@
+/* shell.c — Command-line shell: input, history, tab-completion, built-in commands */
 #include "shell.h"
 #include "graphics.h"
 #include "memory.h"
@@ -28,21 +29,21 @@ static int hist_head  = 0;  // slot berikutnya untuk ditulis
 static int hist_count = 0;  // jumlah entri tersimpan (maks HISTORY_SIZE)
 static int hist_cursor = -1; // -1 = tidak browse; 0 = paling baru, 1 = sebelumnya
 
-static int str_compare(const char *a, const char *b){
-    int i=0;
+static int str_compare(const char *a, const char *b) {
+    int i = 0;
     while (a[i] != '\0' && b[i] != '\0') {
-        if (a[i] != b[i]) return 0; //tidak sama
+        if (a[i] != b[i]) return 0;
         i++;
     }
-    return a[i] == '\0' && b[i] == '\0'; //sama jika kedua string berakhir bersamaan
+    return a[i] == '\0' && b[i] == '\0';
 }
-static int str_starts_with(const char *str, const char *prefix){
-    int i=0;
+static int str_starts_with(const char *str, const char *prefix) {
+    int i = 0;
     while (prefix[i] != '\0') {
-        if (str[i] != prefix[i]) return 0; //tidak sama
+        if (str[i] != prefix[i]) return 0;
         i++;
     }
-    return 1; //sama jika prefix habis
+    return 1;
 }
 
 static int str_find_space(const char *str) {
@@ -131,17 +132,17 @@ static void shell_tab_complete() {
     }
 }
 
-void outb(uint16_t port, uint8_t val){
-    __asm__ volatile ("outb %0, %1":: "a"(val), "Nd"(port));
-} //deklarasi fungsi outb dari kernel.c
+void outb(uint16_t port, uint8_t val) {
+    __asm__ volatile ("outb %0, %1" :: "a"(val), "Nd"(port));
+}
 
 static void shell_execute(){
     print("\n");
 
     if(str_compare(input_buffer, "help")){
-        set_color(GFX_YELLOW, GFX_BLACK); //warna kuning di hitam untuk judul
+        set_color(GFX_YELLOW, GFX_BLACK);
         print("Perintah yang tersedia:\n");
-        set_color(GFX_WHITE, GFX_BLACK); //warna putih di hitam untuk daftar perintah
+        set_color(GFX_WHITE, GFX_BLACK);
         print("help                 - tampilkan daftar perintah\n");
         print("clear                - bersihkan layar\n");
         print("about                - informasi tentang myOS\n");
@@ -200,27 +201,27 @@ static void shell_execute(){
     }
     else if(str_compare(input_buffer, "reboot")){
         print("Rebooting...\n");
-        outb(0x64, 0xFE); //perintah reboot ke keyboard controller
+        outb(0x64, 0xFE);
     }
     else if(str_compare(input_buffer, "ls")){
-        set_color(GFX_YELLOW, GFX_BLACK); //warna kuning di hitam untuk judul
+        set_color(GFX_YELLOW, GFX_BLACK);
         print("Daftar file:\n");
-        set_color(GFX_WHITE, GFX_BLACK); //warna putih di hitam untuk daftar file
-        fs_list(print); //panggil fs_list dengan fungsi print sebagai callback untuk menampilkan nama file   
+        set_color(GFX_WHITE, GFX_BLACK);
+        fs_list(print);
     }
     else if(str_starts_with(input_buffer, "read ")) {
-        const char *name = input_buffer + 5; //ambil nama file setelah "read "
+        const char *name = input_buffer + 5;
         const char *data = fs_read(name);
         if (data) {
             print(data);
             print("\n");
         }
         else {
-            set_color(GFX_LRED, GFX_BLACK); //warna merah di hitam untuk error
+            set_color(GFX_LRED, GFX_BLACK);
             print("File tidak ditemukan: ");
             print(name);
             print("\n");
-            set_color(GFX_WHITE, GFX_BLACK); //kembalikan warna putih di hitam
+            set_color(GFX_WHITE, GFX_BLACK);
         }
     }
     else if (str_starts_with(input_buffer, "del ")) {
@@ -230,14 +231,14 @@ static void shell_execute(){
             print("File dihapus: ");
             print(name);
             print("\n");
-            set_color(GFX_WHITE, GFX_BLACK); //kembalikan warna putih di hitam
+            set_color(GFX_WHITE, GFX_BLACK);
         }
         else {
-            set_color(GFX_LRED, GFX_BLACK); //warna merah di hitam untuk error
+            set_color(GFX_LRED, GFX_BLACK);
             print("File tidak ditemukan: ");
             print(name);
             print("\n");
-            set_color(GFX_WHITE, GFX_BLACK); //kembalikan warna putih di hitam
+            set_color(GFX_WHITE, GFX_BLACK);
         }
     }
     else if(str_compare(input_buffer, "write")){
@@ -262,13 +263,13 @@ static void shell_execute(){
                 print("File disimpan: ");
                 print(name);
                 print("\n");
-                set_color(GFX_WHITE, GFX_BLACK); //kembalikan warna putih di hitam
+                set_color(GFX_WHITE, GFX_BLACK);
             }
             else {
-                set_color(GFX_LRED, GFX_BLACK); //warna merah di hitam untuk error
+                set_color(GFX_LRED, GFX_BLACK);
                 print("Filesystem penuh!");
                 print("\n");
-                set_color(GFX_WHITE, GFX_BLACK); //kembalikan warna putih di hitam
+                set_color(GFX_WHITE, GFX_BLACK);
             }
         }
     }
@@ -276,36 +277,35 @@ static void shell_execute(){
         uint32_t cr0 = paging_get_cr0();
         char buf[20];
         if (cr0 & 0x80000000) {
-            set_color(GFX_LGREEN, GFX_BLACK); //warna hijau di hitam untuk info
+            set_color(GFX_LGREEN, GFX_BLACK);
             print("Paging aktif");
         }
         else {
-            set_color(GFX_LRED, GFX_BLACK); //warna merah di hitam untuk error
+            set_color(GFX_LRED, GFX_BLACK);
             print("Paging tidak aktif");
         }
         print("\nCR0: 0x");
         itoa(cr0, buf);
         print(buf);
         print("\n");
-        set_color(GFX_WHITE, GFX_BLACK); //kembalikan warna putih di hitam
+        set_color(GFX_WHITE, GFX_BLACK);
     }
     else if(str_starts_with(input_buffer, "exec ")) {
-        const char *name = input_buffer + 5; // ambil nama setelah "exec "
+        const char *name = input_buffer + 5;
         uint32_t size;
         const uint8_t *data = fs_read_bin(name, &size);
         if (!data) {
             print("exec: file tidak ditemukan\n");
         } else {
-            // buat page directory baru khusus untuk proses ini (isolasi penuh)
+            /* Buat page directory baru, isolasi penuh untuk proses ini */
             uint32_t *proc_dir = vmm_create_page_dir();
             uint32_t entry = elf_load(data, size, proc_dir);
             if (!entry) {
                 print("exec: gagal memuat ELF\n");
             } else {
-                // alokasikan user stack dari PMM, petakan di virtual 0x400000
                 uint32_t stack_phys = pmm_alloc_frame();
                 vmm_map_page(proc_dir, 0x400000, stack_phys, 7);
-                uint32_t user_esp = 0x400000 + PAGE_SIZE; // puncak stack (tumbuh ke bawah)
+                uint32_t user_esp = 0x400000 + PAGE_SIZE;
                 task_create_user(entry, proc_dir, user_esp, name);
                 print("exec: program dimulai\n");
             }
@@ -322,13 +322,11 @@ static void shell_execute(){
             if (!task_is_used(i)) continue;
             char buf[8];
             itoa(i, buf); print(buf); print("   ");
-            // priority dengan warna
             int prio = task_get_priority(i);
-            if (prio == 3)      set_color(GFX_LGREEN, GFX_BLACK); // hijau = tinggi
-            else if (prio == 2) set_color(GFX_YELLOW, GFX_BLACK); // kuning = normal
-            else                set_color(GFX_LGRAY, GFX_BLACK); // abu = rendah
+            if (prio == 3)      set_color(GFX_LGREEN, GFX_BLACK);
+            else if (prio == 2) set_color(GFX_YELLOW, GFX_BLACK);
+            else                set_color(GFX_LGRAY, GFX_BLACK);
             itoa(prio, buf); print(buf); print("     ");
-            // status berdasarkan nilai sesungguhnya
             int st = task_get_status(i);
             if (i == cur) {
                 set_color(GFX_LGREEN, GFX_BLACK);
@@ -349,13 +347,10 @@ static void shell_execute(){
         }
     }
     else if(str_starts_with(input_buffer, "kill ")) {
-        // parse angka id dari "kill <id>"
+        /* parse angka id dari "kill <id>" */
         const char *p = input_buffer + 5;
         int id = 0;
-        while (*p >= '0' && *p <= '9') {
-            id = id * 10 + (*p - '0');
-            p++;
-        }
+        while (*p >= '0' && *p <= '9') { id = id * 10 + (*p - '0'); p++; }
         if (id == 0) {
             set_color(GFX_LRED, GFX_BLACK);
             print("kill: tidak dapat mematikan shell (id 0)\n");
@@ -373,7 +368,7 @@ static void shell_execute(){
         }
     }
     else if(str_starts_with(input_buffer, "setprio ")) {
-        // parse: "setprio <id> <prio>"
+        /* parse: "setprio <id> <prio>" */
         const char *p = input_buffer + 8;
         int id = 0, prio = 0;
         while (*p >= '0' && *p <= '9') { id = id * 10 + (*p - '0'); p++; }
@@ -398,11 +393,9 @@ static void shell_execute(){
         }
     }
     else if(str_starts_with(input_buffer, "pipe ")) {
-        // Sintaks: pipe <prog1> <prog2>
-        // Buat pipe, jalankan prog1 sebagai writer dan prog2 sebagai reader,
-        // keduanya mewarisi pipe_id yang sama.
+        /* Sintaks: pipe <prog1> <prog2> */
         const char *rest = input_buffer + 5;
-        // Pisahkan nama prog1 dan prog2
+        /* Pisahkan nama prog1 dan prog2 */
         char prog1[32], prog2[32];
         int j = 0;
         while (rest[j] && rest[j] != ' ' && j < 31) { prog1[j] = rest[j]; j++; }
@@ -438,40 +431,40 @@ static void shell_execute(){
                     if (!d2) { print("pipe: file tidak ditemukan: "); print(prog2); print("\n"); }
                     set_color(GFX_WHITE, GFX_BLACK);
                 } else {
-                    // Buat dan jalankan prog1
-                    uint32_t *dir1 = vmm_create_page_dir();
-                    uint32_t entry1 = elf_load(d1, sz1, dir1);
-                    if (entry1) {
-                        uint32_t sp1 = pmm_alloc_frame();
-                        vmm_map_page(dir1, 0x400000, sp1, 7);
-                        int tid1 = task_create_user(entry1, dir1, 0x400000 + PAGE_SIZE, prog1);
-                        task_set_pipe(tid1, pipe_fd);
-                    }
-
-                    // Buat dan jalankan prog2
-                    uint32_t *dir2 = vmm_create_page_dir();
-                    uint32_t entry2 = elf_load(d2, sz2, dir2);
-                    if (entry2) {
-                        uint32_t sp2 = pmm_alloc_frame();
-                        vmm_map_page(dir2, 0x400000, sp2, 7);
-                        int tid2 = task_create_user(entry2, dir2, 0x400000 + PAGE_SIZE, prog2);
-                        task_set_pipe(tid2, pipe_fd);
-                    }
-
-                    if (entry1 && entry2) {
-                        set_color(GFX_LGREEN, GFX_BLACK);
-                        print("pipe: ");
-                        print(prog1);
-                        print(" | ");
-                        print(prog2);
-                        print(" dimulai (pipe id=");
-                        char pbuf[8]; itoa(pipe_fd, pbuf); print(pbuf);
-                        print(")\n");
-                        set_color(GFX_WHITE, GFX_BLACK);
-                    }
+                /* Buat dan jalankan prog1 (writer) */
+                uint32_t *dir1 = vmm_create_page_dir();
+                uint32_t entry1 = elf_load(d1, sz1, dir1);
+                if (entry1) {
+                    uint32_t sp1 = pmm_alloc_frame();
+                    vmm_map_page(dir1, 0x400000, sp1, 7);
+                    int tid1 = task_create_user(entry1, dir1, 0x400000 + PAGE_SIZE, prog1);
+                    task_set_pipe(tid1, pipe_fd);
                 }
-            }
-        }
+
+                /* Buat dan jalankan prog2 (reader) */
+                uint32_t *dir2 = vmm_create_page_dir();
+                uint32_t entry2 = elf_load(d2, sz2, dir2);
+                if (entry2) {
+                    uint32_t sp2 = pmm_alloc_frame();
+                    vmm_map_page(dir2, 0x400000, sp2, 7);
+                    int tid2 = task_create_user(entry2, dir2, 0x400000 + PAGE_SIZE, prog2);
+                    task_set_pipe(tid2, pipe_fd);
+                }
+
+                if (entry1 && entry2) {
+                    set_color(GFX_LGREEN, GFX_BLACK);
+                    print("pipe: ");
+                    print(prog1);
+                    print(" | ");
+                    print(prog2);
+                    print(" dimulai (pipe id=");
+                    char pbuf[8]; itoa(pipe_fd, pbuf); print(pbuf);
+                    print(")\n");
+                    set_color(GFX_WHITE, GFX_BLACK);
+                }
+                }   /* end else (!d1 || !d2) */
+            }       /* end else (pipe_fd >= 0) */
+        }           /* end else (rest[j] == ' ') */
     }
     else {
         /* Cek apakah ada operator ' | ' (pipe inline) */
@@ -542,17 +535,17 @@ static void shell_execute(){
         } else {
             print(input_buffer);
             print("\n");
-            set_color(GFX_WHITE, GFX_BLACK); //kembalikan warna putih di hitam
+            set_color(GFX_WHITE, GFX_BLACK);
         }
     }
 }
 
-void shell_init(){
-    set_color(GFX_YELLOW, GFX_BLACK); //warna kuning di hitam
+void shell_init() {
+    set_color(GFX_YELLOW, GFX_BLACK);
     print("\nKetik 'help' untuk daftar perintah\n");
-    set_color(GFX_LGREEN, GFX_BLACK); //warna hijau di hitam
-    print("> "); //prompt
-    set_color(GFX_WHITE, GFX_BLACK); //warna putih di hitam untuk input
+    set_color(GFX_LGREEN, GFX_BLACK);
+    print("> ");
+    set_color(GFX_WHITE, GFX_BLACK);
 }
 
 void shell_process_char(char c){
@@ -565,7 +558,7 @@ void shell_process_char(char c){
             for (i = 0; i <= input_len; i++) history[hist_head][i] = input_buffer[i];
             hist_head = (hist_head + 1) % HISTORY_SIZE;
             if (hist_count < HISTORY_SIZE) hist_count++;
-            hist_cursor = -1;
+            hist_cursor = -1;  /* reset browse position */
         }
 
         input_len = 0;
@@ -580,12 +573,11 @@ void shell_process_char(char c){
             backspace_char();
         }
     }
-    else if (c == '\x01') {                 /* ↑ up arrow: maju ke history lebih lama */
+    else if (c == '\x01') {                 /* ↑ up: maju ke history lebih lama */
         if (hist_count == 0) return;
         if (hist_cursor == -1) hist_cursor = 0;
         else if (hist_cursor < hist_count - 1) hist_cursor++;
-        else return; // sudah di entri tertua
-        // hapus input sekarang dan tampilkan entri history
+        else return;
         int i;
         for (i = 0; i < input_len; i++) backspace_char();
         int idx = (hist_head - 1 - hist_cursor + HISTORY_SIZE * 8) % HISTORY_SIZE;
@@ -598,7 +590,7 @@ void shell_process_char(char c){
         input_buffer[i] = '\0';
         input_len = i;
     }
-    else if (c == '\x02') {                 /* ↓ down arrow: kembali ke history lebih baru */
+    else if (c == '\x02') {                 /* ↓ down: kembali ke history lebih baru */
         if (hist_cursor < 0) return;
         int i;
         for (i = 0; i < input_len; i++) backspace_char();
@@ -624,8 +616,8 @@ void shell_process_char(char c){
         shell_tab_complete();
     }
     else {
-        if (input_len < 255){
-            hist_cursor = -1; // keluar dari mode browse saat user mengetik
+        if (input_len < 255) {
+            hist_cursor = -1;  /* keluar dari mode browse saat mengetik */
             input_buffer[input_len] = c;
             input_len++;
             print_char(c);

@@ -103,11 +103,13 @@ uint32_t* vmm_create_page_dir() {
     }
 
     /* Salin mapping VBE LFB ke page directory proses baru.
-     * Gunakan runtime address (gfx_lfb_addr) bukan hardcode 0xE0000000. */
+     * Gunakan runtime address (gfx_lfb_addr) bukan hardcode 0xE0000000.
+     * LFB membutuhkan 8MB (2 PD entries) untuk 1920×1080×32bpp. */
     extern uint32_t gfx_lfb_addr;
     uint32_t lfb_pd_idx = gfx_lfb_addr >> 22;
     if (lfb_pd_idx > 0 && (page_directory[lfb_pd_idx] & 1)) {
-        dir[lfb_pd_idx] = page_directory[lfb_pd_idx]; /* share VBE page table */
+        dir[lfb_pd_idx]     = page_directory[lfb_pd_idx];      /* share block 0 (4MB) */
+        dir[lfb_pd_idx + 1] = page_directory[lfb_pd_idx + 1];  /* share block 1 (4MB) */
     }
 
     return dir;
@@ -124,7 +126,7 @@ void vmm_free_user_memory(uint32_t *page_dir) {
 
     int i, j;
     for (i = 0; i < 1024; i++) {
-        if ((uint32_t)i == lfb_pd_idx) continue;  /* VBE shared — jangan disentuh */
+        if ((uint32_t)i == lfb_pd_idx || (uint32_t)i == lfb_pd_idx + 1) continue;  /* VBE shared — jangan disentuh */
         if (!(page_dir[i] & 1)) continue;          /* entry tidak present, skip */
 
         uint32_t *pt = (uint32_t*)(page_dir[i] & 0xFFFFF000);

@@ -1,82 +1,73 @@
+/* pic.c — Inisialisasi 8259A Programmable Interrupt Controller (PIC) */
 #include "pic.h"
 
-/* Port I/O untuk PIC */
-#define PIC1_COMMAND 0X20   /* Master PIC command port */
-#define PIC1_DATA    0X21   /* Master PIC data port */
-#define PIC2_COMMAND 0XA0   /* Slave PIC command port */
-#define PIC2_DATA    0XA1   /* Slave PIC data port */
+/* -------------------------------------------------------------------
+ * Port I/O PIC
+ * ------------------------------------------------------------------- */
+#define PIC1_COMMAND  0x20   /* master: command */
+#define PIC1_DATA     0x21   /* master: data / IMR */
+#define PIC2_COMMAND  0xA0   /* slave: command */
+#define PIC2_DATA     0xA1   /* slave: data / IMR */
+#define PIC_EOI       0x20   /* End-of-Interrupt */
 
-#define PIC_EOI      0x20   /* End-of-interrupt command code */
+/* ICW1 */
+#define ICW1_INIT     0x10   /* bit wajib */
+#define ICW1_ICW4     0x01   /* akan diikuti ICW4 */
+/* ICW4 */
+#define ICW4_8086     0x01   /* mode 8086 (bukan 8080) */
 
-/* ICW1 - Initialization Command Word 1 */
-#define ICW1_INIT    0x10   /* harus selalu di-set */
-#define ICW1_ICW4    0x01   /* akan ada ICW4 */
-
-/* ICW4 - Initialization Command Word 4 */
-#define ICW4_8086    0x01   /* mode 8086 (bukan 8080) */
-
-/* Fungsi bantu untuk I/O port */
-static inline void outb(uint16_t port, uint8_t value){
-    __asm__ volatile ("outb %0, %1":: "a"(value), "Nd"(port));
+/* -------------------------------------------------------------------
+ * Helper I/O
+ * ------------------------------------------------------------------- */
+static inline void outb(uint16_t port, uint8_t value) {
+    __asm__ volatile ("outb %0, %1" :: "a"(value), "Nd"(port));
 }
-
-static inline uint8_t inb(uint16_t port){
-    uint8_t value;
-    __asm__ volatile ("inb %1, %0" : "=a"(value) : "Nd"(port));
-    return value;
+static inline uint8_t inb(uint16_t port) {
+    uint8_t v;
+    __asm__ volatile ("inb %1, %0" : "=a"(v) : "Nd"(port));
+    return v;
 }
+static inline void io_wait() { outb(0x80, 0); }  /* beri waktu PIC memproses */
 
-static inline void io_wait(){
-    /* tulis ke port 0x80 untuk kasih waktu PIC memproses */
-    outb(0x80, 0);
-}
+/* -------------------------------------------------------------------
+ * API
+ * ------------------------------------------------------------------- */
 
-void pic_init(){
-    /* Simpan mask lama (opsional)*/
+/*
+ * Inisialisasi ulang kedua PIC dengan ICW1–ICW4.
+ *
+ * Vektor IRQ setelah remapping:
+ *   Master IRQ0–7  → INT 32–39 (0x20–0x27)
+ *   Slave  IRQ8–15 → INT 40–47 (0x28–0x2F)
+ *
+ * IMR setelah init:
+ *   Master 0xF8 = unmask IRQ0 (timer), IRQ1 (keyboard), IRQ2 (cascade)
+ *   Slave  0xFF = semua di-mask (handler didaftarkan via mouse_init, dll.)
+ */
+void pic_init() {
+    /* ICW1: mulai sequence inisialisasi */
+    outb(PIC1_COMMAND, ICW1_INIT | ICW1_ICW4); io_wait();
+    outb(PIC2_COMMAND, ICW1_INIT | ICW1_ICW4); io_wait();
 
-    /*Mulai sequence inisialisasi (ICW1)*/
-    outb(PIC1_COMMAND, ICW1_INIT | ICW1_ICW4); /* Master PIC*/
-    io_wait();
-    outb(PIC2_COMMAND, ICW1_INIT | ICW1_ICW4); /* Slave PIC*/
-    io_wait();
-     
-    /*  ICW2: set offset vector interrupt
-        Master PIC -> IRQ0 mulai dari interrupt 32 (0x20)
-        Slave PIC  -> IRQ8 mulai dari interrupt 40 (0x28) */
-    outb(PIC1_DATA, 0x20); /* Master PIC offset */
-    io_wait();
-    outb(PIC2_DATA, 0x28); /* Slave PIC offset */
-    io_wait();
+    /* ICW2: offset vektor */
+    outb(PIC1_DATA, 0x20); io_wait();   /* master: IRQ0 → INT 32 */
+    outb(PIC2_DATA, 0x28); io_wait();   /* slave:  IRQ8 → INT 40 */
 
-    /*  ICW3: hubungan master dan slave
-        Master: slave terhubung ke IRQ2 (bit 2 = 0b00000100)
-        slave : identitas slave = 2*/
-    outb(PIC1_DATA, 0x04); /* Master PIC: slave di IRQ2 */
-    io_wait();
-    outb(PIC2_DATA, 0x02); /* Slave PIC: identitas = 2 */
-    io_wait();
+    /* ICW3: hubungan master–slave */
+    outb(PIC1_DATA, 0x04); io_wait();   /* master: slave di IRQ2 (bit 2) */
+    outb(PIC2_DATA, 0x02); io_wait();   /* slave: cascade identity = 2 */
 
     /* ICW4: mode 8086 */
-    outb(PIC1_DATA, ICW4_8086);
-    io_wait();
-    outb(PIC2_DATA, ICW4_8086);
-    io_wait();
+    outb(PIC1_DATA, ICW4_8086); io_wait();
+    outb(PIC2_DATA, ICW4_8086); io_wait();
 
-    /* Mask IRQ:
-     * Master (IRQ0-7): hanya buka IRQ0 (timer=bit0) dan IRQ1 (keyboard=bit1).
-     * IRQ2 (cascade slave) juga dibuka agar future slave IRQ bisa didaftarkan.
-     * bit = 0 → unmask (aktif), bit = 1 → mask (non-aktif)
-     * 0xF8 = 1111 1000: unmask IRQ0=0, IRQ1=1, IRQ2=2 */
-    outb(PIC1_DATA, 0xF8); /* Master: aktifkan IRQ0 (timer), IRQ1 (kbd), IRQ2 (cascade) */
-    outb(PIC2_DATA, 0xFF); /* Slave: semua di-mask (belum ada handler) */
+    /* IMR: aktifkan hanya IRQ0, IRQ1, IRQ2 di master */
+    outb(PIC1_DATA, 0xF8);
+    outb(PIC2_DATA, 0xFF);
 }
 
-void pic_send_eoi(uint8_t irq){
-    /*Jika IRQ dari slave (IRQ8-IRQ15), kirim EOI ke slave dulu */
-    if (irq >= 8) {
-        /* Jika IRQ dari slave PIC, kirim EOI ke slave dulu */
-        outb(PIC2_COMMAND, PIC_EOI);
-    }
-    /* Kirim EOI ke master PIC */
+/* Kirim EOI ke master (dan slave jika IRQ ≥ 8). */
+void pic_send_eoi(uint8_t irq) {
+    if (irq >= 8) outb(PIC2_COMMAND, PIC_EOI);
     outb(PIC1_COMMAND, PIC_EOI);
 }

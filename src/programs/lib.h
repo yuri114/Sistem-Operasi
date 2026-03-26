@@ -87,8 +87,8 @@
 #define KBD_IOCTL_FLUSH      0  // kosongkan buffer keyboard
 
 // Dimensi layar — cocok dengan graphics.h
-#define SCREEN_W  1280
-#define SCREEN_H  720
+#define SCREEN_W  1920
+#define SCREEN_H  1080
 
 // Warna 32bpp True Color (0x00RRGGBB) — cocok dengan VBE 32bpp linear frame buffer
 #define GFX_BLACK    0x00000000u

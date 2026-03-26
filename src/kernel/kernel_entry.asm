@@ -1,78 +1,119 @@
+; ================================================================
+; kernel_entry.asm — Titik Masuk Kernel (32-bit Protected Mode)
+;
+; Dipanggil langsung oleh bootloader (jmp KERNEL_OFFSET = 0x8000).
+; Tiga tugas sebelum kernel_main():
+;   1. Zero BSS (termasuk page_directory & page_table)
+;   2. Pasang kernel GDT sendiri (GDT bootloader bisa tertimpa BSS)
+;   3. Reload CS via far jump, lalu panggil kernel_main()
+; ================================================================
+
 [BITS 32]
 [EXTERN kernel_main]
 
 extern __bss_start
 extern __bss_end
 
-; 1) Zero BSS (termasuk page_directory & page_table)
-xor eax, eax
-mov edi, __bss_start
-mov ecx, __bss_end
-sub ecx, edi
-rep stosb
+; ----------------------------------------------------------------
+; 1. Nol-kan seluruh BSS
+; ----------------------------------------------------------------
+    xor eax, eax
+    mov edi, __bss_start
+    mov ecx, __bss_end
+    sub ecx, edi
+    rep stosb
 
-; 2) Reload GDT dari kernel sendiri (GDT bootloader di 0x7c78 sudah tertimpa BSS zeroing)
-lgdt [kernel_gdt_ptr]
+; ----------------------------------------------------------------
+; 2. Pasang GDT kernel (GDT bootloader di ~0x7C78 bisa tertimpa
+;    oleh zeroing BSS di atas — gunakan GDT yang ada di .text ini)
+; ----------------------------------------------------------------
+    lgdt [kernel_gdt_ptr]
 
-; 3) Far jump untuk reload CS dari kernel GDT
-jmp 0x08:flush_cs
+; ----------------------------------------------------------------
+; 3. Far jump untuk flush prefetch queue dan reload CS
+; ----------------------------------------------------------------
+    jmp 0x08:flush_cs
 
+; ----------------------------------------------------------------
+; flush_cs — reload semua segment registers ke DATA_SEG kernel,
+;            lalu panggil kernel_main()
+; ----------------------------------------------------------------
 flush_cs:
-    mov ax, 0x10    ; data segment selector
+    mov ax, 0x10            ; data segment selector (0x10)
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     mov ss, ax
 
-call kernel_main
-jmp $
+    ; Diagnostik: tulis penanda 'EL' ke VGA text buffer
+    mov word [0xB8004], 0x0F45  ; 'E' putih di atas hitam
+    mov word [0xB8006], 0x0F4C  ; 'L'
 
-; ===== Kernel GDT (sama seperti GDT bootloader, tapi disimpan di .text section) =====
+    call kernel_main
+
+    ; Seharusnya tidak pernah dicapai
+    jmp $
+
+; ================================================================
+; GDT Kernel — Disimpan di .text agar selalu dapat diakses
+;
+;   0x00  null        — wajib
+;   0x08  code ring-0 — selector CS kernel
+;   0x10  data ring-0 — selector DS/ES/FS/GS/SS kernel
+;   0x18  code ring-3 — selector CS user  (pakai 0x1B = 0x18|3)
+;   0x20  data ring-3 — selector DS user  (pakai 0x23 = 0x20|3)
+;   0x28  TSS         — diisi oleh tss_init() dari C
+; ================================================================
 kernel_gdt:
-    ; Entry 0: Null descriptor (wajib)
+
+    ; entry 0: null (wajib)
     dq 0
 
-    ; Entry 1: Code segment (selector = 0x08)
-    dw 0xFFFF           ; limit [0:15]
-    dw 0x0000           ; base  [0:15]
-    db 0x00             ; base  [16:23]
-    db 10011010b        ; access: present, ring0, code, readable
-    db 11001111b        ; flags: 32-bit, 4KB granularity
-    db 0x00             ; base  [24:31]
+    ; entry 1: code ring-0  (selector 0x08)
+    dw 0xFFFF               ; limit [15:0]
+    dw 0x0000               ; base  [15:0]
+    db 0x00                 ; base  [23:16]
+    db 10011010b            ; P=1 DPL=0 S=1 Type=exec/read
+    db 11001111b            ; G=4KB D=32bit limit[19:16]=0xF
+    db 0x00                 ; base  [31:24]
 
-    ; Entry 2: Data segment (selector = 0x10)
-    dw 0xFFFF           ; limit [0:15]
-    dw 0x0000           ; base  [0:15]
-    db 0x00             ; base  [16:23]
-    db 10010010b        ; access: present, ring0, data, writable
-    db 11001111b        ; flags: 32-bit, 4KB granularity
-    db 0x00             ; base  [24:31]
+    ; entry 2: data ring-0  (selector 0x10)
+    dw 0xFFFF               ; limit [15:0]
+    dw 0x0000               ; base  [15:0]
+    db 0x00                 ; base  [23:16]
+    db 10010010b            ; P=1 DPL=0 S=1 Type=data/write
+    db 11001111b            ; G=4KB D=32bit limit[19:16]=0xF
+    db 0x00                 ; base  [31:24]
 
-    ; Entry 3: User Code segment (ring 3) selector 0x18, pakai 0x1B (|3)
+    ; entry 3: code ring-3  (selector 0x1B = 0x18|3)
 user_code_desc:
-    dw 0xFFFF
-    dw 0x0000
-    db 0x00
-    db 11111010b        ; present = 1, ring = 3, code, readable
-    db 11001111b
-    db 0x00
+    dw 0xFFFF               ; limit [15:0]
+    dw 0x0000               ; base  [15:0]
+    db 0x00                 ; base  [23:16]
+    db 11111010b            ; P=1 DPL=3 S=1 Type=exec/read
+    db 11001111b            ; G=4KB D=32bit limit[19:16]=0xF
+    db 0x00                 ; base  [31:24]
 
-    ; Entry 4: User Data segment (ring 3) selector 0x20, pakai 0x23 (|3)
+    ; entry 4: data ring-3  (selector 0x23 = 0x20|3)
 user_data_desc:
-    dw 0xFFFF
-    dw 0x0000
-    db 0x00
-    db 11110010b        ; present = 1, ring = 3, code, readable
-    db 11001111b
-    db 0x00
-    ; Entry 5: TSS descriptor (diisi nanti olehj tss_init())
+    dw 0xFFFF               ; limit [15:0]
+    dw 0x0000               ; base  [15:0]
+    db 0x00                 ; base  [23:16]
+    db 11110010b            ; P=1 DPL=3 S=1 Type=data/write
+    db 11001111b            ; G=4KB D=32bit limit[19:16]=0xF
+    db 0x00                 ; base  [31:24]
+
+    ; entry 5: TSS  (selector 0x28) — 8 byte diisi oleh tss_init()
 tss_desc:
-    dq 0                ; 8 byte kosong dulu, diisi oleh C
+    dq 0
     global tss_desc
 
 kernel_gdt_end:
 
+; ----------------------------------------------------------------
+; GDT pointer — dimuat oleh lgdt di atas
+; ----------------------------------------------------------------
 kernel_gdt_ptr:
-    dw kernel_gdt_end - kernel_gdt - 1   ; ukuran GDT (bytes - 1)
-    dd kernel_gdt                          ; alamat GDT
+    dw kernel_gdt_end - kernel_gdt - 1     ; ukuran GDT dalam byte minus 1
+    dd kernel_gdt                           ; alamat linear kernel_gdt

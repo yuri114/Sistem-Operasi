@@ -1,3 +1,4 @@
+/* memory.c — Alokator heap fisik kernel (first-fit, coalescing free) */
 #include "memory.h"
 
 #define HEAP_START 0x100000u  /* 1MB — awal heap kernel */

@@ -38,8 +38,6 @@ irq0:
     extern task_switch
     extern current_esp
     extern next_esp
-
-    ;di dalam irq0, setelah call timer_handler dan sebelum pop eax
     call task_switch
 
     ; simpan ESP task sekarang (skip jika 0 = bootstrap task 0)

@@ -322,8 +322,8 @@ void kernel_main(){
     paging_map_vbe(lfb_addr);
     vga_dbg[5] = 0x0F4D; /* 'M' = map OK */
 
-    /* 3. Set mode grafis 1280x720, update pointer framebuffer, inisialisasi */
-    vbe_set_mode(1280, 720, 32);
+    /* 3. Set mode grafis 1920x1080, update pointer framebuffer, inisialisasi */
+    vbe_set_mode(1920, 1080, 32);
     graphics_set_fb(lfb_addr);
     graphics_init();
     clear_screen();

@@ -1,39 +1,51 @@
+/* graphics.c — Primitif grafis 32bpp untuk VBE Linear Framebuffer */
 #include "graphics.h"
 #include "font8x8.h"
 #include <stdint.h>
 
-/* Alamat LFB runtime — diupdate oleh graphics_set_fb() sebelum graphics_init() */
+/* -------------------------------------------------------------------
+ * State global
+ * ------------------------------------------------------------------- */
+
+/* Alamat fisik LFB — diperbarui oleh graphics_set_fb() */
 uint32_t gfx_lfb_addr = 0xE0000000U;
 
-/* Pointer framebuffer 32bpp — diupdate bersamaan dengan gfx_lfb_addr */
+/* Pointer tulis langsung ke framebuffer 32bpp */
 static volatile uint32_t *fb = (volatile uint32_t *)0xE0000000U;
 
-/* Set alamat framebuffer dari hasil PCI scan (vbe_find_lfb()) */
+/* -------------------------------------------------------------------
+ * Inisialisasi
+ * ------------------------------------------------------------------- */
+
+/* Atur alamat LFB baru (hasil PCI scan vbe_find_lfb). */
 void graphics_set_fb(uint32_t addr) {
     gfx_lfb_addr = addr;
-    fb = (volatile uint32_t *)addr;
+    fb           = (volatile uint32_t *)addr;
 }
 
-/* Inisialisasi grafis: bersihkan layar dengan warna hitam */
+/* Bersihkan layar ke warna hitam. */
 void graphics_init() {
     fill_screen(GFX_BLACK);
 }
 
-/* Gambar satu piksel di koordinat (x, y) dengan warna tertentu.
- * Koordinat di luar batas layar diabaikan (clipping). */
+/* -------------------------------------------------------------------
+ * Primitif dasar
+ * ------------------------------------------------------------------- */
+
+/* Tulis satu piksel; koordinat di luar batas diabaikan (clipping). */
 void draw_pixel(int x, int y, uint32_t color) {
     if ((unsigned int)x >= SCREEN_W || (unsigned int)y >= SCREEN_H) return;
     fb[y * SCREEN_W + x] = color;
 }
 
-/* Isi seluruh layar dengan satu warna — 32bpp langsung, satu tulis per piksel. */
+/* Isi seluruh layar dengan satu warna. */
 void fill_screen(uint32_t color) {
     int i;
     for (i = 0; i < SCREEN_W * SCREEN_H; i++)
         fb[i] = color;
 }
 
-/* Gambar persegi panjang terisi warna di (x,y), ukuran w x h piksel */
+/* Isi persegi panjang (x, y, w, h) dengan satu warna. */
 void fill_rect(int x, int y, int w, int h, uint32_t color) {
     int px, py;
     for (py = y; py < y + h; py++)
@@ -41,7 +53,7 @@ void fill_rect(int x, int y, int w, int h, uint32_t color) {
             draw_pixel(px, py, color);
 }
 
-/* Gambar garis lurus dari (x1,y1) ke (x2,y2) — algoritma Bresenham */
+/* Gambar garis dari (x1,y1) ke (x2,y2) — algoritma Bresenham. */
 void draw_line(int x1, int y1, int x2, int y2, uint32_t color) {
     int dx = x2 - x1, dy = y2 - y1;
     int sx = (dx > 0) ? 1 : -1;
@@ -59,8 +71,11 @@ void draw_line(int x1, int y1, int x2, int y2, uint32_t color) {
     }
 }
 
-/* Gambar satu karakter ASCII menggunakan font 8x8 bitmap di piksel (x, y).
- * fg = warna foreground (karakter), bg = warna background (sel). */
+/* -------------------------------------------------------------------
+ * Teks
+ * ------------------------------------------------------------------- */
+
+/* Gambar satu karakter 8x8 bitmap di piksel (x, y). */
 void draw_char_gfx(int x, int y, char c, uint32_t fg, uint32_t bg) {
     const uint8_t *glyph = font8x8[(unsigned char)c & 0x7F];
     int row, col;
@@ -73,15 +88,15 @@ void draw_char_gfx(int x, int y, char c, uint32_t fg, uint32_t bg) {
     }
 }
 
-/* Gambar karakter 4x8 (half-width) dengan subsampling font 8x8.
- * Ambil bit ke-7, 5, 3, 1 (satu bit dari tiap pasang kolom asli).
- * Hasilnya: 80 kolom muat di 320px (320/4=80), bentuk huruf terjaga. */
+/*
+ * Gambar karakter half-width 4x8 dengan subsampling font 8x8.
+ * Setiap kolom output mengambil bit ke-7, 5, 3, 1 dari glyph asli.
+ */
 void draw_char_4x8(int x, int y, char c, uint32_t fg, uint32_t bg) {
     const uint8_t *glyph = font8x8[(unsigned char)c & 0x7F];
     int row, col;
     for (row = 0; row < 8; row++) {
         uint8_t b = glyph[row];
-        /* Ambil bit 7, 5, 3, 1 (posisi ganjil dari kiri) */
         for (col = 0; col < 4; col++) {
             uint32_t pixel = (b & (0x80u >> (col * 2))) ? fg : bg;
             draw_pixel(x + col, y + row, pixel);
@@ -89,20 +104,12 @@ void draw_char_4x8(int x, int y, char c, uint32_t fg, uint32_t bg) {
     }
 }
 
-/* Gambar string menggunakan font 4x8 (stride 4px per karakter) */
+/* Gambar string dengan font 4x8 (stride 4px per karakter). */
 void draw_string_4x8(int x, int y, const char *s, uint32_t fg, uint32_t bg) {
-    while (*s) {
-        draw_char_4x8(x, y, *s, fg, bg);
-        x += 4;
-        s++;
-    }
+    while (*s) { draw_char_4x8(x, y, *s++, fg, bg); x += 4; }
 }
 
-/* Gambar string teks di piksel (x, y), karakter berurutan ke kanan (stride 8px) */
+/* Gambar string dengan font 8x8 (stride 8px per karakter). */
 void draw_string_gfx(int x, int y, const char *s, uint32_t fg, uint32_t bg) {
-    while (*s) {
-        draw_char_gfx(x, y, *s, fg, bg);
-        x += 8;
-        s++;
-    }
+    while (*s) { draw_char_gfx(x, y, *s++, fg, bg); x += 8; }
 }
