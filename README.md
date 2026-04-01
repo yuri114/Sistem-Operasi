@@ -19,7 +19,7 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 | Arsitektur | x86_64 — IA-32e Long Mode (64-bit) |
 | Boot | MBR 512-byte → Protected Mode → Long Mode |
 | Resolusi | 1920×1080 @ 32bpp (VBE Linear Framebuffer, ~8.3MB) |
-| Kernel | ~219 KB binary |
+| Kernel | ~223 KB binary |
 | Memory Map | 4-level paging, identity-mapped 4GB, heap kernel 6MB (0x100000–0x6FFFFF) |
 | Multitasking | Round-robin preemptive, hingga 16 task, PIT IRQ0 @ 1000 Hz |
 | Ring | Kernel Ring-0 / User Ring-3 (isolasi penuh per-proses) |
@@ -87,11 +87,14 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **QEMU SLIRP**: `-netdev user,id=net0 -device rtl8139,netdev=net0`
   - Guest IP: `10.0.2.15` (hardcoded), Gateway: `10.0.2.2`, DNS: `10.0.2.3`
 
-### SMP (Tahap H, bootstrap awal)
-- **LAPIC**: enable via IA32_APIC_BASE + SVR, baca APIC ID, kirim INIT/SIPI IPI
-- **ACPI MADT parser**: scan RSDP/RSDT/MADT untuk enumerasi CPU/APIC ID
-- **AP startup**: trampoline di 0x7000 (real mode -> protected -> long mode)
-- **Status**: AP melapor online ke `smp_ap_started` (baseline, scheduler per-core menyusul)
+### SMP — Tahap H
+- **LAPIC**: enable via IA32_APIC_BASE MSR + SVR register, baca APIC ID, kirim INIT/SIPI IPI via ICR
+- **ACPI MADT parser**: scan RSDP → RSDT → MADT untuk enumerasi CPU/APIC ID
+- **AP trampoline** di 0x7000: real mode → 32-bit protected → 64-bit long mode
+- **Per-AP stack**: 8KB per AP, dihitung dari LAPIC ID (AP1: 0x9D000, AP2: 0x9B000, ...)
+- **Spinlock atomik**: `spinlock_acquire/release` via `__sync_lock_test_and_set`
+- **Terverifikasi**: `cpu total: 2`, `ap online: 1/1` di QEMU `-smp 2`
+- **Shell**: perintah `cpuinfo` menampilkan daftar CPU + APIC/ACPI ID
 
 ### Shell
 - **Command-line shell** interaktif di kernel thread
@@ -236,7 +239,8 @@ Output: `build/os.img` (2MB raw disk image)
 .\build.ps1 run
 ```
 
-Membuka QEMU dengan `qemu-system-x86_64`, layar 1920×1080, GUI langsung muncul.
+Membuka QEMU dengan `qemu-system-x86_64 -smp 2`, layar 1920×1080, GUI langsung muncul.
+AP (Application Processor) akan boot otomatis — ketik `cpuinfo` di shell untuk verifikasi.
 
 ### Clean
 
@@ -253,8 +257,10 @@ Alamat Fisik    Ukuran    Isi
 ────────────────────────────────────────────────────────────────
 0x00000–0x007FF   2KB     Real Mode IVT + BDA
 0x07C00–0x07DFF 512B     Bootloader MBR (boot.asm)
+0x07000–0x07FFF  4KB     AP trampoline (real->pmode->lmode, di-copy smp_init)
 0x08000–0x2FFFF ~160KB   Kernel binary (kernel_entry + kode C)
-0x30000–0x8FFFF ~384KB   Stack kernel (tumbuh dari 0x90000 ke bawah)
+0x30000–0x8FFFF ~384KB   Stack BSP (tumbuh dari 0x90000 ke bawah)
+0x9B000–0x9EFFF  16KB    Stack per-AP (8KB/AP: AP1=0x9D000, AP2=0x9B000)
 0x100000–0x6FFFFF 6MB    Heap kernel (malloc/free)
 0x400000–0x4FFFFF  1MB   User ELF load address (setiap proses)
 0x500000–0x507FFF 32KB   Shared memory region (8 slot × 4KB, SHM)
@@ -351,14 +357,11 @@ Lihat [ROADMAP.txt](ROADMAP.txt) untuk roadmap lengkap.
 | Tahap B — 1280×720 | 26 Mar 2026 | HD Ready |
 | Tahap B+ — 1920×1080 | 26 Mar 2026 | Full HD, dual page table VBE |
 | Tahap C — 64-bit Long Mode | 26 Mar 2026 | Rewrite penuh ke x86_64 |
-
-**Yang direncanakan berikutnya:**
-
-- **Tahap D** — SYSCALL/SYSRET, PMM lebih besar, Serial debug, ATA DMA
-- **Tahap E** — Filesystem MFS2 lebih besar (subdirektori), journaling
-- **Tahap F** — Shell redirect/env var, libc minimal, lebih banyak program
-- **Tahap G** — Network stack (RTL8139/E1000, TCP/IP minimal)
-- **Tahap H** — SMP multi-core
+| Tahap D — Kernel Stability & Driver | 1 Apr 2026 | SYSCALL/SYSRET, PMM, ATA DMA, Serial |
+| Tahap E — Filesystem & I/O Lanjutan | 1 Apr 2026 | MFS3 subdirektori, dirty/tmpfs/perms/timestamp |
+| Tahap F — Userspace & Shell Lanjutan | 1 Apr 2026 | Shell env/pipe/&, libc minimal, ELF64 loader |
+| Tahap G — Networking | 1 Apr 2026 | RTL8139, ARP, IPv4, ICMP, ping/ifconfig |
+| Tahap H — SMP Multi-core | 1 Apr 2026 | LAPIC, ACPI MADT, AP trampoline, `cpuinfo` |
 
 ---
 
