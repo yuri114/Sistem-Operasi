@@ -602,6 +602,176 @@ static inline void shm_detach(int shm_id) {
     syscall1(SYS_SHM_DETACH, shm_id);
 }
 
+/* ============================================================
+ * F2 — libc minimal
+ *   va_list, sprintf/printf, string utils tambahan
+ * ============================================================ */
+
+/* Variadic arg support — GCC builtin, bekerja di freestanding */
+typedef __builtin_va_list va_list;
+#define va_start(v,l) __builtin_va_start(v,l)
+#define va_arg(v,t)   __builtin_va_arg(v,t)
+#define va_end(v)     __builtin_va_end(v)
+
+/* Sambung src ke akhir dst (dst harus punya ruang cukup), return dst */
+static inline char *strcat(char *dst, const char *src) {
+    int i = 0;
+    while (dst[i]) i++;
+    int j = 0;
+    while (src[j]) dst[i++] = src[j++];
+    dst[i] = '\0';
+    return dst;
+}
+
+/* Cari needle di hay, return pointer ke kemunculan pertama atau NULL */
+static inline const char *strstr(const char *hay, const char *needle) {
+    if (!needle[0]) return hay;
+    for (; *hay; hay++) {
+        const char *h = hay, *n = needle;
+        while (*h && *n && *h == *n) { h++; n++; }
+        if (!*n) return hay;
+    }
+    return 0;
+}
+
+/* Konversi string ke long integer; base 0 = auto-detect (0x=hex, 0=octal, else decimal) */
+static inline long strtol(const char *s, const char **endp, int base) {
+    while (*s == ' ') s++;
+    int neg = 0;
+    if (*s == '-') { neg = 1; s++; } else if (*s == '+') s++;
+    if (base == 0 || base == 16) {
+        if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) { base = 16; s += 2; }
+        else if (base == 0) base = (s[0] == '0') ? 8 : 10;
+    }
+    long r = 0;
+    while (*s) {
+        int d;
+        if (*s >= '0' && *s <= '9') d = *s - '0';
+        else if (*s >= 'a' && *s <= 'z') d = *s - 'a' + 10;
+        else if (*s >= 'A' && *s <= 'Z') d = *s - 'A' + 10;
+        else break;
+        if (d >= base) break;
+        r = r * base + d; s++;
+    }
+    if (endp) *endp = s;
+    return neg ? -r : r;
+}
+
+/* String ke int (basis 10) */
+static inline int atoi(const char *s) { return (int)strtol(s, 0, 10); }
+
+/* Salin n byte dari src ke dst */
+static inline void *memcpy(void *dst, const void *src, int n) {
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *ss = (const unsigned char *)src;
+    int i; for (i = 0; i < n; i++) d[i] = ss[i];
+    return dst;
+}
+
+/* Isi n byte di dst dengan nilai c */
+static inline void *memset(void *dst, int c, int n) {
+    unsigned char *d = (unsigned char *)dst;
+    int i; for (i = 0; i < n; i++) d[i] = (unsigned char)c;
+    return dst;
+}
+
+/* Salin n byte dengan aman saat src dan dst overlap */
+static inline void *memmove(void *dst, const void *src, int n) {
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *ss = (const unsigned char *)src;
+    if (d < ss) { int i; for (i = 0;   i < n; i++) d[i] = ss[i]; }
+    else         { int i; for (i = n-1; i >= 0; i--) d[i] = ss[i]; }
+    return dst;
+}
+
+/* Bandingkan n byte: return 0 jika sama, non-0 jika berbeda */
+static inline int memcmp(const void *a, const void *b, int n) {
+    const unsigned char *ua = (const unsigned char *)a;
+    const unsigned char *ub = (const unsigned char *)b;
+    int i; for (i = 0; i < n; i++) if (ua[i] != ub[i]) return (int)ua[i] - (int)ub[i];
+    return 0;
+}
+
+/* ---- sprintf / printf ---- */
+
+/* Format string ke buf menggunakan va_list.
+ * Specifier yang didukung: %d %i %u %x %X %s %c %p %% %ld %lu %lx
+ * Flag: -, 0, lebar minimum (angka).
+ * Return: panjang string yang dihasilkan (tidak termasuk null terminator). */
+static inline int vsprintf(char *buf, const char *fmt, va_list ap) {
+    int len = 0;
+    while (*fmt) {
+        if (*fmt != '%') { buf[len++] = *fmt++; continue; }
+        fmt++; /* lewati '%' */
+        /* parse flags */
+        int left = 0, zpad = 0, width = 0, lng = 0;
+        if (*fmt == '-') { left = 1; fmt++; }
+        if (*fmt == '0') { zpad = 1; fmt++; }
+        while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt++ - '0'); }
+        if (*fmt == 'l') { lng = 1; fmt++; }
+        char sp = *fmt++;
+        /* simple specifiers */
+        if (sp == '%') { buf[len++] = '%'; continue; }
+        if (sp == 'c') { buf[len++] = (char)va_arg(ap, int); continue; }
+        if (sp == 's') {
+            const char *s = va_arg(ap, const char *);
+            if (!s) s = "(null)";
+            int sl = 0; while (s[sl]) sl++;
+            int pd = (width > sl) ? width - sl : 0;
+            if (!left) { int i; for (i = 0; i < pd; i++) buf[len++] = ' '; }
+            while (*s) buf[len++] = *s++;
+            if (left)  { int i; for (i = 0; i < pd; i++) buf[len++] = ' '; }
+            continue;
+        }
+        /* numeric specifiers */
+        unsigned long uv = 0; int neg = 0;
+        if (sp == 'd' || sp == 'i') {
+            long v = lng ? va_arg(ap, long) : (long)va_arg(ap, int);
+            if (v < 0) { neg = 1; uv = (unsigned long)(-v); } else uv = (unsigned long)v;
+        } else if (sp == 'u') {
+            uv = lng ? va_arg(ap, unsigned long) : (unsigned long)va_arg(ap, unsigned int);
+        } else if (sp == 'x' || sp == 'X') {
+            uv = lng ? va_arg(ap, unsigned long) : (unsigned long)va_arg(ap, unsigned int);
+        } else if (sp == 'p') {
+            uv = (unsigned long)va_arg(ap, void *); sp = 'x';
+        } else {
+            buf[len++] = sp; continue;
+        }
+        int base = (sp == 'x' || sp == 'X') ? 16 : 10;
+        const char *dl = (sp == 'X') ? "0123456789ABCDEF" : "0123456789abcdef";
+        char tmp[24]; int ti = 0;
+        if (uv == 0) { tmp[ti++] = '0'; }
+        else { while (uv) { tmp[ti++] = dl[uv % base]; uv /= base; } }
+        if (neg) tmp[ti++] = '-';
+        int pd = (width > ti) ? width - ti : 0;
+        char pch = (zpad && !left) ? '0' : ' ';
+        if (!left) { int i; for (i = 0; i < pd; i++) buf[len++] = pch; }
+        { int k; for (k = ti - 1; k >= 0; k--) buf[len++] = tmp[k]; }
+        if (left)  { int i; for (i = 0; i < pd; i++) buf[len++] = ' '; }
+    }
+    buf[len] = '\0';
+    return len;
+}
+
+/* sprintf: format string ke buffer, return panjang */
+static inline int sprintf(char *buf, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int r = vsprintf(buf, fmt, ap);
+    va_end(ap);
+    return r;
+}
+
+/* printf: format ke buffer 512 byte lalu cetak via SYS_PRINT */
+static inline void printf(const char *fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsprintf(buf, fmt, ap);
+    va_end(ap);
+    print(buf);
+}
+
 // Tampilkan kotak pesan modal dengan pesan dan tombol OK
 // Blok hingga pengguna menutup atau klik OK
 static inline void win_msgbox(const char *title, const char *msg) {

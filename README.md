@@ -19,12 +19,12 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 | Arsitektur | x86_64 — IA-32e Long Mode (64-bit) |
 | Boot | MBR 512-byte → Protected Mode → Long Mode |
 | Resolusi | 1920×1080 @ 32bpp (VBE Linear Framebuffer, ~8.3MB) |
-| Kernel | ~178 KB binary |
-| Memory Map | 4-level paging, identity-mapped 4GB, heap kernel 2MB |
-| Multitasking | Round-robin preemptive, hingga 16 task, PIT IRQ0 |
+| Kernel | ~211 KB binary |
+| Memory Map | 4-level paging, identity-mapped 4GB, heap kernel 6MB (0x100000–0x6FFFFF) |
+| Multitasking | Round-robin preemptive, hingga 16 task, PIT IRQ0 @ 1000 Hz |
 | Ring | Kernel Ring-0 / User Ring-3 (isolasi penuh per-proses) |
-| Filesystem | MFS2 — 32 file × 16KB, ATA PIO |
-| Syscall | `int 0x80` — 49 syscall tersedia |
+| Filesystem | MFS3 — 64 file × 64KB, pointer-based, dirty/tmpfs/perms/timestamp, ATA PIO |
+| Syscall | `SYSCALL/SYSRET` (IA32_LSTAR MSR) — 55 syscall tersedia |
 | Build | WSL + `x86_64-linux-gnu-gcc` + NASM, output `os.img` binary raw |
 | Emulator | QEMU `qemu-system-x86_64` |
 
@@ -35,30 +35,41 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 ### Kernel Core
 - **Boot 64-bit**: BIOS → Protected Mode → 4-level paging (PML4) → Long Mode
 - **GDT 64-bit**: kernel CS/DS (ring-0), user CS/DS (ring-3), TSS64 (16-byte descriptor)
-- **IDT 64-bit**: 16-byte gate descriptor, 49 entri (exception 0–14, IRQ 0/1/12, syscall 0x80)
-- **Heap kernel**: first-fit allocator dengan coalescing free, interrupt-safe (`pushfq`/`popfq`)
-- **PMM**: bitmap 4096 frame (16MB), frame 0–767 pre-reserved untuk kernel
+- **IDT 64-bit**: 16-byte gate descriptor, exception 0–14, IRQ 0/1/12
+- **Heap kernel**: first-fit allocator dengan coalescing free, interrupt-safe (`pushfq`/`popfq`), 6MB (0x100000–0x6FFFFF)
+- **PMM**: bitmap 16384 frame (64MB), frame 0–767 pre-reserved untuk kernel
 - **VMM 4-level**: `vmm_create_page_dir`, `vmm_map_page` (walk PML4→PDPT→PD→PT), `vmm_free_user_memory`
+- **Demand paging**: `#PF` handler — page not-present di user space → `pmm_alloc_frame` + zero-fill + map, retry
 
 ### Multitasking
-- **Preemptive round-robin** via PIT IRQ0 (100 Hz)
-- **Context switch 64-bit**: 15 register GPR (rax–r15) disimpan di stack, iret frame
+- **Preemptive round-robin** via PIT IRQ0 (1000 Hz, 1 tick = 1 ms)
+- **Context switch 64-bit**: 15 register GPR (rax–r15) disimpan di stack, iretq frame
 - **TSS64**: `rsp0` diperbarui setiap task switch → stack ring-0 per-task yang benar
 - **Ring-3 isolation**: setiap proses memiliki PML4 sendiri + RSP user di 0x600000
 - **ELF64 loader**: `vmm_map_page` per segment, load address 0x400000
+- **task_sleep(ms)**: sleep akurat berbasis tick (TASK_SLEEPING + wake_tick)
 
-### Filesystem
-- **MFS2**: custom raw filesystem, 32 file simultan, 16KB per file
-- **ATA PIO**: baca/tulis sector ke disk image kedua (`disk.img`)
-- **Syscall**: `SYS_FS_READ`, `SYS_FS_WRITE`, `SYS_FS_LIST`, `SYS_FS_DELETE`
+### Filesystem — MFS3
+- **MFS3**: custom raw filesystem, 64 file × 64KB per file, pointer-based (data di heap)
+- **Fitur lanjutan**: dirty bit + `fs_flush()`, tmpfs flag (ramdisk), permission bits (R/W/X/DIR), timestamp (ctime/mtime)
+- **Subdirektori**: `fs_mkdir()`, `fs_list_dir()`, `fs_get_perms()`, `fs_set_perms()`
+- **ATA PIO**: baca/tulis sector ke disk image (`disk.img`), auto-migrate MFS2→MFS3
+- **Syscall**: `SYS_FS_READ/WRITE/LIST/DELETE/SYNC/TMPWRITE/MKDIR`
 
 ### Driver & I/O
 - **VBE** (Bochs/QEMU stdvga): deteksi LFB via PCI BAR0, set mode 1920×1080×32
-- **Keyboard**: PS/2 scancode → ASCII, ring buffer, tab-completion di shell
+- **Keyboard**: PS/2 scancode → ASCII, ring buffer, tab-completion di shell, Ctrl/Alt/CapsLock/F1-F10
 - **Mouse**: PS/2 protokol 3-byte, koordinat relatif + tombol L/R
 - **PIC**: cascade 8259A, remapped IRQ 0–15 ke INT 32–47
-- **PIT**: timer 100 Hz, `get_ticks()`
-- **ATA**: PIO mode, polling BSY, read/write sector
+- **PIT**: timer 1000 Hz, `get_ticks()` (millisecond resolution)
+- **ATA**: PIO mode + Bus Master DMA (BM-IDE via PCI BAR4), polling BSY
+- **Serial**: COM1 debug output → QEMU `-serial stdio`
+
+### IPC & Sinkronisasi
+- **Message passing**: `SYS_MSG_SEND` / `SYS_MSG_RECV`
+- **Semaphore**: `SYS_SEM_CREATE/WAIT/SIGNAL/DESTROY`
+- **Pipe**: anonymous pipe buffer kernel + named pipe (`SYS_PIPE_NAMED`)
+- **Shared memory**: `shm_create/attach/detach`, dipetakan ke VA 0x500000+slot×4096 (`SYS_SHM_CREATE/ATTACH/DETACH`)
 
 ### GUI & Window Manager
 - **Graphics**: `draw_pixel`, `fill_rect`, `draw_line`, font 8×8 pixel
@@ -71,18 +82,29 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **History**: 8 entri, navigasi dengan ↑/↓
 - **Tab-completion**: auto-complete perintah dan nama file
 - **Pipe operator**: `prog1 | prog2` (menggunakan kernel pipe buffer)
-- **Built-in commands**: `ps`, `kill`, `ls`, `cat`, `write`, `del`, `clear`, `help`, `exec`, ...
+- **Environment variables**: `export KEY=VAL`, ekspansi `$VAR` di input
+- **Direktori**: `cd <dir>`, `pwd`, direktori-aware `ls`/`read`/`write`/`del`
+- **Background exec**: tambah `&` di akhir perintah
+- **Built-in commands**: `ps`, `kill`, `ls`, `read`, `write`, `del`, `clear`, `help`, `exec`, `sync`, `mkdir`, `chmod`, `cd`, `pwd`, `export`, `env`, `pipe`, ...
 
-### Syscall Interface (user space)
+### Syscall Interface (user space via `SYSCALL/SYSRET`)
 ```
-SYS_PRINT       SYS_GETKEY      SYS_EXIT        SYS_ALLOC       SYS_FREE
-SYS_FS_READ     SYS_FS_WRITE    SYS_FS_LIST     SYS_FS_DELETE
+SYS_PRINT(1)    SYS_GETKEY(2)   SYS_EXIT(3)     SYS_ALLOC(4)    SYS_FREE(5)
+SYS_FS_READ(6)  SYS_FS_WRITE(7) SYS_FS_LIST(8)  SYS_FS_DELETE(9)
 SYS_MSG_SEND    SYS_MSG_RECV    SYS_KILL        SYS_GETPID
 SYS_SEM_*       SYS_PIPE_*      SYS_DEV_*
 SYS_DRAW_PIXEL  SYS_FILL_RECT   SYS_DRAW_LINE   SYS_DRAW_STR
 SYS_WIN_CREATE  SYS_WIN_DRAW    SYS_WIN_EVENT   SYS_WIN_BTN_ADD ...
 SYS_MOUSE_GET   SYS_GET_TICKS   SYS_YIELD       SYS_SLEEP       SYS_EXEC
+SYS_FS_SYNC(49) SYS_FS_TMPWRITE(50) SYS_FS_MKDIR(51) SYS_PIPE_NAMED(52)
+SYS_SHM_CREATE(53) SYS_SHM_ATTACH(54) SYS_SHM_DETACH(55)
 ```
+
+### Libc Minimal (`lib.h`) — Tahap F2
+- **Variadic**: `va_list`, `va_start`, `va_arg`, `va_end` (GCC builtins)
+- **Format**: `vsprintf`, `sprintf`, `printf` — mendukung `%d %i %u %x %X %s %c %p %%`, flags `-` `0` width, modifier `l`
+- **String extra**: `strcat`, `strstr`, `strtol`, `atoi`
+- **Memory**: `memcpy`, `memset`, `memmove`, `memcmp`
 
 ### Program Bawaan (user space, ELF64)
 | Program | Deskripsi |
@@ -90,8 +112,10 @@ SYS_MOUSE_GET   SYS_GET_TICKS   SYS_YIELD       SYS_SLEEP       SYS_EXEC
 | `paint` | Aplikasi gambar dengan mouse, 16 warna |
 | `notepad` | Editor teks sederhana dengan keyboard input |
 | `calc` | Kalkulator ekspresi dasar |
-| `filemanager` | Browser file MFS2 GUI |
+| `filemanager` | Browser file MFS3 GUI |
 | `gui_term` | Terminal emulator dalam window GUI |
+| `clock` | Widget jam — tampilkan uptime HH:MM:SS (update tiap detik) |
+| `sysinfo` | Panel info sistem — PID, uptime, tick count, arsitektur |
 | `hello` | Hello-world demo user process |
 | `gfxtest` | Demo grafis (pixel, rect, line) |
 | `gui_demo` | Demo window manager |
@@ -111,46 +135,50 @@ SYS_MOUSE_GET   SYS_GET_TICKS   SYS_YIELD       SYS_SLEEP       SYS_EXEC
 │   ├── kernel/
 │   │   ├── kernel_entry.asm  # Setup 4-level paging + Long Mode entry [BITS 32→64]
 │   │   ├── linker.ld         # Linker script (ELF64, . = 0x8000)
-│   │   ├── isr.asm           # ISR wrapper 64-bit (SAVE_REGS 15 GPR)
+│   │   ├── isr.asm           # ISR + SYSCALL entry 64-bit (SAVE_REGS 15 GPR)
 │   │   ├── idt.h / idt.c     # IDT 64-bit (16-byte gate descriptor)
 │   │   ├── tss.h / tss.c     # TSS64 + GDT descriptor 16-byte
 │   │   ├── task.h / task.c   # Multitasking, context-switch, iretq frame
-│   │   ├── vmm.h / vmm.c     # PMM bitmap + VMM 4-level paging
-│   │   ├── paging.h / paging.c  # Wrapper paging (sebagian no-op di LM)
+│   │   ├── vmm.h / vmm.c     # PMM bitmap (64MB) + VMM 4-level paging
+│   │   ├── paging.h / paging.c  # Wrapper paging
 │   │   ├── elf_loader.h / elf_loader.c  # ELF64 loader ke per-proses PML4
-│   │   ├── memory.h / memory.c  # Heap kernel (malloc/free first-fit)
+│   │   ├── memory.h / memory.c  # Heap kernel (malloc/free first-fit), 6MB
 │   │   ├── kernel.c          # kernel_main(), shell loop, exception handler
-│   │   ├── syscall.h / syscall.c  # Dispatch syscall int 0x80
-│   │   ├── shell.h / shell.c # Shell CLI interaktif
+│   │   ├── syscall.h / syscall.c  # Dispatch SYSCALL/SYSRET (55 syscall)
+│   │   ├── shell.h / shell.c # Shell CLI interaktif (cd/pwd/env/export/\$VAR/&)
 │   │   ├── vbe.h / vbe.c     # VBE mode setting + PCI BAR0 discovery
 │   │   ├── graphics.h / graphics.c  # Framebuffer 32bpp primitif
 │   │   ├── window.h / window.c      # Window manager
 │   │   ├── taskbar.h / taskbar.c    # Taskbar
 │   │   ├── keyboard.h / keyboard.c  # PS/2 keyboard + ring buffer
 │   │   ├── mouse.h / mouse.c        # PS/2 mouse
-│   │   ├── timer.h / timer.c        # PIT 100Hz
+│   │   ├── timer.h / timer.c        # PIT 1000Hz
 │   │   ├── pic.h / pic.c            # 8259A PIC cascade
-│   │   ├── fs.h / fs.c              # Filesystem MFS2
-│   │   ├── ata.h / ata.c            # ATA PIO driver
+│   │   ├── fs.h / fs.c              # Filesystem MFS3 (64×64KB, dirty/tmp/perms)
+│   │   ├── ata.h / ata.c            # ATA PIO + Bus Master DMA driver
 │   │   ├── ipc.h / ipc.c            # Message passing antar proses
 │   │   ├── semaphore.h / semaphore.c
-│   │   ├── pipe.h / pipe.c          # Pipe buffer kernel
+│   │   ├── pipe.h / pipe.c          # Anonymous pipe + named pipe
+│   │   ├── shm.h / shm.c            # Shared memory (8 region × 4KB)
+│   │   ├── serial.h / serial.c      # COM1 debug output
 │   │   ├── device.h / device.c      # Device framework
 │   │   ├── drv_vga.c / drv_kbd.c    # VGA & keyboard device driver
 │   │   └── *_elf_data.h      # Program user ter-embed sebagai C array
 │   └── programs/
-│       ├── lib.h             # Syscall wrapper + stdlib minimal untuk user space
+│       ├── lib.h             # Syscall wrapper + libc minimal (printf/sprintf/strcat/memcpy/...)
 │       ├── user.ld           # Linker script user (ELF64, . = 0x400000)
 │       ├── paint.c           # Aplikasi paint
 │       ├── notepad.c         # Editor teks
 │       ├── calc.c            # Kalkulator
-│       ├── filemanager.c     # File manager GUI
+│       ├── filemanager.c     # File manager GUI (MFS3)
 │       ├── gui_term.c        # Terminal GUI
-│       └── ...               # Program demo lainnya
+│       ├── clock.c           # Widget jam — uptime HH:MM:SS
+│       ├── sysinfo.c         # Panel info sistem
+│       └── ...               # Program demo lainnya (hello, gfxtest, gui_demo, sender, piper)
 └── build/
     ├── os.img                # Disk image final (2MB, sektor raw)
-    ├── disk.img              # Disk data sekunder (8MB, filesystem MFS2)
-    └── kernel.bin            # Kernel binary (~178KB)
+    ├── disk.img              # Disk data sekunder (8MB, filesystem MFS3)
+    └── kernel.bin            # Kernel binary (~211KB)
 ```
 
 ---
@@ -202,9 +230,9 @@ Alamat Fisik    Ukuran    Isi
 0x07C00–0x07DFF 512B     Bootloader MBR (boot.asm)
 0x08000–0x2FFFF ~160KB   Kernel binary (kernel_entry + kode C)
 0x30000–0x8FFFF ~384KB   Stack kernel (tumbuh dari 0x90000 ke bawah)
-0x100000–0x2FFFFF 2MB    Heap kernel (malloc/free)
-0x300000–0x3FFFFF  1MB   (reserved — dulu ELF loader, kini bebas)
+0x100000–0x6FFFFF 6MB    Heap kernel (malloc/free)
 0x400000–0x4FFFFF  1MB   User ELF load address (setiap proses)
+0x500000–0x507FFF 32KB   Shared memory region (8 slot × 4KB, SHM)
 0x600000–0x600FFF  4KB   User stack (setiap proses, RSP = 0x601000)
 0x3000000+        ...    PMM frame pool (0x300000 ke atas dipakai proses)
 
@@ -264,7 +292,7 @@ Boot page tables (sementara, dipakai kernel_entry.asm):
 
 ## Sistem Syscall
 
-User program memanggil syscall via `int 0x80`:
+User program memanggil syscall via instruksi `SYSCALL` (IA32_LSTAR MSR, ring-3 → ring-0):
 
 ```c
 // lib.h — contoh penggunaan dari user space
@@ -272,6 +300,7 @@ draw_pixel(100, 200, GFX_RED);     // syscall SYS_DRAW_PIXEL
 int w = win_create("Paint", ...);  // syscall SYS_WIN_CREATE
 char c = getkey();                 // syscall SYS_GETKEY
 void *buf = malloc(1024);          // syscall SYS_ALLOC
+sprintf(buf, "tick=%d", ticks);    // lib.h printf/sprintf (F2)
 ```
 
 Register convention:

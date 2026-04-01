@@ -29,6 +29,15 @@ static int hist_head  = 0;  // slot berikutnya untuk ditulis
 static int hist_count = 0;  // jumlah entri tersimpan (maks HISTORY_SIZE)
 static int hist_cursor = -1; // -1 = tidak browse; 0 = paling baru, 1 = sebelumnya
 
+/* F1 — Direktori kerja virtual */
+static char current_dir[64] = "";
+
+/* F1 — Environment variables */
+#define ENV_MAX 16
+static char env_keys[ENV_MAX][24];
+static char env_vals[ENV_MAX][64];
+static int  env_count = 0;
+
 static int str_compare(const char *a, const char *b) {
     int i = 0;
     while (a[i] != '\0' && b[i] != '\0') {
@@ -61,6 +70,8 @@ static const char *shell_commands[] = {
     "help", "clear", "about", "memtest", "uptime",
     "time", "reboot", "ls", "paging", "ps",
     "echo ", "exec ", "read ", "write ", "del ", "kill ",
+    "cd ", "pwd", "export ", "env",
+    "sync", "mkdir ", "chmod ",
     0
 };
 
@@ -75,6 +86,56 @@ static int str_copy(char *dst, const char *src) {
     while (src[i]) { dst[i] = src[i]; i++; }
     dst[i] = '\0';
     return i;
+}
+
+/* F1 — Buat path: prefix current_dir jika perlu */
+static const char *make_path(const char *name, char *buf, int bufsz) {
+    if (current_dir[0] == '\0') return name;
+    /* Jika name sudah ada '/'  → absolut, pakai apa adanya */
+    int i = 0;
+    while (name[i] && name[i] != '/') i++;
+    if (name[i] == '/') return name;
+    /* Prefix: current_dir/name */
+    int di = 0;
+    while (current_dir[di] && di < bufsz - 2) { buf[di] = current_dir[di]; di++; }
+    buf[di++] = '/';
+    int ni = 0;
+    while (name[ni] && di < bufsz - 1) buf[di++] = name[ni++];
+    buf[di] = '\0';
+    return buf;
+}
+
+/* F1 — Ekspansi $VAR dalam input_buffer in-place */
+static void shell_expand_vars(void) {
+    char tmp[256];
+    int ti = 0, ii = 0;
+    while (input_buffer[ii] && ti < 254) {
+        if (input_buffer[ii] == '$') {
+            ii++;
+            char vname[24]; int vi = 0;
+            while (((input_buffer[ii] >= 'A' && input_buffer[ii] <= 'Z') ||
+                    (input_buffer[ii] >= 'a' && input_buffer[ii] <= 'z') ||
+                    (input_buffer[ii] >= '0' && input_buffer[ii] <= '9') ||
+                     input_buffer[ii] == '_') && vi < 23) {
+                vname[vi++] = input_buffer[ii++];
+            }
+            vname[vi] = '\0';
+            int e;
+            for (e = 0; e < env_count; e++) {
+                if (str_compare(env_keys[e], vname)) {
+                    char *v = env_vals[e];
+                    while (*v && ti < 254) tmp[ti++] = *v++;
+                    break;
+                }
+            }
+            /* variabel tidak ditemukan → kosong */
+        } else {
+            tmp[ti++] = input_buffer[ii++];
+        }
+    }
+    tmp[ti] = '\0';
+    { int i; for (i = 0; i <= ti; i++) input_buffer[i] = tmp[i]; }
+    input_len = ti;
 }
 
 static void shell_tab_complete() {
@@ -139,6 +200,22 @@ void outb(uint16_t port, uint8_t val) {
 static void shell_execute(){
     print("\n");
 
+    /* F1: ekspansi $VAR */
+    shell_expand_vars();
+
+    /* F1: strip trailing '&' → background exec flag */
+    int bg_exec = 0;
+    {
+        int t = 0; while (input_buffer[t]) t++; t--;
+        while (t >= 0 && input_buffer[t] == ' ') t--;
+        if (t >= 0 && input_buffer[t] == '&') {
+            bg_exec = 1;
+            input_buffer[t] = '\0';
+            while (t > 0 && input_buffer[t-1] == ' ') { t--; input_buffer[t] = '\0'; }
+        }
+    }
+    (void)bg_exec; /* dipakai di exec command */
+
     if(str_compare(input_buffer, "help")){
         set_color(GFX_YELLOW, GFX_BLACK);
         print("Perintah yang tersedia:\n");
@@ -151,15 +228,19 @@ static void shell_execute(){
         print("echo <text>          - tampilkan text\n");
         print("time                 - tampilkan ticks sejak boot\n");
         print("reboot               - reboot sistem\n");
-        print("ls                   - tampilkan daftar file\n");
+        print("ls                   - tampilkan daftar file (di direktori saat ini)\n");
+        print("cd <dir>             - pindah direktori (cd .. / cd / untuk root)\n");
+        print("pwd                  - tampilkan direktori saat ini\n");
         print("read <nama>          - baca file\n");
         print("write <nama> <isi>   - simpan file\n");
         print("del <nama>           - hapus file\n");
         print("mkdir <nama>         - buat direktori\n");
-        print("chmod <nama> <hex>   - ubah permission file (hex: mis 0644)\n");
+        print("chmod <nama> <hex>   - ubah permission file\n");
         print("sync                 - flush dirty file ke disk\n");
+        print("export KEY=VAL       - set environment variable\n");
+        print("env                  - tampilkan semua env var\n");
         print("paging               - tampilkan status paging\n");
-        print("exec <nama>          - jalankan program ELF\n");
+        print("exec <nama> [&]      - jalankan program ELF (& = background)\n");
         print("ps                   - tampilkan daftar proses\n");
         print("kill <id>            - matikan proses berdasarkan ID\n");
         print("setprio <id> <1-3>   - ubah priority proses\n");
@@ -208,9 +289,14 @@ static void shell_execute(){
     }
     else if(str_compare(input_buffer, "ls")){
         set_color(GFX_YELLOW, GFX_BLACK);
-        print("Daftar file:\n");
+        if (current_dir[0]) {
+            print("Isi direktori /"); print(current_dir); print(":\n");
+        } else {
+            print("Daftar file:\n");
+        }
         set_color(GFX_WHITE, GFX_BLACK);
-        fs_list(print);
+        if (current_dir[0]) fs_list_dir(current_dir, print);
+        else                fs_list(print);
     }
     else if(str_compare(input_buffer, "sync")) {
         int n = fs_flush();
@@ -270,7 +356,8 @@ static void shell_execute(){
         }
     }
     else if(str_starts_with(input_buffer, "read ")) {
-        const char *name = input_buffer + 5;
+        char pbuf[64];
+        const char *name = make_path(input_buffer + 5, pbuf, 64);
         const char *data = fs_read(name);
         if (data) {
             print(data);
@@ -285,7 +372,8 @@ static void shell_execute(){
         }
     }
     else if (str_starts_with(input_buffer, "del ")) {
-        const char *name = input_buffer + 4;
+        char pbuf[64];
+        const char *name = make_path(input_buffer + 4, pbuf, 64);
         if (fs_delete(name)) {
             set_color(GFX_LGREEN, GFX_BLACK);
             print("File dihapus: ");
@@ -311,13 +399,13 @@ static void shell_execute(){
             print("Gunakan: write <nama> <isi>\n");
         }
         else {
-            char name [32];
+            char rawname[32];
             int i;
-            for (i=0; i<space && i<31; i++) {
-                name[i] = rest[i];
-            }
-            name[i] = '\0'; //tutup string nama dengan null terminator
-            const char *data = rest + space + 1; //ambil isi setelah spasi
+            for (i=0; i<space && i<31; i++) rawname[i] = rest[i];
+            rawname[i] = '\0';
+            char pbuf[64];
+            const char *name = make_path(rawname, pbuf, 64);
+            const char *data = rest + space + 1;
             if (fs_write(name, data)) {
                 set_color(GFX_LGREEN, GFX_BLACK);
                 print("File disimpan: ");
@@ -331,6 +419,82 @@ static void shell_execute(){
                 print("\n");
                 set_color(GFX_WHITE, GFX_BLACK);
             }
+        }
+    }
+    /* F1 — Direktori */
+    else if(str_compare(input_buffer, "cd")) {
+        current_dir[0] = '\0';
+    }
+    else if(str_starts_with(input_buffer, "cd ")) {
+        const char *arg = input_buffer + 3;
+        if (str_compare(arg, "..") || str_compare(arg, "/") || str_compare(arg, "~")) {
+            current_dir[0] = '\0';
+        } else {
+            int i = 0;
+            while (arg[i] && i < 62) { current_dir[i] = arg[i]; i++; }
+            current_dir[i] = '\0';
+        }
+        set_color(GFX_LCYAN, GFX_BLACK);
+        print("cd: /");
+        print(current_dir);
+        print("\n");
+        set_color(GFX_WHITE, GFX_BLACK);
+    }
+    else if(str_compare(input_buffer, "pwd")) {
+        print("/");
+        print(current_dir);
+        print("\n");
+    }
+    /* F1 — Environment variables */
+    else if(str_compare(input_buffer, "env")) {
+        if (env_count == 0) {
+            print("(tidak ada env var)\n");
+        } else {
+            int e;
+            for (e = 0; e < env_count; e++) {
+                print(env_keys[e]); print("="); print(env_vals[e]); print("\n");
+            }
+        }
+    }
+    else if(str_compare(input_buffer, "export")) {
+        print("gunakan export KEY=VALUE\n");
+    }
+    else if(str_starts_with(input_buffer, "export ")) {
+        const char *rest = input_buffer + 7;
+        /* Cari '=' */
+        int eq = 0;
+        while (rest[eq] && rest[eq] != '=') eq++;
+        if (rest[eq] != '=') {
+            print("export: format: export KEY=VALUE\n");
+        } else {
+            char key[24]; int ki = 0;
+            while (ki < eq && ki < 23) { key[ki] = rest[ki]; ki++; }
+            key[ki] = '\0';
+            const char *val = rest + eq + 1;
+            /* Cari atau update */
+            int e, found = 0;
+            for (e = 0; e < env_count; e++) {
+                if (str_compare(env_keys[e], key)) {
+                    int vi = 0;
+                    while (val[vi] && vi < 63) { env_vals[e][vi] = val[vi]; vi++; }
+                    env_vals[e][vi] = '\0';
+                    found = 1; break;
+                }
+            }
+            if (!found) {
+                if (env_count < ENV_MAX) {
+                    str_copy(env_keys[env_count], key);
+                    int vi = 0;
+                    while (val[vi] && vi < 63) { env_vals[env_count][vi] = val[vi]; vi++; }
+                    env_vals[env_count][vi] = '\0';
+                    env_count++;
+                } else {
+                    print("export: terlalu banyak variabel\n");
+                }
+            }
+            set_color(GFX_LGREEN, GFX_BLACK);
+            print("export: "); print(key); print("="); print(val); print("\n");
+            set_color(GFX_WHITE, GFX_BLACK);
         }
     }
     else if (str_compare(input_buffer, "paging")) {

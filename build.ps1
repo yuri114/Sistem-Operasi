@@ -109,6 +109,14 @@ x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -
 -T src/programs/user.ld src/programs/filemanager.c \
     -o build/filemanager.elf
 xxd -i build/filemanager.elf > src/kernel/filemanager_elf_data.h
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -fno-builtin -fno-pic -no-pie \
+-T src/programs/user.ld src/programs/clock.c \
+    -o build/clock.elf
+xxd -i build/clock.elf > src/kernel/clock_elf_data.h
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -fno-builtin -fno-pic -no-pie \
+-T src/programs/user.ld src/programs/sysinfo.c \
+    -o build/sysinfo.elf
+xxd -i build/sysinfo.elf > src/kernel/sysinfo_elf_data.h
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/semaphore.c  -o build/semaphore.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/pipe.c       -o build/pipe.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/shm.c        -o build/shm.o

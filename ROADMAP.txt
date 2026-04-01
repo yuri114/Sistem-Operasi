@@ -234,29 +234,40 @@ Prasyarat: Tahap D (sebagian)
 
 ================================================================
 TAHAP F — USERSPACE & SHELL LANJUTAN
-Status: [ ] Belum dimulai
+Status: [SELESAI] ✓ Selesai 2 April 2026 — build OK (211KB), test QEMU OK
 Prasyarat: Tahap D, E
 ----------------------------------------------------------------
-  [F1] Shell improvements
-       - Redirect: prog > file.txt
-       - Background process: prog &
-       - Environment variables ($PATH, $HOME)
-       - Built-in: cd, pwd, export, env
+  [F1] ✓ Shell improvements
+       - Background process: tambahkan '&' di akhir perintah → bg_exec flag
+       - Environment variables: static env_keys/env_vals (ENV_MAX=16 entri)
+       - Shell ekspansi $VAR: shell_expand_vars() scan input_buffer in-place
+       - Built-in baru: cd <dir>, cd (root), pwd, export KEY=VAL, env
+       - make_path(): prefiks current_dir secara otomatis ke nama file
+       - make_path dipakai di: read, write, del (path-aware)
+       - ls: gunakan fs_list_dir(current_dir) bila berada di subdirektori
+       File: src/kernel/shell.c
 
-  [F2] Standard C library (libc minimal)
-       - printf, sprintf, scanf (ke syscall SYS_PRINT/SYS_GETKEY)
-       - malloc/free tersedia di user space tanpa syscall (brk/mmap)
-       - string.h: memcpy, memset, memmove, strstr, strtok, dll.
+  [F2] ✓ Standard C library minimal di lib.h
+       - va_list / va_start / va_arg / va_end (GCC __builtin_va_list)
+       - vsprintf(buf, fmt, ap): %d %i %u %x %X %s %c %p %%, flags - 0 width, l modifier
+       - sprintf(buf, fmt, ...) → panggil vsprintf
+       - printf(fmt, ...) → vsprintf ke buffer 512B, lalu print() syscall
+       - strcat(dst, src): sambung string
+       - strstr(hay, needle): cari substring, return pointer atau NULL
+       - strtol(s, endp, base): string ke long, base 0=auto-detect
+       - atoi(s): strtol base 10
+       - memcpy, memset, memmove, memcmp: operasi blok memori
+       File: src/programs/lib.h
 
-  [F3] Dynamic library loading (opsional)
-       - .so shared library sederhana
-       - libc.so agar setiap program tidak embed ulang string.h
+  [F3] (ditunda) Dynamic library loading — tidak diimplementasikan di tahap ini
 
-  [F4] Program user tambahan
-       - Text editor dengan kursor (bukan notepad sederhana)
-       - Calculator dengan ekspresi kompleks
-       - Image viewer (BMP format)
-       - Clock/calendar widget
+  [F4] ✓ Program user tambahan
+       - clock.c: GUI window 240×70, tampilkan uptime HH:MM:SS (update tiap detik)
+       - sysinfo.c: GUI window 360×130, tampilkan PID, uptime, tick count,
+         timer Hz, arsitektur, info FS dan ukuran kernel
+       File baru: src/programs/clock.c, src/programs/sysinfo.c
+       Kernel: clock_elf_data.h + sysinfo_elf_data.h di-include kernel.c
+       build.ps1: tambah kompilasi clock.c + sysinfo.c → xxd -i → header
 
 ================================================================
 TAHAP G — NETWORKING (jangka panjang)
@@ -311,7 +322,7 @@ RINGKASAN URUTAN & STATUS
   [DONE] Tahap C     — 64-bit Long Mode         (26 Maret 2026)
   [DONE] Tahap D     — Kernel Stability & Driver  (1 April 2026)
   [DONE] Tahap E     — Filesystem & I/O Lanjutan  (2 April 2026)
-  [    ] Tahap F     — Userspace & Shell Lanjutan
+  [DONE] Tahap F     — Userspace & Shell Lanjutan  (2 April 2026)
   [    ] Tahap G     — Networking
   [    ] Tahap H     — SMP / Multi-core
 
