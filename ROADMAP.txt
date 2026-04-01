@@ -327,12 +327,18 @@ Prasyarat: Tahap D, G
        - AP trampoline real-mode -> protected -> long mode di 0x7000
        - Kirim INIT/SIPI/SIPI ke AP; AP masuk smp_ap_entry() dan lapor online
        - Per-AP stack sederhana (8KB per AP) sudah ada
+       - Per-AP IDT: setiap AP load IDT BSP via idt_reload()
+       - Per-AP TSS: GDT diperluas 8 slot (CPU0=0x30..CPU7=0xA0);
+         tss64_ap_init() isi descriptor + ltr di AP sendiri
+       - Per-AP LAPIC enable: apic_enable() dipanggil dari AP
+       - Per-AP sti: AP siap terima exception/IRQ
        - Terverifikasi: cpu total=2, ap online=1/1 di QEMU -smp 2
-       - Per-AP IDT/TSS dedicated (iterasi lanjutan, opsional)
+       - Per-core scheduler queue (iterasi lanjutan)
 
   [H3] Spinlock & mutex yang benar                                 ✓ selesai
        - spinlock_acquire/release berbasis atomic built-in (__sync)
-       - Per-core scheduler queue (iterasi lanjutan, opsional)
+       - LAPIC enable per-AP saat startup (foundation timer per-core)
+       - Per-core scheduler queue (iterasi lanjutan)
 
   [H4] NUMA-aware memory allocator (opsional, sangat lanjut)
 

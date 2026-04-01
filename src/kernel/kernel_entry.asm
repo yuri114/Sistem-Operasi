@@ -201,8 +201,14 @@ kernel_gdt64:
     dq 0x00AFFA000000FFFF           ; 0x28 user CS 64-bit DPL=3 → selector 0x2B
 global tss64_desc
 tss64_desc:
-    dq 0                            ; 0x30 TSS64 low (diisi tss64_init)
-    dq 0                            ; 0x38 TSS64 high
+    dq 0, 0    ; 0x30/0x38 CPU0 TSS (BSP, diisi tss64_init)
+    dq 0, 0    ; 0x40/0x48 CPU1 TSS (AP1, diisi tss64_ap_init)
+    dq 0, 0    ; 0x50/0x58 CPU2 TSS
+    dq 0, 0    ; 0x60/0x68 CPU3 TSS
+    dq 0, 0    ; 0x70/0x78 CPU4 TSS
+    dq 0, 0    ; 0x80/0x88 CPU5 TSS
+    dq 0, 0    ; 0x90/0x98 CPU6 TSS
+    dq 0, 0    ; 0xA0/0xA8 CPU7 TSS
 kernel_gdt64_end:
 
 global kernel_gdt64_ptr

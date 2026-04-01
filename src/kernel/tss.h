@@ -17,5 +17,7 @@ typedef struct {
 } __attribute__((packed)) TSS64;
 
 void tss64_init(uint64_t kernel_stack);
+void tss64_ap_init(int cpu_idx, uint64_t kernel_stack);
+uint16_t tss64_selector(int cpu_idx);
 void tss64_set_kernel_stack(uint64_t rsp);
 #endif

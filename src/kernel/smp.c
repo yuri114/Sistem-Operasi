@@ -1,21 +1,17 @@
-/* smp.c — SMP bootstrap minimal (Tahap H)
+/* smp.c — SMP bootstrap (Tahap H)
  *
- * Strategi implementasi awal:
+ * Strategi:
  *   1) BSP: aktifkan LAPIC, parse ACPI MADT untuk daftar APIC ID
  *   2) Copy trampoline real-mode code ke 0x7000
  *   3) Kirim INIT + SIPI (+ SIPI kedua) ke tiap AP
  *   4) AP masuk long mode via trampoline, lompat ke smp_ap_entry
- *   5) AP increment smp_ap_started dan halt
- *
- * Catatan penting:
- *   - Trampoline disediakan di smp_trampoline.asm (flat binary header)
- *   - Trampoline menggunakan page table kernel di 0x1000
- *   - Ini baseline bootstrap; scheduler per-core dan per-AP IDT/TSS
- *     akan ditingkatkan di iterasi berikutnya.
+ *   5) AP setup IDT + TSS + LAPIC sendiri, lalu sti dan idle
  */
 #include "smp.h"
 #include "apic.h"
 #include "acpi.h"
+#include "idt.h"
+#include "tss.h"
 #include "shell.h"
 #include "smp_trampoline_bin_data.h"
 #include <stdint.h>
@@ -49,10 +45,42 @@ extern uint8_t kernel_gdt64_ptr[];
 
 void smp_ap_entry(void)
 {
-    /* AP sudah di long mode dan stack lokal dari trampoline.
-     * Untuk tahap awal cukup tandai online lalu halt. */
+    int i;
+    int cpu_idx = 0;
+    uint64_t stack_top;
+    uint8_t my_apic_id;
+
+    /* --- 1. Temukan indeks CPU ini dari APIC ID --- */
+    my_apic_id = apic_get_id();
+    for (i = 0; i < cpu_count; i++) {
+        if (cpus[i].apic_id == my_apic_id) {
+            cpu_idx = i;
+            break;
+        }
+    }
+
+    /* --- 2. Load IDT BSP (shared read-only setelah idt_init()) --- */
+    idt_reload();
+
+    /* --- 3. Setup TSS per-AP dan load TR ---
+     * Stack top sama dengan formula di trampoline:
+     *   0x9F000 - apic_id * 8192
+     * (APIC ID dipakai karena itulah yang dipakai trampoline) */
+    stack_top = 0x9F000ULL - (uint64_t)my_apic_id * 8192ULL;
+    tss64_ap_init(cpu_idx, stack_top);
+
+    /* --- 4. Aktifkan LAPIC pada AP ini ---
+     * Diperlukan agar AP bisa menerima IPI dan future LAPIC timer. */
+    apic_enable();
+
+    /* --- 5. Tandai AP online sebelum sti ---
+     * BSP menunggu smp_ap_started; pastikan setup sudah selesai dulu. */
     __sync_fetch_and_add(&smp_ap_started, 1);
 
+    /* --- 6. Enable interrupts — AP siap terima exception/IRQ --- */
+    __asm__ volatile("sti");
+
+    /* --- 7. Idle loop: tidur sampai ada interrupt --- */
     for (;;)
         __asm__ volatile("hlt");
 }

@@ -22,4 +22,6 @@ typedef struct {
 void idt_init();
 void idt_set_gate(int n, uint64_t handler);
 void idt_set_gate_user(int n, uint64_t handler);
+/* Reload IDT di CPU saat ini — dipanggil tiap AP saat startup. */
+void idt_reload(void);
 #endif

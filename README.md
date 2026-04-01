@@ -19,7 +19,7 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 | Arsitektur | x86_64 — IA-32e Long Mode (64-bit) |
 | Boot | MBR 512-byte → Protected Mode → Long Mode |
 | Resolusi | 1920×1080 @ 32bpp (VBE Linear Framebuffer, ~8.3MB) |
-| Kernel | ~223 KB binary |
+| Kernel | ~224 KB binary |
 | Memory Map | 4-level paging, identity-mapped 4GB, heap kernel 6MB (0x100000–0x6FFFFF) |
 | Multitasking | Round-robin preemptive, hingga 16 task, PIT IRQ0 @ 1000 Hz |
 | Ring | Kernel Ring-0 / User Ring-3 (isolasi penuh per-proses) |
@@ -92,6 +92,9 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **ACPI MADT parser**: scan RSDP → RSDT → MADT untuk enumerasi CPU/APIC ID
 - **AP trampoline** di 0x7000: real mode → 32-bit protected → 64-bit long mode
 - **Per-AP stack**: 8KB per AP, dihitung dari LAPIC ID (AP1: 0x9D000, AP2: 0x9B000, ...)
+- **Per-AP IDT**: setiap AP memanggil `idt_reload()` — load IDT BSP yang sudah diisi
+- **Per-AP TSS**: GDT diperluas 8 slot TSS (CPU0=0x30 — CPU7=0xA0); `tss64_ap_init()` isi descriptor + `ltr`
+- **Per-AP LAPIC**: `apic_enable()` dijalankan di setiap AP; AP menerima `sti`
 - **Spinlock atomik**: `spinlock_acquire/release` via `__sync_lock_test_and_set`
 - **Terverifikasi**: `cpu total: 2`, `ap online: 1/1` di QEMU `-smp 2`
 - **Shell**: perintah `cpuinfo` menampilkan daftar CPU + APIC/ACPI ID

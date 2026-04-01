@@ -29,3 +29,8 @@ void idt_set_gate_user(int n, uint64_t handler) {
     idt_set_gate(n, handler);
     idt[n].type_attr = 0xEE;
 }
+
+void idt_reload(void) {
+    /* Load IDT yang sama (BSP sudah init) ke CPU saat ini (AP). */
+    idt_load(&idt_desc);
+}
