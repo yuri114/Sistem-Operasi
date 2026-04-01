@@ -42,6 +42,7 @@
 #include "keyboard.h"
 #include "serial.h"
 #include "net.h"
+#include "smp.h"
 
 /* Bochs VBE 1280x720 @ 32bpp: font 8x8 = 160 kolom x 90 baris */
 #define VGA_COLS 160
@@ -446,6 +447,9 @@ void kernel_main(){
         __asm__ volatile ("wrmsr" :: "c"(0xC0000084u), "a"(0x200u), "d"(0u));
     }
     serial_print("[D1] SYSCALL/SYSRET MSR configured\n");
+
+    /* Tahap H: bootstrap SMP (LAPIC + ACPI MADT + INIT/SIPI AP). */
+    smp_init();
 
     /* IRQ12 — PS/2 Mouse (INT 44 = slave IRQ4) */
     extern void irq12();

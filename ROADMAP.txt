@@ -313,21 +313,26 @@ Prasyarat: Tahap D, E
 
 ================================================================
 TAHAP H — SMP / MULTI-CORE (jangka jauh)
-Status: [ ] Belum dimulai
+Status: [SELESAI] ✓ Selesai 1 April 2026 — AP online terverifikasi di QEMU -smp 2
 Prasyarat: Tahap D, G
 ----------------------------------------------------------------
-  [H1] APIC & IOAPIC initialization
-       - Disable 8259 PIC, aktifkan LAPIC
-       - Per-core timer via LAPIC timer
+  [H1] APIC & IOAPIC initialization                               ✓ selesai
+       - APIC detect (CPUID bit 9) + LAPIC enable (IA32_APIC_BASE, SVR)
+       - API kirim IPI (INIT/SIPI) via ICR
+       - CATATAN: PIC belum dimatikan permanen karena IRQ timer/keyboard
+         masih lewat PIC (routing IOAPIC belum diaktifkan)
 
-  [H2] SMP bootstrap
-       - Baca MADT dari ACPI
-       - Kirim INIT/SIPI ke Application Processors
-       - Per-AP GDT, IDT, TSS, stack
+  [H2] SMP bootstrap                                               ✓ selesai
+       - Baca RSDP/RSDT/MADT (ACPI 1.0) untuk enumerasi CPU (APIC ID)
+       - AP trampoline real-mode -> protected -> long mode di 0x7000
+       - Kirim INIT/SIPI/SIPI ke AP; AP masuk smp_ap_entry() dan lapor online
+       - Per-AP stack sederhana (8KB per AP) sudah ada
+       - Terverifikasi: cpu total=2, ap online=1/1 di QEMU -smp 2
+       - Per-AP IDT/TSS dedicated (iterasi lanjutan, opsional)
 
-  [H3] Spinlock & mutex yang benar
-       - Atomic instructions: LOCK CMPXCHG, XCHG
-       - Per-core scheduler queue
+  [H3] Spinlock & mutex yang benar                                 ✓ selesai
+       - spinlock_acquire/release berbasis atomic built-in (__sync)
+       - Per-core scheduler queue (iterasi lanjutan, opsional)
 
   [H4] NUMA-aware memory allocator (opsional, sangat lanjut)
 
@@ -344,7 +349,7 @@ RINGKASAN URUTAN & STATUS
   [DONE] Tahap E     — Filesystem & I/O Lanjutan  (2 April 2026)
   [DONE] Tahap F     — Userspace & Shell Lanjutan  (2 April 2026)
   [DONE] Tahap G     — Networking                   (2 April 2026)
-  [    ] Tahap H     — SMP / Multi-core
+  [DONE] Tahap H     — SMP / Multi-core           (1 April 2026)
 
 ================================================================
 

@@ -87,6 +87,12 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **QEMU SLIRP**: `-netdev user,id=net0 -device rtl8139,netdev=net0`
   - Guest IP: `10.0.2.15` (hardcoded), Gateway: `10.0.2.2`, DNS: `10.0.2.3`
 
+### SMP (Tahap H, bootstrap awal)
+- **LAPIC**: enable via IA32_APIC_BASE + SVR, baca APIC ID, kirim INIT/SIPI IPI
+- **ACPI MADT parser**: scan RSDP/RSDT/MADT untuk enumerasi CPU/APIC ID
+- **AP startup**: trampoline di 0x7000 (real mode -> protected -> long mode)
+- **Status**: AP melapor online ke `smp_ap_started` (baseline, scheduler per-core menyusul)
+
 ### Shell
 - **Command-line shell** interaktif di kernel thread
 - **History**: 8 entri, navigasi dengan ↑/↓
@@ -96,7 +102,8 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **Direktori**: `cd <dir>`, `pwd`, direktori-aware `ls`/`read`/`write`/`del`
 - **Background exec**: tambah `&` di akhir perintah
 - **Jaringan**: `ifconfig` (tampilkan MAC/IP/GW), `ping <ip>` (4 ICMP echo requests + RTT)
-- **Built-in commands**: `ps`, `kill`, `ls`, `read`, `write`, `del`, `clear`, `help`, `exec`, `sync`, `mkdir`, `chmod`, `cd`, `pwd`, `export`, `env`, `ifconfig`, `ping`, ...
+- **SMP info**: `cpuinfo` (jumlah CPU dari MADT + jumlah AP yang online)
+- **Built-in commands**: `ps`, `kill`, `ls`, `read`, `write`, `del`, `clear`, `help`, `exec`, `sync`, `mkdir`, `chmod`, `cd`, `pwd`, `export`, `env`, `ifconfig`, `ping`, `cpuinfo`, ...
 
 ### Syscall Interface (user space via `SYSCALL/SYSRET`)
 ```
@@ -165,6 +172,11 @@ SYS_SHM_CREATE(53) SYS_SHM_ATTACH(54) SYS_SHM_DETACH(55)
 │   │   ├── mouse.h / mouse.c        # PS/2 mouse
 │   │   ├── timer.h / timer.c        # PIT 1000Hz
 │   │   ├── pic.h / pic.c            # 8259A PIC cascade
+│   │   ├── apic.h / apic.c          # Local APIC (xAPIC) + IPI INIT/SIPI
+│   │   ├── acpi.h / acpi.c          # Parser RSDP/RSDT/MADT (enumerasi CPU)
+│   │   ├── smp.h / smp.c            # SMP bootstrap BSP/AP + status AP online
+│   │   ├── smp_trampoline.asm       # AP trampoline real->protected->long mode
+│   │   ├── spinlock.h               # Primitive spinlock atomic
 │   │   ├── fs.h / fs.c              # Filesystem MFS3 (64×64KB, dirty/tmp/perms)
 │   │   ├── ata.h / ata.c            # ATA PIO + Bus Master DMA driver
 │   │   ├── ipc.h / ipc.c            # Message passing antar proses
@@ -191,7 +203,7 @@ SYS_SHM_CREATE(53) SYS_SHM_ATTACH(54) SYS_SHM_DETACH(55)
 └── build/
     ├── os.img                # Disk image final (2MB, sektor raw)
     ├── disk.img              # Disk data sekunder (8MB, filesystem MFS3)
-    └── kernel.bin            # Kernel binary (~211KB)
+    └── kernel.bin            # Kernel binary (~223KB)
 ```
 
 ---

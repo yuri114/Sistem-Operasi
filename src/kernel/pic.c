@@ -66,6 +66,12 @@ void pic_init() {
     outb(PIC2_DATA, 0xFF);
 }
 
+/* Mask semua IRQ pada PIC legacy. */
+void pic_disable() {
+    outb(PIC1_DATA, 0xFF);
+    outb(PIC2_DATA, 0xFF);
+}
+
 /* Kirim EOI ke master (dan slave jika IRQ ≥ 8). */
 void pic_send_eoi(uint8_t irq) {
     if (irq >= 8) outb(PIC2_COMMAND, PIC_EOI);

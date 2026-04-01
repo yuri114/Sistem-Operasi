@@ -205,6 +205,7 @@ tss64_desc:
     dq 0                            ; 0x38 TSS64 high
 kernel_gdt64_end:
 
+global kernel_gdt64_ptr
 kernel_gdt64_ptr:
     dw kernel_gdt64_end - kernel_gdt64 - 1
     dq kernel_gdt64

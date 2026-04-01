@@ -10,6 +10,8 @@
 #include "task.h"
 #include "pipe.h"
 #include "net.h"
+#include "acpi.h"
+#include "smp.h"
 
 /*fungsi dari kernel.c*/
 void print(const char *str);
@@ -73,7 +75,7 @@ static const char *shell_commands[] = {
     "echo ", "exec ", "read ", "write ", "del ", "kill ",
     "cd ", "pwd", "export ", "env",
     "sync", "mkdir ", "chmod ",
-    "ifconfig", "ping ",
+    "ifconfig", "ping ", "cpuinfo",
     0
 };
 
@@ -256,6 +258,7 @@ static void shell_execute(){
         print("env                  - tampilkan semua env var\n");
         print("ifconfig             - tampilkan info jaringan (MAC, IP, GW)\n");
         print("ping <ip>            - kirim 4 ICMP echo request ke IP\n");
+        print("cpuinfo              - tampilkan info SMP (BSP/AP online)\n");
         print("paging               - tampilkan status paging\n");
         print("exec <nama> [&]      - jalankan program ELF (& = background)\n");
         print("ps                   - tampilkan daftar proses\n");
@@ -721,6 +724,33 @@ static void shell_execute(){
             set_color(GFX_WHITE, GFX_BLACK);
         } else {
             net_ping(ip, 4);
+        }
+    }
+    else if (str_compare(input_buffer, "cpuinfo")) {
+        char nbuf[16];
+        int i;
+
+        print("cpu total: ");
+        itoa((uint32_t)cpu_count, nbuf);
+        print(nbuf);
+        print("\n");
+
+        print("ap online: ");
+        itoa(smp_ap_started, nbuf);
+        print(nbuf);
+        print("\n");
+
+        for (i = 0; i < cpu_count; i++) {
+            print("cpu");
+            itoa((uint32_t)i, nbuf);
+            print(nbuf);
+            print(": apic=");
+            itoa((uint32_t)cpus[i].apic_id, nbuf);
+            print(nbuf);
+            print(" acpi=");
+            itoa((uint32_t)cpus[i].acpi_id, nbuf);
+            print(nbuf);
+            print(i == 0 ? " (BSP)\n" : " (AP)\n");
         }
     }
     else {
