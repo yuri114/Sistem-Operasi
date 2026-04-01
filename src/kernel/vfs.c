@@ -165,3 +165,45 @@ int vfs_seek(int task_id, int fd, int offset)
     fd_table[task_id][fd].offset = (uint32_t)offset;
     return 0;
 }
+
+/* Redirect stdout (fd 1) ke file path.  Buat file jika belum ada.
+ * Dipanggil setelah task_create_user, sebelum task mulai jalan.
+ * Return 0 sukses, -1 gagal. */
+int vfs_stdout_is_file(int task_id)
+{
+    if (task_id < 0 || task_id >= MAX_TASKS) return 0;
+    return (fd_table[task_id][1].used && fd_table[task_id][1].type == VFS_TYPE_FILE);
+}
+
+int vfs_redirect_out(int task_id, const char *path)
+{
+    int k;
+    if (task_id < 0 || task_id >= MAX_TASKS || !path || !path[0]) return -1;
+    /* Buat file kosong jika belum ada */
+    if (!fs_read(path)) fs_write(path, "");
+    fd_table[task_id][1].used   = 1;
+    fd_table[task_id][1].type   = VFS_TYPE_FILE;
+    fd_table[task_id][1].flags  = VFS_O_WRONLY;
+    fd_table[task_id][1].offset = 0;
+    for (k = 0; k < 31 && path[k]; k++) fd_table[task_id][1].name[k] = path[k];
+    fd_table[task_id][1].name[k] = '\0';
+    /* fd 2 (stderr) ikut redirect ke file yang sama */
+    fd_table[task_id][2] = fd_table[task_id][1];
+    return 0;
+}
+
+/* Redirect stdin (fd 0) dari file path.
+ * Return 0 sukses, -1 gagal (file tidak ada). */
+int vfs_redirect_in(int task_id, const char *path)
+{
+    int k;
+    if (task_id < 0 || task_id >= MAX_TASKS || !path || !path[0]) return -1;
+    if (!fs_read(path)) return -1;   /* file harus sudah ada */
+    fd_table[task_id][0].used   = 1;
+    fd_table[task_id][0].type   = VFS_TYPE_FILE;
+    fd_table[task_id][0].flags  = VFS_O_RDONLY;
+    fd_table[task_id][0].offset = 0;
+    for (k = 0; k < 31 && path[k]; k++) fd_table[task_id][0].name[k] = path[k];
+    fd_table[task_id][0].name[k] = '\0';
+    return 0;
+}

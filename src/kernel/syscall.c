@@ -30,8 +30,15 @@ static int is_user_ptr(uint64_t ptr) {
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
     if (eax == SYS_PRINT){
         if (!is_user_ptr(ebx)) return (uint32_t)-1;
-        print((const char*)ebx); //ebx berisi pointer ke string yang akan dicetak
-        return 0; //kembalikan 0 untuk menandakan sukses
+        const char *s = (const char*)ebx;
+        int tid = task_get_current();
+        /* Jika fd 1 task ini diredirect ke file, tulis via VFS bukan layar */
+        int n = 0; while (s[n]) n++;
+        if (vfs_stdout_is_file(tid))
+            vfs_write(tid, 1, s, n);
+        else
+            print(s);
+        return 0;
     }
     if (eax == SYS_GETKEY){
         char c = 0;

@@ -266,6 +266,7 @@ static void shell_execute(){
         print("taskstat             - tampilkan distribusi task per CPU\n");
         print("meminfo              - tampilkan statistik memori fisik & heap\n");
         print("threadtest           - demo threading: spawn 3 thread secara paralel\n");
+        print("condtest             - demo condition variable: producer-consumer\n");
         print("open <file>          - buka file, cetak fd\n");
         print("fread <fd>           - baca isi file lewat fd\n");
         print("fwrite <fd> <teks>   - tulis teks ke file lewat fd\n");
@@ -274,6 +275,8 @@ static void shell_execute(){
         print("mq_recv              - terima pesan dari mailbox shell\n");
         print("paging               - tampilkan status paging\n");
         print("exec <nama> [&]      - jalankan program ELF (& = background)\n");
+        print("exec <nama> > <file> - jalankan program, stdout ke file\n");
+        print("exec <nama> < <file> - jalankan program, stdin dari file\n");
         print("ps                   - tampilkan daftar proses\n");
         print("kill <id>            - matikan proses berdasarkan ID\n");
         print("setprio <id> <1-3>   - ubah priority proses\n");
@@ -548,12 +551,44 @@ static void shell_execute(){
         set_color(GFX_WHITE, GFX_BLACK);
     }
     else if(str_starts_with(input_buffer, "exec ")) {
-        /* strip trailing '&' yang sudah di-parse di atas */
-        const char *name = input_buffer + 5;
+        /* Parse: exec <prog> [< infile] [> outfile] [&]
+         * bg_exec sudah di-handle di atas. Kita perlu scan operator redirect. */
+        char exec_name[64];
+        char rout_file[32];
+        char rin_file[32];
+        {
+            const char *src = input_buffer + 5;
+            int si = 0, ei = 0;
+            rout_file[0] = '\0';
+            rin_file[0]  = '\0';
+            /* copy sampai '>' atau '<', pisahkan nama program */
+            while (src[si] && src[si] != '>' && src[si] != '<' && ei < 63)
+                exec_name[ei++] = src[si++];
+            exec_name[ei] = '\0';
+            /* trim trailing space dari exec_name */
+            ei--;
+            while (ei >= 0 && exec_name[ei] == ' ') exec_name[ei--] = '\0';
+            /* parse sisa operator: bisa ada > dan/atau < dalam urutan apapun */
+            while (src[si]) {
+                char op = src[si++];        /* '>' atau '<' */
+                int fi = 0;
+                while (src[si] == ' ') si++;
+                while (src[si] && src[si] != '>' && src[si] != '<' && src[si] != ' ' && fi < 31)
+                    if (op == '>') rout_file[fi++] = src[si++];
+                    else           rin_file[fi++]  = src[si++];
+                if (op == '>') rout_file[fi] = '\0';
+                else           rin_file[fi]  = '\0';
+                /* skip sisa sampai operator berikutnya */
+                while (src[si] && src[si] != '>' && src[si] != '<') si++;
+            }
+        }
+        const char *name = exec_name;
         uint32_t size;
         const uint8_t *data = fs_read_bin(name, &size);
         if (!data) {
-            print("exec: file tidak ditemukan\n");
+            print("exec: file tidak ditemukan: ");
+            print(name);
+            print("\n");
         } else {
             /* Buat page directory baru, isolasi penuh untuk proses ini */
             uint64_t *proc_dir = vmm_create_page_dir();
@@ -564,7 +599,13 @@ static void shell_execute(){
                 uint64_t stack_phys = pmm_alloc_frame();
                 vmm_map_page(proc_dir, 0x600000, stack_phys, 7);
                 uint64_t user_esp = 0x600000 + PAGE_SIZE;
+                /* Matikan interrupt agar redirect diterapkan sebelum task sempat dijadwal */
+                __asm__ volatile("cli" ::: "memory");
                 int tid = task_create_user(entry, proc_dir, user_esp, name);
+                /* Terapkan redirect I/O sebelum task mulai berjalan */
+                if (rout_file[0]) vfs_redirect_out(tid, rout_file);
+                if (rin_file[0])  vfs_redirect_in(tid, rin_file);
+                __asm__ volatile("sti" ::: "memory");
                 if (bg_exec) {
                     char tbuf[8]; itoa((uint32_t)tid, tbuf);
                     print("exec: ["); print(tbuf); print("] "); print(name); print(" &\n");
@@ -609,6 +650,11 @@ static void shell_execute(){
             int cpu_id = task_get_cpu(i);
             if (cpu_id < 0) print("free ");
             else { itoa((uint32_t)cpu_id, buf); print("cpu"); print(buf); print(" "); }
+            if (task_is_thread(i)) {
+                set_color(GFX_LCYAN, GFX_BLACK);
+                print("[T:"); itoa((uint32_t)task_get_parent(i), buf); print(buf); print("] ");
+                set_color(GFX_WHITE, GFX_BLACK);
+            }
             print(task_get_name(i));
             print("\n");
         }

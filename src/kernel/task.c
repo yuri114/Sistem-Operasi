@@ -456,6 +456,8 @@ void task_set_name(int id, const char *name) {
 int task_get_max()       { return MAX_TASKS; }
 int task_get_count()     { return task_count; }
 int task_is_used(int id) { return (id >= 0 && id < MAX_TASKS) ? tasks[id].used : 0; }
+int task_is_thread(int id) { return (id >= 0 && id < MAX_TASKS) ? tasks[id].is_thread : 0; }
+int task_get_parent(int id) { return (id >= 0 && id < MAX_TASKS) ? tasks[id].parent_tid : -1; }
 const char *task_get_name(int id) { return (id >= 0 && id < MAX_TASKS) ? tasks[id].name : ""; }
 int task_get_current() { return current_task; }
 int task_get_cpu(int id) { return (id >= 0 && id < MAX_TASKS) ? (int)tasks[id].cpu_id : -1; }

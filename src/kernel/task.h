@@ -51,6 +51,8 @@ void        task_set_heap_end(int id, uint64_t end);
 int         task_get_max();
 int         task_get_count();     /* jumlah task aktif (bukan MAX_TASKS)  */
 int         task_is_used(int id);
+int         task_is_thread(int id);   /* 1 jika task adalah thread */
+int         task_get_parent(int id);  /* parent_tid thread, atau -1 */
 const char *task_get_name(int id);
 int         task_get_current();
 int         task_get_cpu(int id); /* kembalikan cpu_id task */

@@ -31,6 +31,7 @@
 #include "clock_elf_data.h"
 #include "sysinfo_elf_data.h"
 #include "threadtest_elf_data.h"
+#include "condtest_elf_data.h"
 #include "ipc.h"
 #include "semaphore.h"
 #include "pipe.h"
@@ -244,6 +245,7 @@ void programs_init() {
     fs_write_bin("clock",         build_clock_elf,         build_clock_elf_len);
     fs_write_bin("sysinfo",       build_sysinfo_elf,       build_sysinfo_elf_len);
     fs_write_bin("threadtest",    build_threadtest_elf,    build_threadtest_elf_len);
+    fs_write_bin("condtest",      build_condtest_elf,      build_condtest_elf_len);
 }
 
 /* Deklarasi handler dari isr.asm */

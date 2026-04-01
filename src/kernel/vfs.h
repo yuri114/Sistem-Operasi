@@ -46,4 +46,9 @@ int  vfs_write(int task_id, int fd, const char *buf, int len); /* tulis ke fd   
 int  vfs_close(int task_id, int fd);                      /* tutup fd >= 3      */
 int  vfs_seek (int task_id, int fd, int offset);          /* pindah posisi       */
 
+/* Redirect stdout/stdin ke file untuk exec + redirect shell */
+int  vfs_redirect_out(int task_id, const char *path);     /* redirect stdout ke file (>) */
+int  vfs_redirect_in (int task_id, const char *path);     /* redirect stdin dari file (<) */
+int  vfs_stdout_is_file(int task_id);                     /* 1 jika fd 1 diredirect ke file */
+
 #endif /* VFS_H */
