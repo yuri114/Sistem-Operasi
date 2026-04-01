@@ -61,6 +61,13 @@
 #define SYS_FS_LIST        46 // list nama file ke buffer: ebx=ptr, edx=bufsz → return count
 #define SYS_FS_DELETE      47 // hapus file: ebx=ptr nama → return 1/0
 #define SYS_GET_TICKS      48 // timer tick sejak boot → return uint32_t
+#define SYS_FS_SYNC        49 // flush dirty file ke disk → return count
+#define SYS_FS_TMPWRITE    50 // tulis ke tmpfs: ebx=nama, edx=ptr FSWriteArgs
+#define SYS_FS_MKDIR       51 // buat direktori: ebx=nama → return 1/0
+#define SYS_PIPE_NAMED     52 // buka/buat named pipe: ebx=nama → return pipe_id
+#define SYS_SHM_CREATE     53 // buat shared memory: ebx=key → return shm_id
+#define SYS_SHM_ATTACH     54 // map shm ke proses: ebx=shm_id → return VA
+#define SYS_SHM_DETACH     55 // lepas shm dari proses: ebx=shm_id
 
 // Event type konstanta
 #define WIN_EVENT_NONE   0
@@ -555,6 +562,44 @@ static inline int fs_delete(const char *name) {
 // Kembalikan jumlah timer tick sejak boot (18.2 tick/detik)
 static inline unsigned int get_ticks(void) {
     return (unsigned int)syscall0(SYS_GET_TICKS);
+}
+
+// Flush semua dirty file ke disk, return jumlah file yang di-flush
+static inline int fs_sync(void) {
+    return (int)syscall0(SYS_FS_SYNC);
+}
+
+// Buat direktori baru, return 1 jika sukses
+static inline int fs_mkdir(const char *name) {
+    return (int)syscall1(SYS_FS_MKDIR, (long)name);
+}
+
+// Tulis data ke tmpfs (tidak persisten), return 1 jika sukses
+static inline int fs_write_tmp(const char *name, const void *data, unsigned int size) {
+    struct { const void *data; unsigned int size; } args;
+    args.data = data;
+    args.size = size;
+    return (int)syscall2(SYS_FS_TMPWRITE, (long)name, (long)&args);
+}
+
+// Buka atau buat named pipe berdasarkan nama, return pipe_id atau -1
+static inline int pipe_named_open(const char *name) {
+    return (int)syscall1(SYS_PIPE_NAMED, (long)name);
+}
+
+// Buat shared memory dengan key, return shm_id atau -1
+static inline int shm_create(const char *key) {
+    return (int)syscall1(SYS_SHM_CREATE, (long)key);
+}
+
+// Map shared memory ke address space proses, return pointer atau NULL
+static inline void *shm_attach(int shm_id) {
+    return (void*)(long)syscall1(SYS_SHM_ATTACH, shm_id);
+}
+
+// Lepas shared memory dari address space proses
+static inline void shm_detach(int shm_id) {
+    syscall1(SYS_SHM_DETACH, shm_id);
 }
 
 // Tampilkan kotak pesan modal dengan pesan dan tombol OK

@@ -2,7 +2,7 @@
 #include "memory.h"
 
 #define HEAP_START 0x100000u  /* 1MB — awal heap kernel */
-#define HEAP_SIZE  0x200000u  /* 2MB — ukuran heap kernel (0x100000–0x2FFFFF, tepat di bawah 0x300000) */
+#define HEAP_SIZE  0x600000u  /* 6MB — ukuran heap kernel (0x100000–0x6FFFFF) */
 
 /* Header setiap blok heap */
 typedef struct BlockHeader {

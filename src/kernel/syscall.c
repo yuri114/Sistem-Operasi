@@ -13,6 +13,7 @@
 #include "mouse.h"
 #include "window.h"
 #include "timer.h"
+#include "shm.h"
 
 extern void print(const char *str); // dari kernel.c
 extern void clear_screen();         // dari kernel.c
@@ -339,6 +340,52 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
     // SYS_GET_TICKS(48): kembalikan jumlah timer tick sejak boot
     if (eax == SYS_GET_TICKS) {
         return get_ticks();
+    }
+
+    // SYS_FS_SYNC(49): flush semua dirty file ke disk
+    if (eax == SYS_FS_SYNC) {
+        return (uint64_t)fs_flush();
+    }
+
+    // SYS_FS_TMPWRITE(50): tulis data ke tmpfs: ebx=nama, edx=ptr FSWriteArgs
+    if (eax == SYS_FS_TMPWRITE) {
+        if (!is_user_ptr(ebx) || !is_user_ptr(edx)) return 0;
+        typedef struct { const uint8_t *data; uint32_t size; } WArgs;
+        WArgs *a = (WArgs*)edx;
+        return (uint64_t)fs_write_tmp((const char*)ebx, a->data, a->size);
+    }
+
+    // SYS_FS_MKDIR(51): buat direktori: ebx=nama
+    if (eax == SYS_FS_MKDIR) {
+        if (!is_user_ptr(ebx)) return 0;
+        return (uint64_t)fs_mkdir((const char*)ebx);
+    }
+
+    // SYS_PIPE_NAMED(52): buka/buat named pipe: ebx=nama
+    if (eax == SYS_PIPE_NAMED) {
+        if (!is_user_ptr(ebx)) return (uint64_t)-1;
+        return (uint64_t)named_pipe_open((const char*)ebx);
+    }
+
+    // SYS_SHM_CREATE(53): buat shared memory segment: ebx=key
+    if (eax == SYS_SHM_CREATE) {
+        if (!is_user_ptr(ebx)) return (uint64_t)-1;
+        return (uint64_t)shm_create((const char*)ebx);
+    }
+
+    // SYS_SHM_ATTACH(54): map shm segment ke proses pemanggil: ebx=shm_id
+    if (eax == SYS_SHM_ATTACH) {
+        int tid = task_get_current();
+        uint64_t *pml4 = task_get_page_dir(tid);
+        return (uint64_t)shm_attach((int)ebx, pml4);
+    }
+
+    // SYS_SHM_DETACH(55): lepas shm dari proses: ebx=shm_id
+    if (eax == SYS_SHM_DETACH) {
+        int tid = task_get_current();
+        uint64_t *pml4 = task_get_page_dir(tid);
+        shm_detach((int)ebx, pml4);
+        return 0;
     }
 
     // SYS_EXEC(30): muat dan jalankan program dari FS: ebx=nama (user ptr)

@@ -80,3 +80,53 @@ int pipe_read(int id, char *buf) {
     __asm__ volatile ("sti");
     return i;
 }
+
+/* ====== Named Pipe ====== */
+static NamedPipe named_pipes[NAMED_PIPE_MAX];
+
+static int np_streq(const char *a, const char *b) {
+    int i = 0;
+    while (a[i] && b[i]) { if (a[i] != b[i]) return 0; i++; }
+    return a[i] == '\0' && b[i] == '\0';
+}
+static void np_strcpy(char *dst, const char *src, int n) {
+    int i = 0;
+    while (src[i] && i < n - 1) { dst[i] = src[i]; i++; }
+    dst[i] = '\0';
+}
+
+/* Buka atau buat named pipe — return pipe_id, -1 jika gagal */
+int named_pipe_open(const char *name) {
+    int i;
+    if (!name) return -1;
+    /* Cari yang sudah ada */
+    for (i = 0; i < NAMED_PIPE_MAX; i++)
+        if (named_pipes[i].used && np_streq(named_pipes[i].name, name))
+            return named_pipes[i].pipe_id;
+    /* Buat baru */
+    for (i = 0; i < NAMED_PIPE_MAX; i++) {
+        if (!named_pipes[i].used) {
+            int pid = pipe_alloc();
+            if (pid < 0) return -1;
+            named_pipes[i].used    = 1;
+            named_pipes[i].pipe_id = pid;
+            np_strcpy(named_pipes[i].name, name, 16);
+            return pid;
+        }
+    }
+    return -1;
+}
+
+/* Tutup named pipe berdasarkan nama */
+void named_pipe_close(const char *name) {
+    int i;
+    if (!name) return;
+    for (i = 0; i < NAMED_PIPE_MAX; i++) {
+        if (named_pipes[i].used && np_streq(named_pipes[i].name, name)) {
+            pipe_free(named_pipes[i].pipe_id);
+            named_pipes[i].used  = 0;
+            named_pipes[i].name[0] = '\0';
+            return;
+        }
+    }
+}

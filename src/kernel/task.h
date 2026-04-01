@@ -45,4 +45,5 @@ void        task_set_pipe(int id, int pipe_id);
 int         task_get_current_pipe();
 uint64_t    task_get_rsp0(int id);
 int         task_get_status(int id);
+uint64_t   *task_get_page_dir(int id);
 #endif

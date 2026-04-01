@@ -194,6 +194,11 @@ uint64_t task_get_rsp0(int id) {
     return (uint64_t)(stacks_base + (uint64_t)id * STACK_SIZE + STACK_SIZE);
 }
 
+uint64_t *task_get_page_dir(int id) {
+    if (id < 0 || id >= MAX_TASKS || !tasks[id].used) return 0;
+    return tasks[id].page_dir;
+}
+
 void task_sleep(uint32_t ms) {
     /* Timer sekarang 1000 Hz, 1 tick = 1 ms */
     uint32_t wait_ticks = (ms > 0) ? ms : 1;

@@ -1,6 +1,6 @@
 ================================================================
   MyOS — ROADMAP PENGEMBANGAN SISTEM
-  Dibuat: 24 Maret 2026 | Diperbarui: 1 April 2026
+  Dibuat: 24 Maret 2026 | Diperbarui: 2 April 2026
 ================================================================
 
 KONDISI SAAT INI (setelah Tahap C)
@@ -191,27 +191,46 @@ Tujuan     : Meningkatkan stabilitas, memperluas driver, dan
 
 ================================================================
 TAHAP E — FILESYSTEM & I/O LANJUTAN
-Status: [ ] Belum dimulai
+Status: [SELESAI] ✓ Selesai 2 April 2026 — build OK, test QEMU OK
 Prasyarat: Tahap D (sebagian)
 ----------------------------------------------------------------
-  [E1] Filesystem MFS2 improvements
-       - Naikkan dari 32 file × 16KB ke 256 file × 64KB
-       - Subdirectory support (folder)
-       - Metadata: timestamp, permission bits
+  [E1] ✓ Filesystem MFS3 (64 file × 64KB, pointer-based, auto-migrate MFS2→MFS3)
+       - FS_MAX_FILES 32→64, FS_MAX_DATA 16KB→64KB per file
+       - Data disimpan di heap (pointer), bukan embedded array
+       - Metadata table hanya ~4KB (hemat vs 512KB lama)
+       - Disk layout: sector 0=superblock, sector 1+i*129=header, sector 2..129+i*129=data
+       - Permission bits (FS_PERM_DIR/READ/WRITE/EXEC), timestamp (ctime/mtime)
+       - Subdirectory: entry tipe DIR (data=NULL, perms|FS_PERM_DIR)
+       - fs_mkdir(), fs_list_dir(), fs_get_perms(), fs_set_perms(), fs_get_mtime()
+       File: src/kernel/fs.h, src/kernel/fs.c
 
-  [E2] ATA writing yang aman
-       - fsync() / flush buffer ke disk
-       - Journaling sederhana (write-ahead log) untuk menghindari
-         data corruption saat OS di-reset
+  [E2] ✓ fsync / dirty bit
+       - dirty flag per file, set saat fs_write / fs_write_bin
+       - fs_flush(): tulis semua dirty non-tmpfs ke disk, clear dirty
+       - SYS_FS_SYNC (49): user-space trigger flush
+       - Shell command: sync
+       File: src/kernel/fs.c, src/kernel/syscall.h/c, src/kernel/shell.c
 
-  [E3] Ramdisk / tmpfs
-       - Filesystem di RAM untuk file sementara
-       - Tidak perlu tulis ke disk, lebih cepat
+  [E3] ✓ tmpfs (ramdisk)
+       - tmpfs flag per file; file tmpfs tidak pernah ditulis ke disk
+       - fs_write_tmp(): buat file di tmpfs
+       - SYS_FS_TMPWRITE (50): user-space create tmpfs file
+       File: src/kernel/fs.c
 
-  [E4] Pipe & IPC lanjutan
-       - Named pipes (FIFO)
-       - Shared memory antar proses
-       - Signal (SIGKILL minimal)
+  [E4] ✓ Pipe & IPC lanjutan
+       - Named pipes: named_pipe_open(name), named_pipe_close(name)
+         SYS_PIPE_NAMED (52) — buka atau buat by-name
+         File: src/kernel/pipe.h, src/kernel/pipe.c
+       - Shared memory: shm_create/find/attach/detach/destroy
+         SHM_MAX=8 region × 4KB, dipetakan ke VA 0x500000+slot*4096
+         SYS_SHM_CREATE (53), SYS_SHM_ATTACH (54), SYS_SHM_DETACH (55)
+         File: src/kernel/shm.h, src/kernel/shm.c
+
+  Heap expansion: 2MB (0x2FFFFF) → 6MB (0x6FFFFF) di memory.c
+  Shell commands baru: sync, mkdir <nama>, chmod <nama> <hex>
+  lib.h wrappers: fs_sync, fs_mkdir, fs_write_tmp, pipe_named_open,
+                  shm_create, shm_attach, shm_detach
+  build.ps1: tambah shm.c compile + link
 
 ================================================================
 TAHAP F — USERSPACE & SHELL LANJUTAN
@@ -291,7 +310,7 @@ RINGKASAN URUTAN & STATUS
   [DONE] Tahap B+    — Resolusi 1920×1080       (26 Maret 2026)
   [DONE] Tahap C     — 64-bit Long Mode         (26 Maret 2026)
   [DONE] Tahap D     — Kernel Stability & Driver  (1 April 2026)
-  [    ] Tahap E     — Filesystem & I/O Lanjutan
+  [DONE] Tahap E     — Filesystem & I/O Lanjutan  (2 April 2026)
   [    ] Tahap F     — Userspace & Shell Lanjutan
   [    ] Tahap G     — Networking
   [    ] Tahap H     — SMP / Multi-core

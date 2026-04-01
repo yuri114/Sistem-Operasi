@@ -31,6 +31,7 @@
 #include "ipc.h"
 #include "semaphore.h"
 #include "pipe.h"
+#include "shm.h"
 #include "device.h"
 #include "drv_vga.h"
 #include "drv_kbd.h"
@@ -373,6 +374,7 @@ void kernel_main(){
     ipc_init();
     sem_init_all();
     pipe_init_all();
+    shm_init();
     // Daftarkan dan inisialisasi device driver
     dev_register(DEV_VGA, &drv_vga);
     dev_register(DEV_KBD, &drv_kbd);

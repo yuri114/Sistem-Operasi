@@ -111,6 +111,7 @@ x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -
 xxd -i build/filemanager.elf > src/kernel/filemanager_elf_data.h
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/semaphore.c  -o build/semaphore.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/pipe.c       -o build/pipe.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/shm.c        -o build/shm.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/device.c     -o build/device.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/drv_vga.c    -o build/drv_vga.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/drv_kbd.c    -o build/drv_kbd.o
@@ -136,7 +137,7 @@ x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-built
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/mouse.c      -o build/mouse.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/window.c     -o build/window.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/taskbar.c    -o build/taskbar.o
-x86_64-linux-gnu-ld -m elf_x86_64 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o build/device.o build/drv_vga.o build/drv_kbd.o build/vbe.o build/graphics.o build/ata.o build/serial.o build/mouse.o build/window.o build/taskbar.o -o build/kernel.elf
+x86_64-linux-gnu-ld -m elf_x86_64 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o build/shm.o build/device.o build/drv_vga.o build/drv_kbd.o build/vbe.o build/graphics.o build/ata.o build/serial.o build/mouse.o build/window.o build/taskbar.o -o build/kernel.elf
 x86_64-linux-gnu-objcopy -O binary build/kernel.elf build/kernel.bin
 echo done
 "@

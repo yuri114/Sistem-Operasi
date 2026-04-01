@@ -155,6 +155,9 @@ static void shell_execute(){
         print("read <nama>          - baca file\n");
         print("write <nama> <isi>   - simpan file\n");
         print("del <nama>           - hapus file\n");
+        print("mkdir <nama>         - buat direktori\n");
+        print("chmod <nama> <hex>   - ubah permission file (hex: mis 0644)\n");
+        print("sync                 - flush dirty file ke disk\n");
         print("paging               - tampilkan status paging\n");
         print("exec <nama>          - jalankan program ELF\n");
         print("ps                   - tampilkan daftar proses\n");
@@ -208,6 +211,63 @@ static void shell_execute(){
         print("Daftar file:\n");
         set_color(GFX_WHITE, GFX_BLACK);
         fs_list(print);
+    }
+    else if(str_compare(input_buffer, "sync")) {
+        int n = fs_flush();
+        char buf[8];
+        set_color(GFX_LGREEN, GFX_BLACK);
+        print("sync: ");
+        itoa(n, buf); print(buf);
+        print(" file di-flush ke disk\n");
+        set_color(GFX_WHITE, GFX_BLACK);
+    }
+    else if(str_compare(input_buffer, "mkdir")) {
+        print("gunakan mkdir <nama>\n");
+    }
+    else if(str_starts_with(input_buffer, "mkdir ")) {
+        const char *name = input_buffer + 6;
+        if (fs_mkdir(name)) {
+            set_color(GFX_LGREEN, GFX_BLACK);
+            print("mkdir: direktori dibuat: "); print(name); print("\n");
+            set_color(GFX_WHITE, GFX_BLACK);
+        } else {
+            set_color(GFX_LRED, GFX_BLACK);
+            print("mkdir: gagal (nama duplikat atau FS penuh)\n");
+            set_color(GFX_WHITE, GFX_BLACK);
+        }
+    }
+    else if(str_compare(input_buffer, "chmod")) {
+        print("gunakan chmod <nama> <perm_hex>\n");
+    }
+    else if(str_starts_with(input_buffer, "chmod ")) {
+        const char *rest = input_buffer + 6;
+        char name[32];
+        int j = 0;
+        while (rest[j] && rest[j] != ' ' && j < 31) { name[j] = rest[j]; j++; }
+        name[j] = '\0';
+        if (rest[j] != ' ') {
+            print("gunakan chmod <nama> <perm_hex>\n");
+        } else {
+            const char *phex = rest + j + 1;
+            uint32_t perms = 0;
+            int k = 0;
+            while (phex[k]) {
+                char ch = phex[k];
+                if (ch >= '0' && ch <= '9')      perms = perms * 16 + (ch - '0');
+                else if (ch >= 'a' && ch <= 'f') perms = perms * 16 + (ch - 'a' + 10);
+                else if (ch >= 'A' && ch <= 'F') perms = perms * 16 + (ch - 'A' + 10);
+                k++;
+            }
+            if (fs_set_perms(name, (uint16_t)perms)) {
+                set_color(GFX_LGREEN, GFX_BLACK);
+                print("chmod: permission diubah\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+            } else {
+                set_color(GFX_LRED, GFX_BLACK);
+                print("chmod: file tidak ditemukan\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+            }
+        }
     }
     else if(str_starts_with(input_buffer, "read ")) {
         const char *name = input_buffer + 5;

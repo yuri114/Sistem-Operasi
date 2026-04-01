@@ -58,6 +58,13 @@
 #define SYS_FS_LIST        46 // list nama file ke buffer: ebx=ptr, edx=bufsz → return count
 #define SYS_FS_DELETE      47 // hapus file: ebx=ptr nama → return 1/0
 #define SYS_GET_TICKS      48 // kembalikan jumlah timer tick sejak boot → return uint32_t
+#define SYS_FS_SYNC        49 // flush semua dirty file ke disk → return jumlah file di-flush
+#define SYS_FS_TMPWRITE    50 // tulis data ke tmpfs: ebx=nama_ptr, edx=ptr FSWriteArgs
+#define SYS_FS_MKDIR       51 // buat direktori: ebx=nama_ptr → return 1/0
+#define SYS_PIPE_NAMED     52 // buka/buat named pipe: ebx=nama_ptr → return pipe_id
+#define SYS_SHM_CREATE     53 // buat shared memory: ebx=key_ptr → return shm_id
+#define SYS_SHM_ATTACH     54 // map shm ke proses: ebx=shm_id → return VA
+#define SYS_SHM_DETACH     55 // lepas shm dari proses: ebx=shm_id
 
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);
