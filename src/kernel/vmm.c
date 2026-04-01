@@ -136,6 +136,28 @@ void vmm_map_page(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags) 
 }
 
 /*
+ * Hapus pemetaan satu halaman 4KB (set PTE = 0, flush TLB).
+ * Tidak membebaskan physical frame — caller bertanggung jawab.
+ */
+void vmm_unmap_page(uint64_t *pml4, uint64_t virt) {
+    uint64_t mask     = ~(uint64_t)0xFFF;
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx   = (virt >> 21) & 0x1FF;
+    uint64_t pt_idx   = (virt >> 12) & 0x1FF;
+
+    if (!pml4 || !(pml4[pml4_idx] & 1)) return;
+    uint64_t *pdpt = (uint64_t *)(pml4[pml4_idx] & mask);
+    if (!(pdpt[pdpt_idx] & 1)) return;
+    uint64_t *pd = (uint64_t *)(pdpt[pdpt_idx] & mask);
+    if (!(pd[pd_idx] & 1)) return;
+    if (pd[pd_idx] & (1ULL << 7)) return;  /* 2MB large page, lewati */
+    uint64_t *pt = (uint64_t *)(pd[pd_idx] & mask);
+    pt[pt_idx] = 0;
+    __asm__ volatile ("invlpg (%0)" :: "r"(virt) : "memory");
+}
+
+/*
  * Buat PML4 baru untuk proses user:
  *   pml4[0] -> proc_pdpt
  *   proc_pdpt[0] -> proc_pd_low  (0-1GB, per-proses)

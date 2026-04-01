@@ -221,6 +221,18 @@ typedef struct _UHdr {
 
 static _UHdr         *_uheap = 0;
 static unsigned long  _ubrk  = 0;
+static int            _umtx  = -1;  /* semaphore mutex untuk thread-safe heap */
+
+/* Forward declarations — definisi lengkap ada di bawah dekat syscall wrappers */
+static int sem_alloc(int initial_value);
+static int sem_wait(int id);
+static int sem_post(int id);
+
+/* Inisialisasi mutex pada panggilan malloc/free pertama.
+ * Aman karena thread belum berjalan sebelum malloc pertama dipanggil induk. */
+static inline void _umtx_init() {
+    if (_umtx < 0) _umtx = sem_alloc(1);
+}
 
 static inline unsigned long sys_brk(unsigned long new_end) {
     return (unsigned long)syscall1(SYS_BRK, (long)new_end);
@@ -254,11 +266,13 @@ static _UHdr *_uheap_grow(unsigned int need) {
 
 static inline void* malloc(int size) {
     if (size <= 0) return 0;
+    _umtx_init();
+    sem_wait(_umtx);
     unsigned int sz = (unsigned int)((size + 3) & ~3);
     /* Inisialisasi heap pada panggilan pertama */
     if (!_uheap) {
         _ubrk = _USER_HEAP_START;
-        if (!_uheap_grow(sz)) return 0;
+        if (!_uheap_grow(sz)) { sem_post(_umtx); return 0; }
     }
     /* First-fit search */
     _UHdr *c = _uheap;
@@ -274,22 +288,26 @@ static inline void* malloc(int size) {
                 c->next  = sp;
             }
             c->free = 0;
+            sem_post(_umtx);
             return (void*)(c + 1);
         }
         if (!c->next) {
             /* Tidak ada slot bebas — perluas heap */
             _UHdr *nb = _uheap_grow(sz);
-            if (!nb) return 0;
+            if (!nb) { sem_post(_umtx); return 0; }
             /* Langsung pakai blok baru ini */
             continue;
         }
         c = c->next;
     }
+    sem_post(_umtx);
     return 0;
 }
 
 static inline void free(void *ptr) {
     if (!ptr) return;
+    _umtx_init();
+    sem_wait(_umtx);
     _UHdr *blk = (_UHdr*)ptr - 1;
     blk->free = 1;
     /* Coalescing: gabung blok bebas bersebelahan */
@@ -302,6 +320,7 @@ static inline void free(void *ptr) {
             c = c->next;
         }
     }
+    sem_post(_umtx);
 }
 
 // ============================================================

@@ -19,7 +19,7 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 | Arsitektur | x86_64 — IA-32e Long Mode (64-bit) |
 | Boot | MBR 512-byte → Protected Mode → Long Mode |
 | Resolusi | 1920×1080 @ 32bpp (VBE Linear Framebuffer, ~8.3MB) |
-| Kernel | ~258 KB binary |
+| Kernel | ~260 KB binary |
 | Memory Map | 4-level paging, identity-mapped 4GB, heap kernel 6MB (0x100000–0x6FFFFF) |
 | Multitasking | Round-robin preemptive, hingga 16 task, PIT IRQ0 @ 1000 Hz |
 | Ring | Kernel Ring-0 / User Ring-3 (isolasi penuh per-proses) |
@@ -67,7 +67,7 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 
 ### IPC & Sinkronisasi
 - **Message passing**: `SYS_MSG_SEND` / `SYS_MSG_RECV`
-- **Semaphore**: `SYS_SEM_CREATE/WAIT/SIGNAL/DESTROY`
+- **Semaphore (blocking sejati)**: `SYS_SEM_ALLOC/WAIT/POST/FREE` — `sem_wait()` memanggil `task_block()` saat value==0, `sem_post()` memanggil `task_unblock(waiter)`; SEM_MAX=16
 - **Pipe**: anonymous pipe buffer kernel + named pipe (`SYS_PIPE_NAMED`)
 - **Shared memory**: `shm_create/attach/detach`, dipetakan ke VA 0x500000+slot×4096 (`SYS_SHM_CREATE/ATTACH/DETACH`)
 
@@ -123,6 +123,13 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **Syscall**: `SYS_THREAD_CREATE(64)`, `SYS_THREAD_EXIT(65)`, `SYS_THREAD_JOIN(66)`
 - **lib.h API**: `thread_create(fn, arg)`, `thread_exit()`, `thread_join(tid)` — inline SYSCALL
 - **Demo**: `threadtest` — spawn 3 thread paralel, join semua, verifikasi shared counter
+
+### Fondasi Threading — Fondasi O
+- **Thread stack frame leak fix**: `tstack_frame` disimpan di Task struct; `task_exit()` thread path kini memanggil `vmm_unmap_page()` + `pmm_free_frame()` → tidak ada lagi 4KB leak per siklus thread
+- **vmm_unmap_page()** baru: clear PTE + `invlpg` tanpa membebaskan frame (caller menentukan kapan free)
+- **Proteksi parent-exits-before-threads**: saat proses induk `exit()`, semua thread anak di-force-kill terlebih dahulu (free stack frame, clear slot, wake joiner) sebelum `vmm_free_user_memory()` dipanggil — mencegah use-after-free
+- **Semaphore blocking sejati**: `sem_wait()` diganti dari `task_sleep(10)` busy-wait ke `task_block()` sejati; `sem_post()` memanggil `task_unblock(waiter)` — CPU tidak terbuang saat menunggu semaphore
+- **Thread-safe malloc/free**: `lib.h` kini punya mutex `_umtx` (semaphore id, lazy-init); semua operasi `malloc()`/`free()` dibungkus `sem_wait(_umtx)`/`sem_post(_umtx)` — aman untuk multi-thread
 
 ### SMP — Tahap H
 - **LAPIC**: enable via IA32_APIC_BASE MSR + SVR register, baca APIC ID, kirim INIT/SIPI IPI via ICR
@@ -420,6 +427,9 @@ Lihat [ROADMAP.txt](ROADMAP.txt) untuk roadmap lengkap.
 | Tahap K — Guard Page | 1 Apr 2026 | Stack overflow detection via #PF + CR2 guard zone |
 | Tahap L — Message Queue | 1 Apr 2026 | Per-task mailbox, syscall 60-61, `mq_send`/`mq_recv` |
 | Tahap M — Load-Balanced AP | 1 Apr 2026 | Two-pass scheduler, direct AP assignment, `taskstat` |
+| Fondasi N — Stabilitas Sistem | 1 Apr 2026 | PMM visibility, user heap SYS_BRK, waitpid, slot reuse, user malloc |
+| Tahap N — User-space Threading | 1 Apr 2026 | thread_create/exit/join, shared address space, `threadtest` |
+| Fondasi O — Stabilitas Threading | 1 Apr 2026 | Stack frame leak fix, blocking semaphore, thread-safe malloc, parent-exit guard |
 
 ---
 

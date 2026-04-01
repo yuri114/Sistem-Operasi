@@ -2,12 +2,13 @@
 #define SEMAPHORE_H
 #include <stdint.h>
 
-// Semaphore kernel — maksimum 8 semaphore global
-#define SEM_MAX 8
+// Semaphore kernel — maksimum 16 semaphore global
+#define SEM_MAX 16
 
 typedef struct {
-    int8_t  value;  // >= 0: tersedia, < 0: ada waiter
-    uint8_t used;   // slot aktif?
+    int8_t  value;   // >= 0: tersedia, == 0 saat ada waiter
+    uint8_t used;    // slot aktif?
+    int     waiter;  // tid task yang sedang diblokir di sem_wait (-1 = tidak ada)
 } Semaphore;
 
 void sem_init_all();                    // inisialisasi semua slot

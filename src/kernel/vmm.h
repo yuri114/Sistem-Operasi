@@ -12,6 +12,7 @@ uint32_t pmm_free_count();   /* jumlah frame bebas saat ini */
 uint64_t *vmm_create_page_dir();
 void      vmm_switch_dir(uint64_t *pml4);
 void      vmm_map_page(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags);
+void      vmm_unmap_page(uint64_t *pml4, uint64_t virt);   /* hapus pemetaan 1 halaman */
 void      vmm_free_user_memory(uint64_t *pml4);
 
 #endif

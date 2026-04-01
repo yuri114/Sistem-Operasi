@@ -140,7 +140,6 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
     for (k = 0; k < 15; k++) *(--stack_top) = 0;
 
     tasks[id].rsp = (uint64_t)stack_top;
-    /* Tahap J: setup fd 0/1/2 untuk task ring-3 */
     vfs_init_task(id);
     return id;
 }
@@ -206,6 +205,7 @@ int task_create_thread(uint64_t entry, uint64_t arg, int parent_tid) {
     for (k = 0; k < 15; k++) *(--stack_top) = (k == 5) ? arg : 0ULL;
 
     tasks[id].rsp = (uint64_t)stack_top;
+    tasks[id].tstack_frame = tstack_frame;  /* simpan untuk dibebaskan saat thread exit */
     return id;
 }
 
@@ -362,8 +362,11 @@ void task_switch_ap(int cpu_idx)
 
 void task_exit() {
     int tid = current_task;
-    uint8_t is_thr  = tasks[tid].is_thread;
-    uint64_t *dir   = tasks[tid].page_dir;
+    uint8_t   is_thr       = tasks[tid].is_thread;
+    uint64_t *dir          = tasks[tid].page_dir;
+    uint64_t  tstack_frame = tasks[tid].tstack_frame;
+    int       ptid         = tasks[tid].parent_tid;
+    uint64_t  tstack_va    = 0x700000ULL + (uint64_t)tid * 0x1000ULL;
 
     /* Thread tidak memiliki page_dir sendiri → jangan tutup fd dan jangan free page_dir.
      * Proses biasa: tutup semua fd lalu bebaskan seluruh memori user. */
@@ -375,16 +378,40 @@ void task_exit() {
     /* Simpan waiter sebelum membersihkan slot */
     int waiter = tasks[tid].waiter;
 
-    tasks[tid].used      = 0;
-    tasks[tid].cpu_id    = (int8_t)-1;   /* kembalikan ke pool */
-    tasks[tid].page_dir  = 0;
-    tasks[tid].waiter    = -1;
-    tasks[tid].is_thread = 0;
+    tasks[tid].used         = 0;
+    tasks[tid].cpu_id       = (int8_t)-1;   /* kembalikan ke pool */
+    tasks[tid].page_dir     = 0;
+    tasks[tid].waiter       = -1;
+    tasks[tid].is_thread    = 0;
+    tasks[tid].tstack_frame = 0;
 
     /* Kembali ke boot PML4 dulu */
     vmm_switch_dir((uint64_t *)0x1000);
 
-    if (!is_thr) {
+    if (is_thr) {
+        /* F-O1: bebaskan frame stack thread dan hapus pemetaannya dari page_dir induk.
+         * Ini mencegah vmm_free_user_memory induk men-double-free frame ini. */
+        if (tstack_frame) {
+            if (ptid >= 0 && ptid < MAX_TASKS && tasks[ptid].used)
+                vmm_unmap_page(tasks[ptid].page_dir, tstack_va);
+            pmm_free_frame(tstack_frame);
+        }
+    } else {
+        /* F-O2: bunuh semua thread yang masih hidup sebelum membebaskan halaman.
+         * Mencegah use-after-free saat page_dir dibebaskan. */
+        int i;
+        for (i = 1; i < MAX_TASKS; i++) {
+            if (tasks[i].used && tasks[i].is_thread && tasks[i].parent_tid == tid) {
+                int tw = tasks[i].waiter;
+                if (tasks[i].tstack_frame)
+                    pmm_free_frame(tasks[i].tstack_frame);
+                tasks[i].used   = 0;
+                tasks[i].cpu_id = (int8_t)-1;
+                /* Bangunkan siapapun yang sedang thread_join ke thread ini */
+                if (tw >= 0 && tw < MAX_TASKS && tasks[tw].used)
+                    task_unblock(tw);
+            }
+        }
         /* Hanya proses pemilik yang membebaskan page_dir */
         vmm_free_user_memory(dir);
     }

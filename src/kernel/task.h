@@ -26,6 +26,7 @@ typedef struct {
     int       parent_tid; /* untuk thread: tid proses induk; -1 = bukan thread  */
     int       waiter;     /* tid task yang menunggu task ini selesai (-1 = none) */
     uint64_t  heap_end;   /* akhir heap user (0x400000 awal); 0 = kernel task   */
+    uint64_t  tstack_frame; /* frame fisik stack thread (0 jika bukan thread)   */
 } Task;
 
 void task_init();
