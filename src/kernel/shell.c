@@ -9,6 +9,7 @@
 #include "elf_loader.h"
 #include "task.h"
 #include "pipe.h"
+#include "net.h"
 
 /*fungsi dari kernel.c*/
 void print(const char *str);
@@ -72,6 +73,7 @@ static const char *shell_commands[] = {
     "echo ", "exec ", "read ", "write ", "del ", "kill ",
     "cd ", "pwd", "export ", "env",
     "sync", "mkdir ", "chmod ",
+    "ifconfig", "ping ",
     0
 };
 
@@ -86,6 +88,19 @@ static int str_copy(char *dst, const char *src) {
     while (src[i]) { dst[i] = src[i]; i++; }
     dst[i] = '\0';
     return i;
+}
+
+/* G4 — Parse "a.b.c.d" ke uint8_t[4]. Return 1 berhasil, 0 gagal. */
+static int parse_ip(const char *s, uint8_t ip[4]) {
+    int i;
+    for (i = 0; i < 4; i++) {
+        int n = 0;
+        while (*s >= '0' && *s <= '9') { n = n * 10 + (*s - '0'); s++; }
+        if (n > 255) return 0;
+        ip[i] = (uint8_t)n;
+        if (i < 3) { if (*s != '.') return 0; s++; }
+    }
+    return 1;
 }
 
 /* F1 — Buat path: prefix current_dir jika perlu */
@@ -239,6 +254,8 @@ static void shell_execute(){
         print("sync                 - flush dirty file ke disk\n");
         print("export KEY=VAL       - set environment variable\n");
         print("env                  - tampilkan semua env var\n");
+        print("ifconfig             - tampilkan info jaringan (MAC, IP, GW)\n");
+        print("ping <ip>            - kirim 4 ICMP echo request ke IP\n");
         print("paging               - tampilkan status paging\n");
         print("exec <nama> [&]      - jalankan program ELF (& = background)\n");
         print("ps                   - tampilkan daftar proses\n");
@@ -690,6 +707,22 @@ static void shell_execute(){
             }       /* end else (pipe_fd >= 0) */
         }           /* end else (rest[j] == ' ') */
     }
+    else if (str_compare(input_buffer, "ifconfig")) {
+        net_ifconfig();
+    }
+    else if (str_compare(input_buffer, "ping")) {
+        print("gunakan ping <ip>   contoh: ping 10.0.2.2\n");
+    }
+    else if (str_starts_with(input_buffer, "ping ")) {
+        uint8_t ip[4];
+        if (!parse_ip(input_buffer + 5, ip)) {
+            set_color(GFX_LRED, GFX_BLACK);
+            print("ping: alamat IP tidak valid\n");
+            set_color(GFX_WHITE, GFX_BLACK);
+        } else {
+            net_ping(ip, 4);
+        }
+    }
     else {
         /* Cek apakah ada operator ' | ' (pipe inline) */
         int pipe_pos = -1;
@@ -787,6 +820,8 @@ void shell_process_char(char c){
 
         input_len = 0;
         shell_execute();
+        input_len = 0;          /* reset ulang: shell_expand_vars() mungkin menulisnya */
+        input_buffer[0] = '\0';
         set_color(GFX_LGREEN, GFX_BLACK);
         print("> ");
         set_color(GFX_WHITE, GFX_BLACK);

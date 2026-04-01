@@ -270,26 +270,46 @@ Prasyarat: Tahap D, E
        build.ps1: tambah kompilasi clock.c + sysinfo.c → xxd -i → header
 
 ================================================================
-TAHAP G — NETWORKING (jangka panjang)
-Status: [ ] Belum dimulai
+TAHAP G — NETWORKING
+Status: [SELESAI] ✓ Selesai 2 April 2026 — build OK (219KB), test QEMU OK
 Prasyarat: Tahap D, E
 ----------------------------------------------------------------
-  [G1] NIC driver — RTL8139 atau E1000 (keduanya didukung QEMU)
-       - MMIO register access
-       - Transmit / receive ring buffer
+  [G1] ✓ RTL8139 NIC driver (polling, tanpa IRQ)
+       - PCI scan bus 0-7 cari vendor 0x10EC device 0x8139
+       - Aktifkan I/O Space + Bus Master via PCI command register
+       - BAR0 = I/O port base
+       - RX ring buffer 8K+16+1518 byte (statis di BSS, VA=PA identity-map)
+       - TX: 4 descriptor round-robin, poll TOK/TABT
+       - RX: poll CMD.BUFE, baca header 4-byte (status+pkt_len), salin frame
+       File: src/kernel/rtl8139.h, src/kernel/rtl8139.c
+       QEMU flag: -netdev user,id=net0 -device rtl8139,netdev=net0
 
-  [G2] Network stack minimal
-       - ARP, IP, ICMP (ping)
-       - UDP socket
-       - TCP minimal (tanpa congestion control penuh)
+  [G2] ✓ Ethernet + ARP
+       - Bangun Ethernet frame (dst/src MAC + ethertype)
+       - ARP request/reply (untuk IPv4, ethertype 0x0806)
+       - ARP cache: 8 slot IP→MAC
+       - Otomatis balas ARP request untuk IP kita (10.0.2.15)
+       File: src/kernel/net.c
 
-  [G3] Socket API untuk user space
-       - socket(), bind(), send(), recv()
-       - Syscall baru: SYS_SOCK_OPEN, SYS_SOCK_SEND, SYS_SOCK_RECV
+  [G3] ✓ IPv4 + ICMP echo (ping)
+       - IPv4 header (20 byte, checksum, TTL=64)
+       - ICMP type 8 (echo request) + type 0 (echo reply)
+       - Checksum 16-bit one's complement (inet_cksum)
+       - Routing: subnet check → direct atau via gateway (10.0.2.2)
+       - RTT diukur dengan get_ticks() (resolusi 1 ms)
+       File: src/kernel/net.c
 
-  [G4] Aplikasi jaringan sederhana
-       - ping utility
-       - HTTP client sederhana (wget-like)
+  [G4] ✓ Shell commands
+       - ifconfig: tampilkan MAC, IP (10.0.2.15), gateway (10.0.2.2)
+       - ping <ip>: kirim 4 ICMP echo request, tampilkan RTT atau timeout
+       - parse_ip(): konversi string "a.b.c.d" → uint8_t[4]
+       File: src/kernel/shell.c
+
+  Kernel size: 211KB → 219KB (+ rtl8139.c + net.c)
+  Test: ifconfig ✓, ping 10.0.2.2 → 4/4 reply, rtt=0ms
+  [BUG FIX] icmp_echo_send: htons(84) double byte-swap menyebabkan
+    IP total length = 21504 di wire → QEMU SLIRP reject paket.
+    Diperbaiki ke tulis bytes langsung: p[2]=0x00, p[3]=0x54.
 
 ================================================================
 TAHAP H — SMP / MULTI-CORE (jangka jauh)
@@ -323,7 +343,7 @@ RINGKASAN URUTAN & STATUS
   [DONE] Tahap D     — Kernel Stability & Driver  (1 April 2026)
   [DONE] Tahap E     — Filesystem & I/O Lanjutan  (2 April 2026)
   [DONE] Tahap F     — Userspace & Shell Lanjutan  (2 April 2026)
-  [    ] Tahap G     — Networking
+  [DONE] Tahap G     — Networking                   (2 April 2026)
   [    ] Tahap H     — SMP / Multi-core
 
 ================================================================

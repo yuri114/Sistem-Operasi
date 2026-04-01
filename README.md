@@ -19,7 +19,7 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 | Arsitektur | x86_64 — IA-32e Long Mode (64-bit) |
 | Boot | MBR 512-byte → Protected Mode → Long Mode |
 | Resolusi | 1920×1080 @ 32bpp (VBE Linear Framebuffer, ~8.3MB) |
-| Kernel | ~211 KB binary |
+| Kernel | ~219 KB binary |
 | Memory Map | 4-level paging, identity-mapped 4GB, heap kernel 6MB (0x100000–0x6FFFFF) |
 | Multitasking | Round-robin preemptive, hingga 16 task, PIT IRQ0 @ 1000 Hz |
 | Ring | Kernel Ring-0 / User Ring-3 (isolasi penuh per-proses) |
@@ -77,6 +77,16 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **Taskbar**: task list, klik untuk focus/restore window
 - **Klip mouse**: tracking posisi, kursor paint sederhana
 
+### Networking — Tahap G
+- **RTL8139 driver**: PCI scan (vendor 0x10EC / device 0x8139), I/O port access, TX 4-descriptor round-robin, RX ring 8K (polling, tanpa IRQ)
+- **Ethernet**: bangun/parse frame 14-byte header, ethertype ARP/IPv4
+- **ARP**: request/reply, cache 8 slot IP→MAC, jawab ARP request untuk IP kita
+- **IPv4**: header 20B, TTL=64, checksum 16-bit one's complement
+- **ICMP**: echo request (type 8) / echo reply (type 0), RTT diukur via `get_ticks()` (1ms)
+- **Routing**: subnet check → direct atau via gateway (10.0.2.2)
+- **QEMU SLIRP**: `-netdev user,id=net0 -device rtl8139,netdev=net0`
+  - Guest IP: `10.0.2.15` (hardcoded), Gateway: `10.0.2.2`, DNS: `10.0.2.3`
+
 ### Shell
 - **Command-line shell** interaktif di kernel thread
 - **History**: 8 entri, navigasi dengan ↑/↓
@@ -85,7 +95,8 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **Environment variables**: `export KEY=VAL`, ekspansi `$VAR` di input
 - **Direktori**: `cd <dir>`, `pwd`, direktori-aware `ls`/`read`/`write`/`del`
 - **Background exec**: tambah `&` di akhir perintah
-- **Built-in commands**: `ps`, `kill`, `ls`, `read`, `write`, `del`, `clear`, `help`, `exec`, `sync`, `mkdir`, `chmod`, `cd`, `pwd`, `export`, `env`, `pipe`, ...
+- **Jaringan**: `ifconfig` (tampilkan MAC/IP/GW), `ping <ip>` (4 ICMP echo requests + RTT)
+- **Built-in commands**: `ps`, `kill`, `ls`, `read`, `write`, `del`, `clear`, `help`, `exec`, `sync`, `mkdir`, `chmod`, `cd`, `pwd`, `export`, `env`, `ifconfig`, `ping`, ...
 
 ### Syscall Interface (user space via `SYSCALL/SYSRET`)
 ```
@@ -160,6 +171,8 @@ SYS_SHM_CREATE(53) SYS_SHM_ATTACH(54) SYS_SHM_DETACH(55)
 │   │   ├── semaphore.h / semaphore.c
 │   │   ├── pipe.h / pipe.c          # Anonymous pipe + named pipe
 │   │   ├── shm.h / shm.c            # Shared memory (8 region × 4KB)
+│   │   ├── rtl8139.h / rtl8139.c    # RTL8139 NIC driver (PCI, TX/RX polling)
+│   │   ├── net.h / net.c            # Network stack: Ethernet + ARP + IPv4 + ICMP
 │   │   ├── serial.h / serial.c      # COM1 debug output
 │   │   ├── device.h / device.c      # Device framework
 │   │   ├── drv_vga.c / drv_kbd.c    # VGA & keyboard device driver

@@ -41,6 +41,7 @@
 #include "vbe.h"
 #include "keyboard.h"
 #include "serial.h"
+#include "net.h"
 
 /* Bochs VBE 1280x720 @ 32bpp: font 8x8 = 160 kolom x 90 baris */
 #define VGA_COLS 160
@@ -374,6 +375,7 @@ void kernel_main(){
     mem_init();
     pmm_init();
     ata_init();
+    net_init();
     fs_init();
     ipc_init();
     sem_init_all();
