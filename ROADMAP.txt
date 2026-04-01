@@ -366,6 +366,8 @@ RINGKASAN URUTAN & STATUS
   [DONE] Fondasi O   — Stabilitas Threading (stack leak, blocking sem, thread-safe malloc)  (1 April 2026)
   [DONE] Fondasi P   — Threading Lanjutan (stack 16KB, multi-waiter sem, naming, condvar)  (1 April 2026)
   [DONE] Fondasi R1  — Blocking I/O Sejati (keyboard, pipe, VFS stdin)  (1 April 2026)
+  [DONE] Fitur C1    — ps thread display [T:X], shell redirect > <, condtest (condvar demo)  (2 April 2026)
+  [DONE] Fitur C2    — TCP/UDP stack: net_tcp_connect/send/recv/close, tcp_get HTTP client  (2 April 2026)
 
 ================================================================
 
@@ -759,7 +761,107 @@ Tujuan: ganti busy-wait dan spin-loop pada semua jalur I/O dengan
                 Setelah tulis: w = reader_waiter; reader_waiter = -1; sti; task_unblock(w)
           File: src/kernel/pipe.h, src/kernel/pipe.c
 
+================================================================
+FITUR C1 — ps THREAD DISPLAY + SHELL I/O REDIRECT + condtest
+Status: [SELESAI] ✓ Selesai 2 April 2026 — build 282,888 bytes
+Prasyarat: Fondasi P, F-R1 selesai ✓
 ----------------------------------------------------------------
+Tujuan: Tambah ketiga fitur visible: identifikasi thread di ps,
+        redirect I/O di shell, dan program demo condvar.
+
+  [C1a] ✓ ps Thread Display
+          - task_is_thread(id): return tasks[id].is_thread
+          - task_get_parent(id): return tasks[id].parent_tid
+          - shell.c: ps loop cek task_is_thread → cetak "[T:parent]" warna GFX_LCYAN
+          File: src/kernel/task.h, src/kernel/task.c, src/kernel/shell.c
+
+  [C1b] ✓ Shell I/O Redirect
+          Masalah: exec prog > file tidak berjalan karena SYS_PRINT
+            memanggil print() kernel langsung, bypass VFS fd 1.
+          Race condition: timer IRQ bisa switch ke task baru sebelum
+            vfs_redirect_out dipanggil.
+          Fix:
+            - vfs.c: vfs_redirect_out(tid, path) — set fd[1]/fd[2] ke VFS_TYPE_FILE
+            - vfs.c: vfs_redirect_in(tid, path)  — set fd[0] ke VFS_TYPE_FILE RDONLY
+            - vfs.c: vfs_stdout_is_file(tid)      — cek apakah fd[1] adalah file
+            - vfs.h: deklarasi ketiga fungsi baru
+            - syscall.c: SYS_PRINT handler cek vfs_stdout_is_file(tid)
+                → jika ya: vfs_write(tid, 1, s, n)
+                → jika tidak: print(s)  (jalur lama)
+            - shell.c: exec parser parse ">" dan "<" token
+                cli sebelum task_create_user
+                sti setelah vfs_redirect_out/in dipanggil (race fix)
+          Contoh: exec hello > hasil.txt; read hasil.txt
+          File: src/kernel/vfs.c, src/kernel/vfs.h,
+                src/kernel/syscall.c, src/kernel/shell.c
+
+  [C1c] ✓ condtest — Demo Condition Variable
+          - Program: src/programs/condtest.c
+          - Producer-consumer: 1 mutex semaphore + 1 condvar
+            → producer sleep 300ms → lock → set buf_ready → cond_signal
+            → consumer: while(!buf_ready) cond_wait → print pesan
+          - Output terverifikasi: "cond_wait/cond_signal OK"
+          - build.ps1: kompilasi condtest.c → condtest.elf → condtest_elf_data.h
+          - kernel.c: fs_write_bin("condtest", ...) di programs_init()
+          File: src/programs/condtest.c, src/kernel/kernel.c, build.ps1
+
+================================================================
+FITUR C2 — TCP/UDP STACK
+Status: [SELESAI] ✓ Selesai 2 April 2026 — build 282,888 bytes
+Prasyarat: RTL8139 + ARP + IPv4 + ICMP selesai ✓
+----------------------------------------------------------------
+Tujuan: Implementasi transport layer lengkap (UDP dan TCP) di atas
+        stack IPv4 yang sudah ada, dengan shell command untuk testing.
+
+  [C2a] ✓ UDP Send
+          - net_udp_send(dst_ip, dst_port, src_port, data, dlen)
+          - Bangun IP header + UDP header + checksum (optional, set 0)
+          - Shell: udp_send <ip> <port> <pesan>
+          File: src/kernel/net.c, src/kernel/net.h, src/kernel/shell.c
+
+  [C2b] ✓ TCP Stack Penuh
+          Struktur: typedef struct TcpConn { used, state, dst_ip[4], dst_mac[6],
+            src_port, dst_port, snd_nxt, rcv_nxt, rx[1024], rx_head/tail,
+            fin_recv, rst_recv } TcpConn;
+          tcp_conns[4] (TCP_MAX_CONN=4), tcp_port_ctr=49152 (ephemeral port)
+
+          State machine: CLOSED → SYN_SENT → ESTABLISHED →
+            FIN_WAIT1 → FIN_WAIT2 → TIME_WAIT (active close)
+            CLOSE_WAIT → LAST_ACK (passive close via FIN dari server)
+
+          Fungsi internal:
+            - transport_cksum(): pseudo-header checksum TCP/UDP
+            - tcp_tx(conn, flags, data, len): kirim segmen IP+TCP
+            - tcp_rx_push(conn, data, len): masukkan data ke RX ring buffer
+            - tcp_rx_process(pkt, plen): dispatch ke TcpConn berdasarkan port
+
+          API publik:
+            - net_tcp_connect(dst_ip, port) → 0..3=connID, -1=timeout, -2=RST
+            - net_tcp_send(id, data, len)
+            - net_tcp_recv(id, buf, maxlen) → bytes (blocking, 5s timeout)
+            - net_tcp_close(id) → FIN handshake
+            - net_udp_send(dst_ip, dport, sport, data, dlen)
+            - net_poll(): single RX poll untuk driver
+
+          net_process() di-hook: if(proto==6) tcp_rx_process(...)
+
+          Fix RST vs Timeout: rst_recv field → connect return -2 jika RST
+            Shell pesan: "connection refused (RST)" vs "timeout 5 detik"
+
+          Shell tcp_get <ip> <port> [path]:
+            → ARP resolve MAC
+            → net_tcp_connect
+            → kirim "GET /path HTTP/1.0\r\nHost: ip\r\n\r\n"
+            → net_tcp_recv loop sampai 0 bytes / tutup
+            → cetak response + "total N bytes"
+
+          Terverifikasi:
+            → tcp_get 10.0.2.2 8080 /
+            → HTTP/1.0 200 OK dari Python SimpleHTTP server di Windows host
+            → Body 2403 bytes HTML direktori listing
+          File: src/kernel/net.c, src/kernel/net.h, src/kernel/shell.c
+
+================================================================
 Tujuan     : Mengubah framebuffer dari 8bpp (palette 256 warna)
              ke 32bpp (16 juta warna). Syarat wajib sebelum
              resolusi tinggi karena display HD tidak masuk akal

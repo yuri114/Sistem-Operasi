@@ -37,6 +37,49 @@ static const uint16_t ICMP_ID = 0x4D59;  /* 'MY' */
 static uint16_t ip_id_counter = 1;
 
 /* ================================================================== */
+/* TCP/UDP — structures & state constants                              */
+/* ================================================================== */
+#define TCP_CLOSED       0
+#define TCP_SYN_SENT     1
+#define TCP_ESTABLISHED  2
+#define TCP_FIN_WAIT1    3
+#define TCP_FIN_WAIT2    4
+#define TCP_CLOSE_WAIT   5
+#define TCP_LAST_ACK     6
+#define TCP_TIME_WAIT    7
+
+#define TCP_FIN  0x01
+#define TCP_SYN  0x02
+#define TCP_RST  0x04
+#define TCP_PSH  0x08
+#define TCP_ACK  0x10
+
+#define TCP_RX_SIZE  1024   /* RX ring buffer per connection   */
+#define TCP_MAX_CONN 4      /* simultaneous TCP connections    */
+
+typedef struct {
+    uint8_t  used;
+    uint8_t  state;
+    uint8_t  dst_ip[4];
+    uint8_t  dst_mac[6];
+    uint16_t src_port;
+    uint16_t dst_port;
+    uint32_t snd_nxt;       /* our next send sequence number   */
+    uint32_t rcv_nxt;       /* expected next byte from remote  */
+    uint8_t  rx[TCP_RX_SIZE];
+    uint16_t rx_head;
+    uint16_t rx_tail;
+    uint8_t  fin_recv;      /* 1 = remote sent FIN             */
+    uint8_t  rst_recv;      /* 1 = remote sent RST (refused)   */
+} TcpConn;
+
+static TcpConn tcp_conns[TCP_MAX_CONN];
+static uint16_t tcp_port_ctr = 49152;  /* ephemeral port counter */
+
+/* Forward declaration — defined after net_ping */
+static void tcp_rx_process(const uint8_t *ip_hdr, const uint8_t *tcp_seg, int tcp_total);
+
+/* ================================================================== */
 /* Byte-order helpers (x86 little-endian → network big-endian)        */
 /* ================================================================== */
 static uint16_t bswap16(uint16_t x) { return (uint16_t)((x >> 8) | (x << 8)); }
@@ -249,6 +292,10 @@ static int net_process(const uint8_t *pkt, uint16_t len,
                 return 1;
             }
         }
+
+        /* ---- TCP ---- */
+        if (proto == 6 && pay_len >= 20)
+            tcp_rx_process(ip, pay, pay_len);
     }
     return 0;
 }
@@ -352,3 +399,301 @@ int net_ping(const uint8_t dst_ip[4], int count) {
     }
     return 0;
 }
+
+/* ================================================================== */
+/* TCP/UDP implementation                                              */
+/* ================================================================== */
+
+/* ---- transport checksum (pseudo-header) ---- */
+static uint16_t transport_cksum(const uint8_t src_ip[4], const uint8_t dst_ip[4],
+                                 uint8_t proto, const uint8_t *seg, uint16_t seg_len) {
+    uint8_t ph[12];
+    int i;
+    mc(ph,   src_ip, 4);
+    mc(ph+4, dst_ip, 4);
+    ph[8]  = 0; ph[9] = proto;
+    ph[10] = (uint8_t)(seg_len >> 8);
+    ph[11] = (uint8_t)(seg_len & 0xFF);
+    uint32_t sum = 0;
+    for (i = 0; i < 12; i += 2) sum += ((uint32_t)ph[i] << 8) | ph[i+1];
+    const uint8_t *p = seg;
+    int len = (int)seg_len;
+    while (len > 1) { sum += ((uint32_t)p[0] << 8) | p[1]; p += 2; len -= 2; }
+    if (len) sum += (uint32_t)p[0] << 8;
+    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+    return (uint16_t)~sum;
+}
+
+/* ---- send one IP+TCP segment ---- */
+static void tcp_tx(TcpConn *c, uint8_t flags, uint32_t seq, uint32_t ack,
+                   const uint8_t *data, uint16_t dlen) {
+    uint16_t tcp_tlen = (uint16_t)(20 + dlen);
+    uint16_t ip_tlen  = (uint16_t)(20 + tcp_tlen);
+    int i;
+
+    uint8_t *p = eth_hdr(c->dst_mac, 0x0800);
+
+    /* IP header */
+    p[0]  = 0x45; p[1] = 0x00;
+    p[2]  = (uint8_t)(ip_tlen >> 8);
+    p[3]  = (uint8_t)(ip_tlen & 0xFF);
+    p[4]  = (uint8_t)(ip_id_counter >> 8);
+    p[5]  = (uint8_t)(ip_id_counter & 0xFF);
+    ip_id_counter++;
+    p[6]  = 0; p[7] = 0;
+    p[8]  = 64; p[9] = 6;  /* TTL, IPPROTO_TCP */
+    p[10] = 0; p[11] = 0;
+    mc(p+12, MY_IP,     4);
+    mc(p+16, c->dst_ip, 4);
+    uint16_t ick = inet_cksum(p, 20);
+    p[10] = (uint8_t)(ick >> 8); p[11] = (uint8_t)(ick & 0xFF);
+
+    /* TCP header (20 bytes, no options) */
+    uint8_t *t = p + 20;
+    t[0]  = (uint8_t)(c->src_port >> 8);
+    t[1]  = (uint8_t)(c->src_port & 0xFF);
+    t[2]  = (uint8_t)(c->dst_port >> 8);
+    t[3]  = (uint8_t)(c->dst_port & 0xFF);
+    t[4]  = (uint8_t)(seq >> 24); t[5] = (uint8_t)(seq >> 16);
+    t[6]  = (uint8_t)(seq >> 8);  t[7] = (uint8_t)(seq & 0xFF);
+    t[8]  = (uint8_t)(ack >> 24); t[9] = (uint8_t)(ack >> 16);
+    t[10] = (uint8_t)(ack >> 8);  t[11] = (uint8_t)(ack & 0xFF);
+    t[12] = 0x50;  /* data offset = 5 words = 20 bytes */
+    t[13] = flags;
+    t[14] = 0xFF; t[15] = 0xFF;  /* window = 65535 */
+    t[16] = 0; t[17] = 0;        /* checksum placeholder */
+    t[18] = 0; t[19] = 0;        /* urgent */
+    for (i = 0; i < (int)dlen; i++) t[20 + i] = data[i];
+    uint16_t tck = transport_cksum(MY_IP, c->dst_ip, 6, t, tcp_tlen);
+    t[16] = (uint8_t)(tck >> 8); t[17] = (uint8_t)(tck & 0xFF);
+
+    rtl8139_send(pkt_buf, (uint16_t)(14 + 20 + tcp_tlen));
+}
+
+/* ---- push received data into connection rx ring buffer ---- */
+static void tcp_rx_push(TcpConn *c, const uint8_t *data, uint16_t len) {
+    uint16_t i;
+    for (i = 0; i < len; i++) {
+        uint16_t next = (uint16_t)((c->rx_head + 1) % TCP_RX_SIZE);
+        if (next == c->rx_tail) break;  /* full: drop */
+        c->rx[c->rx_head] = data[i];
+        c->rx_head = next;
+    }
+}
+
+/* ---- process one incoming TCP segment (called from net_process) ---- */
+static void tcp_rx_process(const uint8_t *ip_hdr, const uint8_t *tcp_seg, int tcp_total) {
+    const uint8_t *src_ip = ip_hdr + 12;
+    uint16_t rsp  = (uint16_t)(((uint16_t)tcp_seg[0] << 8) | tcp_seg[1]);  /* remote src port */
+    uint16_t rdp  = (uint16_t)(((uint16_t)tcp_seg[2] << 8) | tcp_seg[3]);  /* remote dst port (= our src) */
+    uint32_t sseq = ((uint32_t)tcp_seg[4]<<24)|((uint32_t)tcp_seg[5]<<16)|((uint32_t)tcp_seg[6]<<8)|tcp_seg[7];
+    uint32_t sack = ((uint32_t)tcp_seg[8]<<24)|((uint32_t)tcp_seg[9]<<16)|((uint32_t)tcp_seg[10]<<8)|tcp_seg[11];
+    uint8_t  doff = (uint8_t)((tcp_seg[12] >> 4) * 4);  /* TCP header length */
+    uint8_t  flags= tcp_seg[13];
+    int      dlen = tcp_total - (int)doff;
+    if (dlen < 0) dlen = 0;
+    const uint8_t *data = tcp_seg + doff;
+    int i;
+
+    for (i = 0; i < TCP_MAX_CONN; i++) {
+        TcpConn *c = &tcp_conns[i];
+        if (!c->used) continue;
+        if (c->src_port != rdp) continue;
+        if (c->dst_port != rsp) continue;
+        if (!meq(c->dst_ip, src_ip, 4)) continue;
+
+        /* RST: abort */
+        if (flags & TCP_RST) { c->rst_recv = 1; c->state = TCP_CLOSED; c->used = 0; return; }
+
+        if (c->state == TCP_SYN_SENT) {
+            /* Expect SYN+ACK */
+            if ((flags & (TCP_SYN | TCP_ACK)) == (TCP_SYN | TCP_ACK)) {
+                c->rcv_nxt = sseq + 1;
+                c->snd_nxt = sack;
+                c->state   = TCP_ESTABLISHED;
+                tcp_tx(c, TCP_ACK, c->snd_nxt, c->rcv_nxt, 0, 0);
+            }
+        } else if (c->state == TCP_ESTABLISHED || c->state == TCP_FIN_WAIT1
+                                                || c->state == TCP_FIN_WAIT2) {
+            /* Update snd_nxt on ACK */
+            if (flags & TCP_ACK) {
+                if (c->state == TCP_FIN_WAIT1 && sack == c->snd_nxt)
+                    c->state = TCP_FIN_WAIT2;
+                else
+                    c->snd_nxt = sack;
+            }
+            /* Accept incoming data */
+            if (dlen > 0 && c->state == TCP_ESTABLISHED) {
+                tcp_rx_push(c, data, (uint16_t)dlen);
+                c->rcv_nxt += (uint32_t)dlen;
+                tcp_tx(c, TCP_ACK, c->snd_nxt, c->rcv_nxt, 0, 0);
+            }
+            /* Remote FIN */
+            if (flags & TCP_FIN) {
+                c->rcv_nxt++;
+                c->fin_recv = 1;
+                tcp_tx(c, TCP_ACK, c->snd_nxt, c->rcv_nxt, 0, 0);
+                if (c->state == TCP_ESTABLISHED) c->state = TCP_CLOSE_WAIT;
+                else                             c->state = TCP_TIME_WAIT;
+            }
+        } else if (c->state == TCP_LAST_ACK) {
+            if (flags & TCP_ACK) { c->used = 0; c->state = TCP_CLOSED; }
+        }
+        break;
+    }
+}
+
+/* ---- next-hop: same subnet → direct, else gateway ---- */
+static void next_hop_ip(const uint8_t dst[4], uint8_t out[4]) {
+    if (dst[0]==MY_IP[0] && dst[1]==MY_IP[1] && dst[2]==MY_IP[2])
+        mc(out, dst, 4);
+    else
+        mc(out, GW_IP, 4);
+}
+
+/* ================================================================== */
+/* Public API — UDP                                                    */
+/* ================================================================== */
+int net_udp_send(const uint8_t dst_ip[4], uint16_t dst_port,
+                 uint16_t src_port, const void *data, uint16_t dlen) {
+    if (!rtl8139_present()) return -1;
+    uint8_t nh[4]; next_hop_ip(dst_ip, nh);
+    uint8_t dst_mac[6];
+    if (!arp_resolve(nh, dst_mac)) return -1;
+
+    uint16_t udp_len = (uint16_t)(8 + dlen);
+    uint16_t ip_tlen = (uint16_t)(20 + udp_len);
+    int i;
+
+    uint8_t *p = eth_hdr(dst_mac, 0x0800);
+    p[0]  = 0x45; p[1] = 0x00;
+    p[2]  = (uint8_t)(ip_tlen >> 8);
+    p[3]  = (uint8_t)(ip_tlen & 0xFF);
+    p[4]  = (uint8_t)(ip_id_counter >> 8);
+    p[5]  = (uint8_t)(ip_id_counter & 0xFF);
+    ip_id_counter++;
+    p[6]  = 0; p[7] = 0;
+    p[8]  = 64; p[9] = 17;  /* TTL, IPPROTO_UDP */
+    p[10] = 0; p[11] = 0;
+    mc(p+12, MY_IP,  4);
+    mc(p+16, dst_ip, 4);
+    uint16_t ick = inet_cksum(p, 20);
+    p[10] = (uint8_t)(ick >> 8); p[11] = (uint8_t)(ick & 0xFF);
+
+    uint8_t *u = p + 20;
+    u[0] = (uint8_t)(src_port >> 8); u[1] = (uint8_t)(src_port & 0xFF);
+    u[2] = (uint8_t)(dst_port >> 8); u[3] = (uint8_t)(dst_port & 0xFF);
+    u[4] = (uint8_t)(udp_len >> 8);  u[5] = (uint8_t)(udp_len & 0xFF);
+    u[6] = 0; u[7] = 0;  /* checksum = 0 (optional for UDP/IPv4) */
+    for (i = 0; i < (int)dlen; i++) u[8 + i] = ((const uint8_t*)data)[i];
+
+    rtl8139_send(pkt_buf, (uint16_t)(14 + 20 + udp_len));
+    return 0;
+}
+
+/* ================================================================== */
+/* Public API — TCP                                                    */
+/* ================================================================== */
+static void net_poll_once(void) {
+    uint8_t buf[1514]; uint16_t len;
+    if (rtl8139_recv(buf, &len) == 0)
+        net_process(buf, len, 0, 0, 0);
+}
+
+int net_tcp_connect(const uint8_t dst_ip[4], uint16_t dst_port) {
+    if (!rtl8139_present()) return -1;
+    int id = -1, i;
+    for (i = 0; i < TCP_MAX_CONN; i++) if (!tcp_conns[i].used) { id = i; break; }
+    if (id < 0) return -1;
+
+    TcpConn *c = &tcp_conns[id];
+    uint8_t nh[4]; next_hop_ip(dst_ip, nh);
+    if (!arp_resolve(nh, c->dst_mac)) return -1;
+
+    mc(c->dst_ip, dst_ip, 4);
+    c->dst_port  = dst_port;
+    c->src_port  = tcp_port_ctr++;
+    if (tcp_port_ctr < 49152) tcp_port_ctr = 49152;
+    c->snd_nxt   = 0x12340000u + (uint32_t)(c->src_port * 131u);
+    c->rcv_nxt   = 0;
+    c->rx_head   = c->rx_tail = 0;
+    c->fin_recv  = 0;
+    c->rst_recv  = 0;
+    c->state     = TCP_SYN_SENT;
+    c->used      = 1;
+
+    /* Send SYN */
+    tcp_tx(c, TCP_SYN, c->snd_nxt, 0, 0, 0);
+    c->snd_nxt++;
+
+    /* Wait up to 5s for SYN-ACK */
+    uint32_t deadline = get_ticks() + 5000;
+    while (get_ticks() < deadline) {
+        net_poll_once();
+        if (c->state == TCP_ESTABLISHED) return id;
+        if (!c->used) break;  /* RST received */
+    }
+    int was_rst = c->rst_recv;
+    c->used = 0; c->state = TCP_CLOSED;
+    return was_rst ? -2 : -1;  /* -2 = refused/RST, -1 = timeout */
+}
+
+int net_tcp_send(int id, const void *data, uint16_t len) {
+    if (id < 0 || id >= TCP_MAX_CONN) return -1;
+    TcpConn *c = &tcp_conns[id];
+    if (!c->used || c->state != TCP_ESTABLISHED) return -1;
+    uint16_t chunk = len > 1400 ? 1400 : len;
+    tcp_tx(c, TCP_PSH | TCP_ACK, c->snd_nxt, c->rcv_nxt, (const uint8_t*)data, chunk);
+    c->snd_nxt += chunk;
+    return (int)chunk;
+}
+
+/* Return bytes read, 0 = connection closed / timeout, -1 = error */
+int net_tcp_recv(int id, void *buf, uint16_t maxlen) {
+    if (id < 0 || id >= TCP_MAX_CONN) return -1;
+    TcpConn *c = &tcp_conns[id];
+    if (!c->used) return -1;
+
+    uint32_t deadline = get_ticks() + 5000;
+    while (get_ticks() < deadline) {
+        net_poll_once();
+        /* Return any buffered data */
+        if (c->rx_head != c->rx_tail) {
+            uint8_t *out = (uint8_t *)buf;
+            uint16_t got = 0;
+            while (c->rx_tail != c->rx_head && got < maxlen) {
+                out[got++] = c->rx[c->rx_tail];
+                c->rx_tail = (uint16_t)((c->rx_tail + 1) % TCP_RX_SIZE);
+            }
+            return (int)got;
+        }
+        /* Remote closed and no more data */
+        if (c->fin_recv || c->state == TCP_CLOSE_WAIT ||
+            c->state == TCP_CLOSED || !c->used) return 0;
+    }
+    return 0;  /* timeout */
+}
+
+void net_tcp_close(int id) {
+    if (id < 0 || id >= TCP_MAX_CONN) return;
+    TcpConn *c = &tcp_conns[id];
+    if (!c->used) return;
+    if (c->state == TCP_ESTABLISHED || c->state == TCP_CLOSE_WAIT) {
+        tcp_tx(c, TCP_FIN | TCP_ACK, c->snd_nxt, c->rcv_nxt, 0, 0);
+        c->snd_nxt++;
+        c->state = (c->state == TCP_ESTABLISHED) ? TCP_FIN_WAIT1 : TCP_LAST_ACK;
+        uint32_t deadline = get_ticks() + 3000;
+        while (get_ticks() < deadline && c->used) {
+            net_poll_once();
+            if (c->state == TCP_TIME_WAIT || c->state == TCP_CLOSED) break;
+        }
+    }
+    c->used = 0; c->state = TCP_CLOSED;
+}
+
+int net_tcp_state(int id) {
+    if (id < 0 || id >= TCP_MAX_CONN || !tcp_conns[id].used) return TCP_CLOSED;
+    return tcp_conns[id].state;
+}
+
+void net_poll(void) { net_poll_once(); }

@@ -78,6 +78,7 @@ static const char *shell_commands[] = {
     "cd ", "pwd", "export ", "env",
     "sync", "mkdir ", "chmod ",
     "ifconfig", "ping ", "cpuinfo",
+    "udp_send ", "tcp_get ",
     "open ", "fread ", "fwrite ", "fclose ",
     "mq_send ", "mq_recv", "taskstat", "meminfo", "threadtest",
     0
@@ -262,6 +263,8 @@ static void shell_execute(){
         print("env                  - tampilkan semua env var\n");
         print("ifconfig             - tampilkan info jaringan (MAC, IP, GW)\n");
         print("ping <ip>            - kirim 4 ICMP echo request ke IP\n");
+        print("udp_send <ip> <port> <pesan> - kirim UDP datagram\n");
+        print("tcp_get <ip> <port> [path]   - HTTP GET via TCP (demo koneksi internet)\n");
         print("cpuinfo              - tampilkan info SMP (BSP/AP online)\n");
         print("taskstat             - tampilkan distribusi task per CPU\n");
         print("meminfo              - tampilkan statistik memori fisik & heap\n");
@@ -793,6 +796,116 @@ static void shell_execute(){
             set_color(GFX_WHITE, GFX_BLACK);
         } else {
             net_ping(ip, 4);
+        }
+    }
+    else if (str_starts_with(input_buffer, "udp_send ")) {
+        /* Syntax: udp_send <ip> <port> <pesan> */
+        const char *p = input_buffer + 9;
+        uint8_t ip[4];
+        if (!parse_ip(p, ip)) {
+            print("udp_send: IP tidak valid\n");
+        } else {
+            while (*p && *p != ' ') p++;
+            while (*p == ' ') p++;
+            uint16_t port = 0;
+            while (*p >= '0' && *p <= '9') { port = (uint16_t)(port * 10 + (*p - '0')); p++; }
+            while (*p == ' ') p++;
+            if (!*p || port == 0) {
+                print("udp_send: gunakan: udp_send <ip> <port> <pesan>\n");
+            } else {
+                int n = 0; while (p[n]) n++;
+                if (net_udp_send(ip, port, 54321, p, (uint16_t)n) == 0) {
+                    set_color(GFX_LGREEN, GFX_BLACK);
+                    print("udp: terkirim.\n");
+                    set_color(GFX_WHITE, GFX_BLACK);
+                } else {
+                    set_color(GFX_LRED, GFX_BLACK);
+                    print("udp: gagal (ARP timeout?)\n");
+                    set_color(GFX_WHITE, GFX_BLACK);
+                }
+            }
+        }
+    }
+    else if (str_starts_with(input_buffer, "tcp_get ")) {
+        /* Syntax: tcp_get <ip> <port> [path]
+         * Kirim HTTP GET ke ip:port, cetak response. */
+        const char *p = input_buffer + 8;
+        uint8_t ip[4];
+        if (!parse_ip(p, ip)) {
+            print("tcp_get: IP tidak valid\n");
+        } else {
+            while (*p && *p != ' ') p++;
+            while (*p == ' ') p++;
+            uint16_t port = 0;
+            while (*p >= '0' && *p <= '9') { port = (uint16_t)(port * 10 + (*p - '0')); p++; }
+            while (*p == ' ') p++;
+            const char *path = (*p) ? p : "/";
+            if (port == 0) {
+                print("tcp_get: gunakan: tcp_get <ip> <port> [path]\n");
+            } else {
+                char ip_str[20]; int ii;
+                for (ii = 0; ii < 20; ii++) ip_str[ii] = '\0';
+                /* print connecting message */
+                print("tcp: connecting to ");
+                char tbuf[8];
+                itoa((uint32_t)ip[0], tbuf); print(tbuf); print(".");
+                itoa((uint32_t)ip[1], tbuf); print(tbuf); print(".");
+                itoa((uint32_t)ip[2], tbuf); print(tbuf); print(".");
+                itoa((uint32_t)ip[3], tbuf); print(tbuf); print(":");
+                itoa(port, tbuf); print(tbuf); print("...\n");
+                int id = net_tcp_connect(ip, port);
+                if (id < 0) {
+                    set_color(GFX_LRED, GFX_BLACK);
+                    if (id == -2)
+                        print("tcp: connection refused (RST dari server)\n");
+                    else
+                        print("tcp: timeout — tidak ada respons dalam 5 detik\n");
+                    set_color(GFX_WHITE, GFX_BLACK);
+                } else {
+                    /* Send HTTP GET */
+                    char req[256];
+                    int ri = 0;
+                    const char *p1 = "GET "; const char *p2 = path;
+                    const char *p3 = " HTTP/1.0\r\nHost: ";
+                    const char *p4 = "\r\nConnection: close\r\n\r\n";
+                    while (*p1) req[ri++] = *p1++;
+                    while (*p2 && ri < 200) req[ri++] = *p2++;
+                    while (*p3) req[ri++] = *p3++;
+                    /* Host header: ip as string */
+                    int oi;
+                    for (oi = 0; oi < 4; oi++) {
+                        itoa((uint32_t)ip[oi], tbuf);
+                        const char *tp = tbuf; while (*tp) req[ri++] = *tp++;
+                        if (oi < 3) req[ri++] = '.';
+                    }
+                    while (*p4) req[ri++] = *p4++;
+                    net_tcp_send(id, req, (uint16_t)ri);
+                    set_color(GFX_LGREEN, GFX_BLACK);
+                    print("tcp: connected. menunggu response...\n");
+                    set_color(GFX_WHITE, GFX_BLACK);
+                    /* Receive & print response */
+                    char rbuf[256];
+                    int got, total = 0;
+                    while ((got = net_tcp_recv(id, rbuf, 255)) > 0) {
+                        int gi;
+                        for (gi = 0; gi < got; gi++) {
+                            char c = rbuf[gi];
+                            /* print printable + newlines */
+                            if ((c >= 0x20 && c < 0x7F) || c == '\n' || c == '\t') {
+                                char cc[2]; cc[0] = c; cc[1] = '\0';
+                                print(cc);
+                            } else if (c == '\r') { /* skip CR */ }
+                        }
+                        total += got;
+                    }
+                    net_tcp_close(id);
+                    set_color(GFX_LCYAN, GFX_BLACK);
+                    print("\ntcp: selesai, total ");
+                    itoa((uint32_t)total, tbuf); print(tbuf);
+                    print(" bytes.\n");
+                    set_color(GFX_WHITE, GFX_BLACK);
+                }
+            }
         }
     }
     else if (str_compare(input_buffer, "cpuinfo")) {

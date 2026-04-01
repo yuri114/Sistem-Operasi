@@ -86,6 +86,12 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **Routing**: subnet check → direct atau via gateway (10.0.2.2)
 - **QEMU SLIRP**: `-netdev user,id=net0 -device rtl8139,netdev=net0`
   - Guest IP: `10.0.2.15` (hardcoded), Gateway: `10.0.2.2`, DNS: `10.0.2.3`
+- **UDP**: `net_udp_send()` — kirim datagram tanpa koneksi; shell: `udp_send <ip> <port> <pesan>`
+- **TCP stack**: 3-way handshake (SYN→SYN-ACK→ACK), PSH/ACK data, FIN/ACK teardown, RST detection
+  - API: `net_tcp_connect(ip, port)`, `net_tcp_send(id, data, len)`, `net_tcp_recv(id, buf, max)`, `net_tcp_close(id)`
+  - 4 koneksi simultan (`TCP_MAX_CONN=4`), RX ring buffer 1KB per koneksi
+  - Shell: `tcp_get <ip> <port> [path]` — kirim HTTP GET, cetak response ke layar
+  - **Terverifikasi**: HTTP GET ke `10.0.2.2:8080` (Python HTTP server di host) → `HTTP/1.0 200 OK` + body 2403 bytes
 
 - **Per-core scheduler**: setiap CPU punya scheduler sendiri, `cpu_id` per-task (-1=bebas, 0=BSP, 1+=AP)
 - **Work stealing + direct assignment (Tahap M)**: task kernel di-assign ke AP saat dibuat; AP dua-pass: cari direct-assigned → fallback steal
@@ -164,6 +170,16 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **Keyboard non-blocking CPU**: `vfs_read(fd=0)` kini `task_block()` sampai `keyboard_handler` memanggil `task_unblock(kwaiter)` — CPU bebas untuk task lain saat menunggu input
 - **Pipe blocking sejati**: `pipe_read()` ganti `task_sleep(10)` busy-wait → `task_block()`; `pipe_write()` langsung memanggil `task_unblock(reader_waiter)` setelah menulis
 - **VFS stdin blocking**: `vfs_read(VFS_TYPE_STDIN)` loop `keyboard_set_waiter + task_block()` bukan spin
+
+#### ps Thread Display
+- `ps` kini menampilkan label `[T:pid]` berwarna cyan di depan nama thread
+- Accessor baru: `task_is_thread(id)`, `task_get_parent(id)` di `task.h`/`task.c`
+
+#### Shell I/O Redirect
+- `exec <prog> > <file>` — stdout program ditulis ke file (via `vfs_redirect_out`)
+- `exec <prog> < <file>` — stdin program dibaca dari file (via `vfs_redirect_in`)
+- `SYS_PRINT` kini cek `vfs_stdout_is_file(tid)` — jika fd 1 adalah file, tulis via VFS bukan layar
+- Bisa dikombinasi: `exec prog < input > output`
 
 ### SMP — Tahap H
 - **LAPIC**: enable via IA32_APIC_BASE MSR + SVR register, baca APIC ID, kirim INIT/SIPI IPI via ICR
@@ -467,6 +483,8 @@ Lihat [ROADMAP.txt](ROADMAP.txt) untuk roadmap lengkap.
 | Fondasi N — Stabilitas Sistem | 1 Apr 2026 | PMM visibility, user heap SYS_BRK, waitpid, slot reuse, user malloc |
 | Tahap N — User-space Threading | 1 Apr 2026 | thread_create/exit/join, shared address space, `threadtest` |
 | Fondasi O — Stabilitas Threading | 1 Apr 2026 | Stack frame leak fix, blocking semaphore, thread-safe malloc, parent-exit guard |
+| Fondasi P+R — Threading Lanjutan | 2 Apr 2026 | Condvar, condtest, ps thread display, shell redirect >, <, SYS_PRINT via VFS |
+| TCP/UDP Stack | 2 Apr 2026 | TCP 3-way handshake, UDP send, tcp_get HTTP client, terverifikasi HTTP GET 2403 bytes |
 
 ---
 

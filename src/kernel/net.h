@@ -21,4 +21,32 @@ void net_ifconfig(void);
  * Return 0 atau -1 jika NIC tidak ada. */
 int  net_ping(const uint8_t dst_ip[4], int count);
 
+/* --- UDP --- */
+/* Kirim UDP datagram ke dst_ip:dst_port dari src_port.
+ * Return 0 sukses, -1 gagal. */
+int  net_udp_send(const uint8_t dst_ip[4], uint16_t dst_port,
+                  uint16_t src_port, const void *data, uint16_t dlen);
+
+/* --- TCP --- */
+/* Buat koneksi TCP ke dst_ip:dst_port (blocking, timeout 5s).
+ * Return conn_id (0..3) sukses, -1 = timeout, -2 = connection refused (RST). */
+int  net_tcp_connect(const uint8_t dst_ip[4], uint16_t dst_port);
+
+/* Kirim data ke koneksi id (max 1400 byte sekali kirim).
+ * Return jumlah byte terkirim, atau -1 gagal. */
+int  net_tcp_send(int id, const void *data, uint16_t len);
+
+/* Terima data dari koneksi id ke buf (max maxlen byte, timeout 5s).
+ * Return jumlah byte diterima, 0 = koneksi ditutup, -1 = error. */
+int  net_tcp_recv(int id, void *buf, uint16_t maxlen);
+
+/* Tutup koneksi TCP (kirim FIN, tunggu handshake selesai). */
+void net_tcp_close(int id);
+
+/* Kembalikan state koneksi (0=CLOSED, 1=SYN_SENT, 2=ESTABLISHED, ...) */
+int  net_tcp_state(int id);
+
+/* Proses satu paket masuk dari NIC (panggil dari polling loop). */
+void net_poll(void);
+
 #endif
