@@ -14,6 +14,8 @@
 #include "window.h"
 #include "timer.h"
 #include "shm.h"
+#include "vfs.h"
+#include "mq.h"
 
 extern void print(const char *str); // dari kernel.c
 extern void clear_screen();         // dari kernel.c
@@ -388,8 +390,7 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         return 0;
     }
 
-    // SYS_EXEC(30): muat dan jalankan program dari FS: ebx=nama (user ptr)
-    // return: task_id jika sukses, (uint32_t)-1 jika gagal
+    // SYS_EXEC(30)
     if (eax == SYS_EXEC) {
         if (!is_user_ptr(ebx)) return (uint32_t)-1;
         const char *name = (const char*)ebx;
@@ -403,6 +404,60 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         vmm_map_page(proc_dir, 0x600000, stack_phys, 7);
         int tid = task_create_user(entry, proc_dir, 0x600000 + 0x1000, name);
         return (uint64_t)tid;
+    }
+
+    /* ---- Tahap J: VFS syscalls ---- */
+    // SYS_OPEN(56): buka file; ebx=path_ptr, edx=flags
+    if (eax == SYS_OPEN) {
+        if (!is_user_ptr(ebx)) return (uint64_t)-1;
+        int tid = task_get_current();
+        return (uint64_t)vfs_open(tid, (const char*)ebx, (int)edx);
+    }
+    // SYS_READ_FD(57): baca fd; ebx=fd, edx=ptr{char*buf, int len}
+    if (eax == SYS_READ_FD) {
+        if (!is_user_ptr(edx)) return (uint64_t)-1;
+        typedef struct { char *buf; int len; } RArgs;
+        RArgs *a = (RArgs*)edx;
+        if (!is_user_ptr((uint64_t)a->buf)) return (uint64_t)-1;
+        int tid = task_get_current();
+        return (uint64_t)vfs_read(tid, (int)ebx, a->buf, a->len);
+    }
+    // SYS_WRITE_FD(58): tulis fd; ebx=fd, edx=ptr{const char*buf, int len}
+    if (eax == SYS_WRITE_FD) {
+        if (!is_user_ptr(edx)) return (uint64_t)-1;
+        typedef struct { const char *buf; int len; } WArgs;
+        WArgs *a = (WArgs*)edx;
+        if (!is_user_ptr((uint64_t)a->buf)) return (uint64_t)-1;
+        int tid = task_get_current();
+        return (uint64_t)vfs_write(tid, (int)ebx, a->buf, a->len);
+    }
+    // SYS_CLOSE_FD(59): tutup fd; ebx=fd
+    if (eax == SYS_CLOSE_FD) {
+        int tid = task_get_current();
+        return (uint64_t)vfs_close(tid, (int)ebx);
+    }
+
+    /* ---- Tahap L: Message Queue syscalls ---- */
+    // SYS_MQ_SEND(60): kirim pesan; ebx=dst_pid, edx=str_ptr (max 56 char)
+    if (eax == SYS_MQ_SEND) {
+        if (!is_user_ptr(edx)) return (uint64_t)-1;
+        const char *msg = (const char*)edx;
+        int from = task_get_current();
+        /* hitung panjang (bounded) */
+        int len = 0;
+        while (len < MQ_MSG_SIZE && msg[len]) len++;
+        return (uint64_t)(mq_send((int)ebx, (const uint8_t*)msg, len, from) == 0 ? 1 : 0);
+    }
+    // SYS_MQ_RECV(61): terima pesan; ebx=ptr{int from;int len;char data[56];}
+    if (eax == SYS_MQ_RECV) {
+        if (!is_user_ptr(ebx)) return 0;
+        typedef struct { int from; int len; char data[MQ_MSG_SIZE]; } MqRes;
+        MqRes *r = (MqRes*)ebx;
+        int from = -1;
+        int n = mq_recv(task_get_current(), (uint8_t*)r->data, MQ_MSG_SIZE, &from);
+        r->from = from;
+        r->len  = n;
+        return (uint64_t)(n > 0 ? 1 : 0);
     }
 
     return (uint64_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal

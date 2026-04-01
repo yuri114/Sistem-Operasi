@@ -36,6 +36,8 @@
 #include "shm.h"
 #include "device.h"
 #include "drv_vga.h"
+#include "vfs.h"
+#include "mq.h"
 #include "drv_kbd.h"
 #include "graphics.h"
 #include "vbe.h"
@@ -279,6 +281,20 @@ void exception_handler(uint64_t exc_num, uint64_t error_code,
         if (!(error_code & 1u) && (error_code & 4u)
             && cr2 >= 0x400000ULL && cr2 < 0x80000000ULL)
         {
+            /* Tahap K: Guard page — CR2 di [0x5FE000, 0x5FEFFF] = stack overflow */
+            if (cr2 >= 0x5FE000ULL && cr2 < 0x5FF000ULL) {
+                int _tid = task_get_current();
+                char _nb[8];
+                fill_screen(GFX_RED);
+                cursor_row = 0; cursor_col = 0;
+                set_color(GFX_WHITE, GFX_RED);
+                print("== STACK OVERFLOW ==\n");
+                print("Task ID : "); itoa((uint32_t)_tid, _nb); print(_nb); print("\n");
+                print("CR2     : 0x"); print_hex64(cr2); print("\n");
+                print("Task killed.\n");
+                task_exit();
+                for (;;) __asm__ volatile("hlt");
+            }
             /* Baca PML4 dari CR3 */
             uint64_t cr3;
             __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
@@ -416,7 +432,11 @@ void kernel_main(){
 
     // inisialisasi multitasking
     task_init();
-    task_set_main(); //tandai task utama sudah ada
+    task_set_main();
+    /* Tahap J: inisialisasi VFS + MQ, setup fd 0/1/2 untuk shell (task 0) */
+    vfs_init();
+    mq_init();
+    vfs_init_task(0);
     /* TSS esp0 harus menunjuk ke puncak kernel stack task 0 (shell),
      * sehingga saat ring-3 → ring-0 transition, CPU memakai stack yang benar. */
     tss64_init(task_get_rsp0(0));

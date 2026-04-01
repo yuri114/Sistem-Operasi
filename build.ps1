@@ -119,40 +119,42 @@ x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -
 -T src/programs/user.ld src/programs/sysinfo.c \
     -o build/sysinfo.elf
 xxd -i build/sysinfo.elf > src/kernel/sysinfo_elf_data.h
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/semaphore.c  -o build/semaphore.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/pipe.c       -o build/pipe.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/shm.c        -o build/shm.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/rtl8139.c   -o build/rtl8139.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/net.c        -o build/net.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/apic.c       -o build/apic.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/acpi.c       -o build/acpi.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/smp.c        -o build/smp.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/device.c     -o build/device.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/drv_vga.c    -o build/drv_vga.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/drv_kbd.c    -o build/drv_kbd.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/vbe.c        -o build/vbe.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/graphics.c   -o build/graphics.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/kernel.c    -o build/kernel.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/idt.c       -o build/idt.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/pic.c       -o build/pic.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/keyboard.c  -o build/keyboard.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/shell.c     -o build/shell.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/memory.c    -o build/memory.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/timer.c     -o build/timer.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/fs.c        -o build/fs.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/paging.c    -o build/paging.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/task.c      -o build/task.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/syscall.c   -o build/syscall.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/tss.c       -o build/tss.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/vmm.c       -o build/vmm.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/elf_loader.c -o build/elf_loader.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/ipc.c        -o build/ipc.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/ata.c        -o build/ata.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/serial.c     -o build/serial.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/mouse.c      -o build/mouse.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/window.c     -o build/window.o
-x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -c src/kernel/taskbar.c    -o build/taskbar.o
-x86_64-linux-gnu-ld -m elf_x86_64 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o build/shm.o build/rtl8139.o build/net.o build/apic.o build/acpi.o build/smp.o build/device.o build/drv_vga.o build/drv_kbd.o build/vbe.o build/graphics.o build/ata.o build/serial.o build/mouse.o build/window.o build/taskbar.o -o build/kernel.elf
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/semaphore.c  -o build/semaphore.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/pipe.c       -o build/pipe.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/shm.c        -o build/shm.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/vfs.c        -o build/vfs.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/mq.c         -o build/mq.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/rtl8139.c   -o build/rtl8139.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/net.c        -o build/net.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/apic.c       -o build/apic.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/acpi.c       -o build/acpi.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/smp.c        -o build/smp.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/device.c     -o build/device.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/drv_vga.c    -o build/drv_vga.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/drv_kbd.c    -o build/drv_kbd.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/vbe.c        -o build/vbe.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/graphics.c   -o build/graphics.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/kernel.c    -o build/kernel.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/idt.c       -o build/idt.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/pic.c       -o build/pic.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/keyboard.c  -o build/keyboard.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/shell.c     -o build/shell.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/memory.c    -o build/memory.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/timer.c     -o build/timer.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/fs.c        -o build/fs.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/paging.c    -o build/paging.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/task.c      -o build/task.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/syscall.c   -o build/syscall.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/tss.c       -o build/tss.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/vmm.c       -o build/vmm.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/elf_loader.c -o build/elf_loader.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/ipc.c        -o build/ipc.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/ata.c        -o build/ata.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/serial.c     -o build/serial.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/mouse.c      -o build/mouse.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/window.c     -o build/window.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/taskbar.c    -o build/taskbar.o
+x86_64-linux-gnu-ld -m elf_x86_64 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o build/shm.o build/vfs.o build/mq.o build/rtl8139.o build/net.o build/apic.o build/acpi.o build/smp.o build/device.o build/drv_vga.o build/drv_kbd.o build/vbe.o build/graphics.o build/ata.o build/serial.o build/mouse.o build/window.o build/taskbar.o -o build/kernel.elf
 x86_64-linux-gnu-objcopy -O binary build/kernel.elf build/kernel.bin
 echo done
 "@

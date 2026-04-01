@@ -19,7 +19,7 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 | Arsitektur | x86_64 — IA-32e Long Mode (64-bit) |
 | Boot | MBR 512-byte → Protected Mode → Long Mode |
 | Resolusi | 1920×1080 @ 32bpp (VBE Linear Framebuffer, ~8.3MB) |
-| Kernel | ~224 KB binary |
+| Kernel | ~236 KB binary |
 | Memory Map | 4-level paging, identity-mapped 4GB, heap kernel 6MB (0x100000–0x6FFFFF) |
 | Multitasking | Round-robin preemptive, hingga 16 task, PIT IRQ0 @ 1000 Hz |
 | Ring | Kernel Ring-0 / User Ring-3 (isolasi penuh per-proses) |
@@ -87,6 +87,33 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **QEMU SLIRP**: `-netdev user,id=net0 -device rtl8139,netdev=net0`
   - Guest IP: `10.0.2.15` (hardcoded), Gateway: `10.0.2.2`, DNS: `10.0.2.3`
 
+- **Per-core scheduler**: setiap CPU punya scheduler sendiri, `cpu_id` per-task (-1=bebas, 0=BSP, 1+=AP)
+- **Work stealing + direct assignment (Tahap M)**: task kernel di-assign ke AP saat dibuat; AP dua-pass: cari direct-assigned → fallback steal
+- **LAPIC Timer per-AP**: INT 0x40, 10ms; kalibrasi PIT oleh BSP, AP pakai hasil langsung
+- **AP background task**: `smp_background_task` — increment `smp_ap_ticks` tiap ~500ms; terverifikasi via `cpuinfo`
+- **Spinlock**: `task_lock` melindungi claim/release cpu_id antar BSP dan AP
+- **Shell**: `ps` kolom CPU, `cpuinfo` ap ticks, `taskstat` distribusi per-CPU
+
+### VFS — Tahap J
+- **File descriptor per-task**: tabel `fd[MAX_TASKS][8]`; fd=0 stdin, fd=1 stdout, fd=2 stderr
+- **Backends**: `VFS_TYPE_STDIN` (keyboard), `VFS_TYPE_STDOUT` (screen), `VFS_TYPE_FILE` (MFS3 dengan offset tracking)
+- **Syscall**: `SYS_OPEN(56)`, `SYS_READ_FD(57)`, `SYS_WRITE_FD(58)`, `SYS_CLOSE_FD(59)`
+- **Integrasi task**: `vfs_init_task` saat `task_create_user`, `vfs_close_all` saat `task_exit`
+- **Shell**: `open <file>`, `fread <fd>`, `fwrite <fd> <teks>`, `fclose <fd>`
+- **lib.h**: `sys_open`, `sys_read_fd`, `sys_write_fd`, `sys_close_fd`
+
+### Guard Page — Tahap K
+- **Stack overflow detection**: zona 0x5FE000-0x5FEFFF tidak pernah dipetakan
+- **Page fault handler**: CR2 di guard zone → cetak "== STACK OVERFLOW ==" layar merah → `task_exit()`
+- **Tanpa pra-alokasi**: demand paging menangani stack normal; guard zone hanya dibiarkan kosong
+
+### Message Queue — Tahap L
+- **Per-task mailbox**: `mailbox[MAX_TASKS][8]` pesan; payload max 56 byte per pesan
+- **API kernel**: `mq_send(dst, data, len, from)`, `mq_recv(dst, buf, max, from_out)`, `mq_pending(pid)`
+- **Syscall**: `SYS_MQ_SEND(60)` (ebx=dst_pid, edx=str), `SYS_MQ_RECV(61)` (ebx=ptr MqRecvResult)
+- **Shell**: `mq_send <pid> <pesan>`, `mq_recv`
+- **lib.h**: `mq_send`, `mq_recv` + struct `MqRecvResult`
+
 ### SMP — Tahap H
 - **LAPIC**: enable via IA32_APIC_BASE MSR + SVR register, baca APIC ID, kirim INIT/SIPI IPI via ICR
 - **ACPI MADT parser**: scan RSDP → RSDT → MADT untuk enumerasi CPU/APIC ID
@@ -108,8 +135,10 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **Direktori**: `cd <dir>`, `pwd`, direktori-aware `ls`/`read`/`write`/`del`
 - **Background exec**: tambah `&` di akhir perintah
 - **Jaringan**: `ifconfig` (tampilkan MAC/IP/GW), `ping <ip>` (4 ICMP echo requests + RTT)
-- **SMP info**: `cpuinfo` (jumlah CPU dari MADT + jumlah AP yang online)
-- **Built-in commands**: `ps`, `kill`, `ls`, `read`, `write`, `del`, `clear`, `help`, `exec`, `sync`, `mkdir`, `chmod`, `cd`, `pwd`, `export`, `env`, `ifconfig`, `ping`, `cpuinfo`, ...
+- **SMP info**: `cpuinfo` (jumlah CPU dari MADT + jumlah AP yang online), `taskstat` (distribusi task per-CPU)
+- **VFS shell**: `open <file>`, `fread <fd>`, `fwrite <fd> <teks>`, `fclose <fd>` — akses file via fd
+- **Message queue**: `mq_send <pid> <pesan>`, `mq_recv` — komunikasi antar task
+- **Built-in commands**: `ps`, `kill`, `ls`, `read`, `write`, `del`, `clear`, `help`, `exec`, `sync`, `mkdir`, `chmod`, `cd`, `pwd`, `export`, `env`, `ifconfig`, `ping`, `cpuinfo`, `taskstat`, `open`, `fread`, `fwrite`, `fclose`, `mq_send`, `mq_recv`, ...
 
 ### Syscall Interface (user space via `SYSCALL/SYSRET`)
 ```
@@ -122,6 +151,8 @@ SYS_WIN_CREATE  SYS_WIN_DRAW    SYS_WIN_EVENT   SYS_WIN_BTN_ADD ...
 SYS_MOUSE_GET   SYS_GET_TICKS   SYS_YIELD       SYS_SLEEP       SYS_EXEC
 SYS_FS_SYNC(49) SYS_FS_TMPWRITE(50) SYS_FS_MKDIR(51) SYS_PIPE_NAMED(52)
 SYS_SHM_CREATE(53) SYS_SHM_ATTACH(54) SYS_SHM_DETACH(55)
+SYS_OPEN(56) SYS_READ_FD(57) SYS_WRITE_FD(58) SYS_CLOSE_FD(59)
+SYS_MQ_SEND(60) SYS_MQ_RECV(61)
 ```
 
 ### Libc Minimal (`lib.h`) — Tahap F2
@@ -209,7 +240,7 @@ SYS_SHM_CREATE(53) SYS_SHM_ATTACH(54) SYS_SHM_DETACH(55)
 └── build/
     ├── os.img                # Disk image final (2MB, sektor raw)
     ├── disk.img              # Disk data sekunder (8MB, filesystem MFS3)
-    └── kernel.bin            # Kernel binary (~223KB)
+    └── kernel.bin            # Kernel binary (~236KB)
 ```
 
 ---
@@ -365,6 +396,11 @@ Lihat [ROADMAP.txt](ROADMAP.txt) untuk roadmap lengkap.
 | Tahap F — Userspace & Shell Lanjutan | 1 Apr 2026 | Shell env/pipe/&, libc minimal, ELF64 loader |
 | Tahap G — Networking | 1 Apr 2026 | RTL8139, ARP, IPv4, ICMP, ping/ifconfig |
 | Tahap H — SMP Multi-core | 1 Apr 2026 | LAPIC, ACPI MADT, AP trampoline, `cpuinfo` |
+| Tahap I — Per-Core Scheduler | 1 Apr 2026 | LAPIC timer per-AP, `cpu_id` per-task, `cpuinfo` ap ticks |
+| Tahap J — VFS | 1 Apr 2026 | fd table per-task, stdin/stdout/file, syscall 56-59, shell VFS |
+| Tahap K — Guard Page | 1 Apr 2026 | Stack overflow detection via #PF + CR2 guard zone |
+| Tahap L — Message Queue | 1 Apr 2026 | Per-task mailbox, syscall 60-61, `mq_send`/`mq_recv` |
+| Tahap M — Load-Balanced AP | 1 Apr 2026 | Two-pass scheduler, direct AP assignment, `taskstat` |
 
 ---
 

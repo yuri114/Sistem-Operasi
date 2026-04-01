@@ -66,6 +66,16 @@
 #define SYS_SHM_ATTACH     54 // map shm ke proses: ebx=shm_id → return VA
 #define SYS_SHM_DETACH     55 // lepas shm dari proses: ebx=shm_id
 
+/* Tahap J — VFS (file descriptor) */
+#define SYS_OPEN      56  // buka/buat file: ebx=path_ptr, edx=flags → return fd
+#define SYS_READ_FD   57  // baca fd: ebx=fd, edx=ptr VfsRWArgs → return bytes
+#define SYS_WRITE_FD  58  // tulis fd: ebx=fd, edx=ptr VfsRWArgs → return bytes
+#define SYS_CLOSE_FD  59  // tutup fd: ebx=fd → return 0/-1
+
+/* Tahap L — Message Queue */
+#define SYS_MQ_SEND   60  // kirim MQ: ebx=dst_pid, edx=str_ptr (max 56 char)
+#define SYS_MQ_RECV   61  // terima MQ: ebx=ptr MqRecvResult, edx=unused → return 1/0
+
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);
 

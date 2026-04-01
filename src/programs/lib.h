@@ -69,6 +69,21 @@
 #define SYS_SHM_ATTACH     54 // map shm ke proses: ebx=shm_id → return VA
 #define SYS_SHM_DETACH     55 // lepas shm dari proses: ebx=shm_id
 
+/* Tahap J — VFS */
+#define SYS_OPEN      56  // buka/buat file: ebx=path_ptr, edx=flags
+#define SYS_READ_FD   57  // baca fd: ebx=fd, edx=ptr{char*,int}
+#define SYS_WRITE_FD  58  // tulis fd: ebx=fd, edx=ptr{const char*,int}
+#define SYS_CLOSE_FD  59  // tutup fd: ebx=fd
+/* Tahap J: flag open */
+#define VFS_O_RDONLY  0x01
+#define VFS_O_WRONLY  0x02
+#define VFS_O_RDWR    0x03
+#define VFS_O_CREATE  0x04
+
+/* Tahap L — Message Queue */
+#define SYS_MQ_SEND   60  // kirim MQ: ebx=dst_pid, edx=str_ptr
+#define SYS_MQ_RECV   61  // terima MQ: ebx=ptr MqRecvResult
+
 // Event type konstanta
 #define WIN_EVENT_NONE   0
 #define WIN_EVENT_CLOSE  1
@@ -600,6 +615,38 @@ static inline void *shm_attach(int shm_id) {
 // Lepas shared memory dari address space proses
 static inline void shm_detach(int shm_id) {
     syscall1(SYS_SHM_DETACH, shm_id);
+}
+
+/* ============================================================
+ * Tahap J — VFS (file descriptor) wrappers
+ * ============================================================ */
+typedef struct { char *buf; int len; } VfsRWArgs;
+
+static inline int sys_open(const char *path, int flags) {
+    return (int)syscall2(SYS_OPEN, (long)path, flags);
+}
+static inline int sys_read_fd(int fd, char *buf, int len) {
+    VfsRWArgs a = {buf, len};
+    return (int)syscall2(SYS_READ_FD, fd, (long)&a);
+}
+static inline int sys_write_fd(int fd, const char *buf, int len) {
+    VfsRWArgs a = {(char*)buf, len};
+    return (int)syscall2(SYS_WRITE_FD, fd, (long)&a);
+}
+static inline int sys_close_fd(int fd) {
+    return (int)syscall1(SYS_CLOSE_FD, fd);
+}
+
+/* ============================================================
+ * Tahap L — Message Queue wrappers
+ * ============================================================ */
+typedef struct { int from; int len; char data[56]; } MqRecvResult;
+
+static inline int mq_send(int dst_pid, const char *msg) {
+    return (int)syscall2(SYS_MQ_SEND, dst_pid, (long)msg);
+}
+static inline int mq_recv(MqRecvResult *r) {
+    return (int)syscall1(SYS_MQ_RECV, (long)r);
 }
 
 /* ============================================================

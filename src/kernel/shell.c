@@ -12,6 +12,8 @@
 #include "net.h"
 #include "acpi.h"
 #include "smp.h"
+#include "vfs.h"
+#include "mq.h"
 
 /*fungsi dari kernel.c*/
 void print(const char *str);
@@ -76,6 +78,8 @@ static const char *shell_commands[] = {
     "cd ", "pwd", "export ", "env",
     "sync", "mkdir ", "chmod ",
     "ifconfig", "ping ", "cpuinfo",
+    "open ", "fread ", "fwrite ", "fclose ",
+    "mq_send ", "mq_recv", "taskstat",
     0
 };
 
@@ -259,6 +263,13 @@ static void shell_execute(){
         print("ifconfig             - tampilkan info jaringan (MAC, IP, GW)\n");
         print("ping <ip>            - kirim 4 ICMP echo request ke IP\n");
         print("cpuinfo              - tampilkan info SMP (BSP/AP online)\n");
+        print("taskstat             - tampilkan distribusi task per CPU\n");
+        print("open <file>          - buka file, cetak fd\n");
+        print("fread <fd>           - baca isi file lewat fd\n");
+        print("fwrite <fd> <teks>   - tulis teks ke file lewat fd\n");
+        print("fclose <fd>          - tutup fd\n");
+        print("mq_send <pid> <msg>  - kirim pesan ke task pid\n");
+        print("mq_recv              - terima pesan dari mailbox shell\n");
         print("paging               - tampilkan status paging\n");
         print("exec <nama> [&]      - jalankan program ELF (& = background)\n");
         print("ps                   - tampilkan daftar proses\n");
@@ -760,6 +771,93 @@ static void shell_execute(){
             print(nbuf);
             print(i == 0 ? " (BSP)\n" : " (AP)\n");
         }
+    }
+    /* Tahap M: distribusi task per CPU */
+    else if (str_compare(input_buffer, "taskstat")) {
+        int i;
+        char nbuf[8];
+        int cnt[8] = {0,0,0,0,0,0,0,0};
+        int free_cnt = 0;
+        for (i = 0; i < task_get_max(); i++) {
+            if (!task_is_used(i)) continue;
+            int c = task_get_cpu(i);
+            if (c < 0) free_cnt++;
+            else if (c < 8) cnt[c]++;
+        }
+        set_color(GFX_YELLOW, GFX_BLACK);
+        print("CPU  TASKS\n");
+        print("---- -----\n");
+        set_color(GFX_WHITE, GFX_BLACK);
+        for (i = 0; i < cpu_count; i++) {
+            print("cpu"); itoa((uint32_t)i, nbuf); print(nbuf); print("  ");
+            itoa((uint32_t)cnt[i], nbuf); print(nbuf); print("\n");
+        }
+        print("free  "); itoa((uint32_t)free_cnt, nbuf); print(nbuf); print("\n");
+    }
+    /* Tahap J: VFS commands */
+    else if (str_starts_with(input_buffer, "open ")) {
+        const char *path = input_buffer + 5;
+        char nbuf[8];
+        int fd = vfs_open(0, path, VFS_O_RDWR | VFS_O_CREATE);
+        if (fd < 0) { set_color(GFX_LRED, GFX_BLACK); print("open: file tidak ditemukan\n"); }
+        else { print("fd = "); itoa((uint32_t)fd, nbuf); print(nbuf); print("\n"); }
+        set_color(GFX_WHITE, GFX_BLACK);
+    }
+    else if (str_starts_with(input_buffer, "fread ")) {
+        const char *p = input_buffer + 6;
+        int fd = 0;
+        while (*p >= '0' && *p <= '9') { fd = fd * 10 + (*p - '0'); p++; }
+        char buf[128];
+        int n = vfs_read(0, fd, buf, 127);
+        if (n <= 0) { set_color(GFX_LGRAY, GFX_BLACK); print("(kosong atau EOF)\n"); }
+        else { buf[n] = '\0'; print(buf); print("\n"); }
+        set_color(GFX_WHITE, GFX_BLACK);
+    }
+    else if (str_starts_with(input_buffer, "fwrite ")) {
+        /* fwrite <fd> <teks> */
+        const char *p = input_buffer + 7;
+        int fd = 0;
+        while (*p >= '0' && *p <= '9') { fd = fd * 10 + (*p - '0'); p++; }
+        if (*p == ' ') p++;
+        int n = vfs_write(0, fd, p, str_len(p));
+        char nbuf[8]; itoa((uint32_t)n, nbuf);
+        print("tulis "); print(nbuf); print(" byte\n");
+    }
+    else if (str_starts_with(input_buffer, "fclose ")) {
+        const char *p = input_buffer + 7;
+        int fd = 0;
+        while (*p >= '0' && *p <= '9') { fd = fd * 10 + (*p - '0'); p++; }
+        if (vfs_close(0, fd) == 0) print("fd ditutup\n");
+        else { set_color(GFX_LRED, GFX_BLACK); print("fclose: fd tidak valid\n"); }
+        set_color(GFX_WHITE, GFX_BLACK);
+    }
+    /* Tahap L: Message Queue commands */
+    else if (str_starts_with(input_buffer, "mq_send ")) {
+        /* mq_send <pid> <msg> */
+        const char *p = input_buffer + 8;
+        int pid = 0;
+        while (*p >= '0' && *p <= '9') { pid = pid * 10 + (*p - '0'); p++; }
+        if (*p == ' ') p++;
+        int n = str_len(p);
+        if (n > MQ_MSG_SIZE) n = MQ_MSG_SIZE;
+        int r = mq_send(pid, (const uint8_t*)p, n, 0);
+        if (r == 0) { set_color(GFX_LGREEN, GFX_BLACK); print("pesan terkirim\n"); }
+        else { set_color(GFX_LRED, GFX_BLACK); print("mq_send: gagal\n"); }
+        set_color(GFX_WHITE, GFX_BLACK);
+    }
+    else if (str_compare(input_buffer, "mq_recv")) {
+        uint8_t buf[MQ_MSG_SIZE + 1];
+        int from = -1;
+        int n = mq_recv(0, buf, MQ_MSG_SIZE, &from);
+        if (n <= 0) { set_color(GFX_LGRAY, GFX_BLACK); print("(tidak ada pesan)\n"); }
+        else {
+            char nbuf[8];
+            buf[n] = '\0';
+            set_color(GFX_LGREEN, GFX_BLACK);
+            print("dari pid "); itoa((uint32_t)from, nbuf); print(nbuf); print(": ");
+            print((const char*)buf); print("\n");
+        }
+        set_color(GFX_WHITE, GFX_BLACK);
     }
     else {
         /* Cek apakah ada operator ' | ' (pipe inline) */

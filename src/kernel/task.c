@@ -5,6 +5,7 @@
 #include "tss.h"
 #include "memory.h"
 #include "spinlock.h"
+#include "vfs.h"
 
 static void str_copy_n(char *dst, const char *src, int n) {
     int i;
@@ -70,7 +71,8 @@ int task_create(void (*entry)()) {
     tasks[id].priority  = 1;
     tasks[id].ticks     = 1;
     tasks[id].pipe_id   = -1;
-    tasks[id].cpu_id    = -1;  /* bebas, bisa dijalankan CPU manapun */
+    /* Tahap M: load balance — kernel task di-assign langsung ke AP jika ada */
+    tasks[id].cpu_id    = has_ap ? (int8_t)1 : (int8_t)-1;
     tasks[id].is_user   = 0;   /* ring-0 kernel task */
     str_copy_n(tasks[id].name, "[idle]", 32);
     tasks[id].page_dir  = vmm_create_page_dir();
@@ -109,7 +111,7 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
     tasks[id].priority  = 2;
     tasks[id].ticks     = 2;
     tasks[id].pipe_id   = -1;
-    tasks[id].cpu_id    = 0;   /* ring-3 user task: hanya BSP yang boleh jalan */
+    tasks[id].cpu_id    = -1;  /* ring-3 user task: dimulai bebas, BSP akan klaim */
     tasks[id].is_user   = 1;
     str_copy_n(tasks[id].name, name ? name : "?", 32);
 
@@ -126,6 +128,8 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
     for (k = 0; k < 15; k++) *(--stack_top) = 0;
 
     tasks[id].rsp = (uint64_t)stack_top;
+    /* Tahap J: setup fd 0/1/2 untuk task ring-3 */
+    vfs_init_task(id);
     return id;
 }
 
@@ -225,15 +229,33 @@ void task_switch_ap(int cpu_idx)
     int start = (current_task_ap >= 0) ? (current_task_ap + 1) % task_count : 0;
     int next = start;
     int found = 0, i;
+
+    /* Tahap M: first pass — cari task yang di-assign langsung ke AP ini */
     for (i = 0; i < task_count; i++) {
         if (tasks[next].used &&
             tasks[next].status == TASK_RUNNING &&
-            tasks[next].cpu_id == -1 &&
-            tasks[next].is_user == 0) {   /* hanya kernel task */
+            tasks[next].cpu_id == (int8_t)cpu_idx &&
+            tasks[next].is_user == 0 &&
+            next != current_task_ap) {
             found = 1;
             break;
         }
         next = (next + 1) % task_count;
+    }
+
+    /* Second pass — work-steal: kernel task bebas (cpu_id==-1) */
+    if (!found) {
+        next = start;
+        for (i = 0; i < task_count; i++) {
+            if (tasks[next].used &&
+                tasks[next].status == TASK_RUNNING &&
+                tasks[next].cpu_id == -1 &&
+                tasks[next].is_user == 0) {
+                found = 1;
+                break;
+            }
+            next = (next + 1) % task_count;
+        }
     }
 
     if (!found || next == current_task_ap) {
@@ -264,6 +286,8 @@ void task_switch_ap(int cpu_idx)
 
 void task_exit() {
     uint64_t *dir = tasks[current_task].page_dir;
+    /* Tahap J: tutup semua fd milik task ini */
+    vfs_close_all(current_task);
     tasks[current_task].used     = 0;
     tasks[current_task].cpu_id   = (int8_t)-1;   /* kembalikan ke pool */
     tasks[current_task].page_dir = 0;

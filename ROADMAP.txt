@@ -356,12 +356,121 @@ RINGKASAN URUTAN & STATUS
   [DONE] Tahap F     — Userspace & Shell Lanjutan  (2 April 2026)
   [DONE] Tahap G     — Networking                   (2 April 2026)
   [DONE] Tahap H     — SMP / Multi-core           (1 April 2026)
+  [DONE] Tahap I     — Per-core Scheduler + LAPIC Timer  (1 April 2026)
+  [DONE] Tahap J     — VFS (File Descriptor Layer)  (1 April 2026)
+  [DONE] Tahap K     — Guard Page (Stack Overflow Protection) (1 April 2026)
+  [DONE] Tahap L     — IPC Message Queue          (1 April 2026)
+  [DONE] Tahap M     — Load-Balanced AP Dispatch  (1 April 2026)
 
 ================================================================
 
 
 ================================================================
-TAHAP A — 32bpp TRUE COLOR
+TAHAP I — PER-CORE SCHEDULER + LAPIC TIMER
+Status: [SELESAI] ✓ Selesai 1 April 2026 — build 228KB, AP ticks terverifikasi
+Prasyarat: Tahap H selesai ✓
+----------------------------------------------------------------
+  [I1] ✓ Per-core cpu_id + is_user di struct Task
+       - cpu_id: -1=bebas, 0=BSP, 1+=AP
+       - is_user: 1=shell/ring-3 (BSP saja), 0=kernel task (semua CPU)
+       - task_switch (BSP): hanya ambil cpu_id==-1 && (!has_ap||is_user==1)
+       - task_switch_ap (AP): work stealing — ambil cpu_id==-1 && is_user==0
+
+  [I2] ✓ LAPIC Timer per-AP (INT 0x40, 10ms)
+       - apic_timer_calibrate(): BSP ukur ticks_per_ms dengan PIT
+       - apic_timer_ap_start(): AP langsung pakai kalibrasi BSP tanpa busy-wait
+       - Dipanggil: smp_init() kalibrasi; smp_ap_entry() start setelah sti
+       - lapic_timer_isr (isr.asm): SAVE_REGS→task_switch_ap→RSP swap→LAPIC EOI
+
+  [I3] ✓ AP background task + counter
+       - smp_background_task(): busy-loop + __sync smp_ap_ticks tiap ~500ms
+       - has_ap flag: BSP tidak mencuri kernel task (is_user==0) saat AP ada
+       - task_create: cpu_id==-1 (free), AP work-steals
+
+  [I4] ✓ Bug fix: iretq frame 5 item (RIP+CS+RFLAGS+RSP+SS)
+       - task_create awalnya hanya push 3 item → triple fault saat AP iretq
+
+  [I5] ✓ Shell: ps kolom CPU, cpuinfo ap ticks
+
+================================================================
+TAHAP J — VIRTUAL FILESYSTEM (VFS)
+Status: [SELESAI] ✓ Selesai 1 April 2026 — build OK
+Prasyarat: Tahap E, I selesai ✓
+----------------------------------------------------------------
+Tujuan: abstraksi file descriptor (fd) per-task di atas MFS3.
+        fd=0/1/2 = stdin/stdout/stderr; fd=3-7 = file MFS3.
+        User space dapat akses file, stdin, stdout via syscall terpadu.
+
+  [J1] ✓ vfs.h / vfs.c — FD table (MAX_TASKS × VFS_MAX_FD=8)
+       - Types: STDIN(1), STDOUT(2), FILE(3)
+       - vfs_open/read/write/close/seek, vfs_init_task, vfs_close_all
+       - Offset tracking per-fd untuk baca/tulis sequential
+
+  [J2] ✓ Syscall baru: SYS_OPEN(56), SYS_READ_FD(57), SYS_WRITE_FD(58), SYS_CLOSE_FD(59)
+       - syscall.c handler, syscall.h define
+       - is_user_ptr validasi pointer VfsRWArgs dari user space
+
+  [J3] ✓ Integrasi task: vfs_init_task di task_create_user, vfs_close_all di task_exit
+       - Bug fix: task_create_user sebelumnya set cpu_id=0 → user task tidak pernah
+         dijadwalkan (task_switch butuh cpu_id==-1); diperbaiki ke cpu_id=-1
+
+  [J4] ✓ Shell: open <file>, fread <fd>, fwrite <fd> <teks>, fclose <fd>
+
+  [J5] ✓ lib.h: sys_open, sys_read_fd, sys_write_fd, sys_close_fd + VfsRWArgs struct
+
+================================================================
+TAHAP K — GUARD PAGE (STACK OVERFLOW PROTECTION)
+Status: [SELESAI] ✓ Selesai 1 April 2026 — build OK
+Prasyarat: Tahap C, D selesai ✓
+----------------------------------------------------------------
+Tujuan: deteksi stack overflow user sebelum ia corrupt heap/code.
+        Halaman 0x5FE000-0x5FEFFF = guard zone (tidak pernah dipetakan).
+        Stack user normal ada di 0x5FF000-0x5FFFFF ke bawah via demand paging.
+
+  [K1] ✓ exception_handler (#PF) — tambah cek guard zone
+       - Jika CR2 ∈ [0x5FE000, 0x5FEFFF] + user + not-present:
+         cetak "== STACK OVERFLOW ==" layar merah, task_exit(), hlt
+       - Task lain (shell dll.) tetap berjalan setelah timer switch
+
+================================================================
+TAHAP L — IPC MESSAGE QUEUE
+Status: [SELESAI] ✓ Selesai 1 April 2026 — build OK
+Prasyarat: Tahap E selesai ✓
+----------------------------------------------------------------
+Tujuan: per-task mailbox (inbox) untuk message passing tanpa shared memory.
+        Lebih fleksibel dari pipe: bisa multi-sender, tidak butuh fd.
+
+  [L1] ✓ mq.h / mq.c — mailbox[MAX_TASKS][MQ_MAX_MSGS=8]
+       - MqMsg { used, from, len, data[56] }
+       - mq_send(dst, data, len, from), mq_recv(dst, buf, max_len, from_out)
+       - mq_pending(pid): jumlah pesan pending
+
+  [L2] ✓ Syscall baru: SYS_MQ_SEND(60), SYS_MQ_RECV(61)
+       - MQ_SEND: ebx=dst_pid, edx=str_ptr (null-terminated, max 56 char)
+       - MQ_RECV: ebx=ptr MqRecvResult {int from; int len; char data[56]}
+
+  [L3] ✓ Shell: mq_send <pid> <msg>, mq_recv
+
+  [L4] ✓ lib.h: mq_send, mq_recv + MqRecvResult struct
+
+================================================================
+TAHAP M — LOAD-BALANCED AP DISPATCH
+Status: [SELESAI] ✓ Selesai 1 April 2026 — build OK
+Prasyarat: Tahap I selesai ✓
+----------------------------------------------------------------
+Tujuan: kernel task di-assign langsung ke AP saat dibuat (bukan work-steal).
+        AP punya "antrian" dedicated; hanya fallback ke work-steal jika kosong.
+
+  [M1] ✓ task_create: when has_ap → cpu_id = 1 (AP langsung) vs -1 (float)
+       - BSP tidak perlu lagi skip is_user==0 secara eksplisit
+         (task AP sudah cpu_id=1, bukan -1 yang di-scan BSP)
+
+  [M2] ✓ task_switch_ap: two-pass scheduler
+       - Pass 1: cari cpu_id==cpu_idx (assigned tasks) — O(n) fast find
+       - Pass 2: fallback — steal cpu_id==-1 && is_user==0 (old behavior)
+
+  [M3] ✓ Shell: taskstat — tampilkan distribusi task per CPU
+
 Status: [SELESAI] ✓ Selesai 24 Maret 2026 — build 171,920 bytes, test QEMU OK
 ----------------------------------------------------------------
 Tujuan     : Mengubah framebuffer dari 8bpp (palette 256 warna)
