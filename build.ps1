@@ -1,5 +1,5 @@
 # ============================================
-# build.ps1 - Build Script untuk MyOS
+# build.ps1 - Build Script untuk Oria OS
 # Jalankan: .\build.ps1 [build|run|clean]
 # ============================================
 
@@ -233,13 +233,13 @@ function Clean-Build {
 # --- Main ---
 switch ($Action.ToLower()) {
     "build" {
-        Write-Host "=== Building MyOS ===" -ForegroundColor White
+        Write-Host "=== Building Oria OS ===" -ForegroundColor White
         Build-Kernel
         Build-Bootloader
         Build-Image
     }
     "run" {
-        Write-Host "=== Building & Running MyOS ===" -ForegroundColor White
+        Write-Host "=== Building & Running Oria OS ===" -ForegroundColor White
         Build-Kernel
         Build-Bootloader
         Build-Image

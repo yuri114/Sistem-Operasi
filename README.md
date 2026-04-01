@@ -1,4 +1,4 @@
-# MyOS
+# Oria OS
 
 Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM) dan C, berjalan di **64-bit Long Mode**, dengan layar GUI 1920×1080 32bpp, multitasking preemptive, filesystem sendiri, dan window manager sederhana.
 

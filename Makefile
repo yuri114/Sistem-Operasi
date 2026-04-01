@@ -1,5 +1,5 @@
 # ============================================
-# Makefile untuk MyOS
+# Makefile untuk Oria OS
 # Jalankan dari MSYS2 atau via build.ps1
 # ============================================
 

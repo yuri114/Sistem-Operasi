@@ -1,5 +1,5 @@
 ; ================================================================
-; boot.asm — MyOS Stage-1 Bootloader (512 byte MBR)
+; boot.asm — Oria OS Stage-1 Bootloader (512 byte MBR)
 ;
 ; Alur kerja:
 ;   1. Inisialisasi segment & stack di Real Mode
@@ -142,7 +142,7 @@ disk_error:
 disk_err_msg:           db 'Disk read error!', 0x0D, 0x0A, 0
 boot_drive:             db 0
 kernel_total_sectors:   dw 0
-msg:                    db 'Hello from MyOS!', 0x0D, 0x0A, 0
+msg:                    db 'Oria OS booting...', 0x0D, 0x0A, 0
 
 ; ================================================================
 ; GDT — Global Descriptor Table (model flat 32-bit)

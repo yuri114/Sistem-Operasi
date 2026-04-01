@@ -1,4 +1,4 @@
-/* linker.ld — Script linker 64-bit untuk MyOS */
+/* linker.ld — Script linker 64-bit untuk Oria OS */
 OUTPUT_FORMAT(elf64-x86-64)
 OUTPUT_ARCH(i386:x86-64)
 

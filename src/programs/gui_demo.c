@@ -44,7 +44,7 @@ void _start(void) {
     int w2 = win_create(640, 60, 220, 160, "Mouse Monitor");
 
     /* ---- Isi konten window 1 SETELAH semua window dibuat ---- */
-    win_draw(w1,  6,  6, "MyOS Window Manager",     GFX_YELLOW, GFX_BLACK);
+    win_draw(w1,  6,  6, "Oria OS Window Manager",     GFX_YELLOW, GFX_BLACK);
     win_draw(w1,  6, 20, "VBE 1280x720 @ 32bpp",     GFX_WHITE,  GFX_BLACK);
     win_draw(w1,  6, 34, "PS/2 Mouse  + IRQ12",      GFX_WHITE,  GFX_BLACK);
     win_draw(w1,  6, 48, "Font 8x8  bitmap",         GFX_WHITE,  GFX_BLACK);

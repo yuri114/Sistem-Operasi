@@ -388,7 +388,7 @@ void kernel_main(){
     graphics_init();
     clear_screen();
     print("=================================");
-    print("\n   Selamat datang di MyOS!   \n");
+    print("\n   Selamat datang di Oria OS!   \n");
     print("=================================");
     print("\nKernel berjalan di Long Mode (64-bit)\n");
     shell_init();

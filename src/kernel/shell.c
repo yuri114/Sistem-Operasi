@@ -243,7 +243,7 @@ static void shell_execute(){
         set_color(GFX_WHITE, GFX_BLACK);
         print("help                 - tampilkan daftar perintah\n");
         print("clear                - bersihkan layar\n");
-        print("about                - informasi tentang myOS\n");
+        print("about                - informasi tentang Oria OS\n");
         print("memtest              - test alokasi memory\n");
         print("uptime               - tampilkan waktu berjalan OS\n");
         print("echo <text>          - tampilkan text\n");
@@ -282,7 +282,7 @@ static void shell_execute(){
         clear_screen();
     }
     else if(str_compare(input_buffer, "about")){
-        print("MyOS versi 0.0.3\n");
+        print("Oria OS versi 0.1.0\n");
         print("Sistem operasi sederhana untuk belajar\n");
     }
     else if(str_compare(input_buffer, "memtest")){
