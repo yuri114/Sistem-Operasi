@@ -1,6 +1,6 @@
 ================================================================
   MyOS — ROADMAP PENGEMBANGAN SISTEM
-  Dibuat: 24 Maret 2026 | Diperbarui: 26 Maret 2026
+  Dibuat: 24 Maret 2026 | Diperbarui: 1 April 2026
 ================================================================
 
 KONDISI SAAT INI (setelah Tahap C)
@@ -138,46 +138,56 @@ Sub-tahap:
        - paging.c: paging_get_cr0 uint64_t temp register
 
 ================================================================
-TAHAP D — KERNEL STABILITY & DRIVER (roadmap ke depan)
-Status: [ ] Belum dimulai
+TAHAP D — KERNEL STABILITY & DRIVER
+Status: [SELESAI] ✓ Selesai 1 April 2026 — build 182 KB, test QEMU OK
 Prasyarat: Tahap C selesai ✓
 ----------------------------------------------------------------
 Tujuan     : Meningkatkan stabilitas, memperluas driver, dan
              memperbaiki kualitas OS sebelum menambah fitur besar.
 
-  [D1] SYSCALL/SYSRET (ganti int 0x80)
-       - Aktifkan IA32_LSTAR, IA32_STAR MSR
-       - Handler syscall tanpa stack switch (lebih cepat)
-       - Update lib.h: syscall via SYSCALL instruction
-       - Keuntungan: latency syscall ~5x lebih rendah
+  [D1] SYSCALL/SYSRET (ganti int 0x80)                            ✓
+       - IA32_LSTAR → syscall_entry, IA32_STAR, IA32_SFMASK MSR
+       - GDT restruktur: kernel CS 0x08 / DS 0x10,
+         user CS 0x2B / DS 0x23 (STAR[63:48]=0x0018)
+       - syscall_entry di isr.asm: simpan user RSP ke scratch,
+         pindah ke kernel stack, push rcx/r11/callee-saved,
+         dispatch ke syscall_handler, restore, o64 sysret
+       - task_switch: update syscall_kstack = kstack_top tiap switch
+       - lib.h: syscall0/1/2 gunakan instruksi SYSCALL (bukan int 0x80)
+       [BUG FIX] sysretq → o64 sysret: NASM salah terjemahkan
+         "sysretq" sebagai label (nol byte), sehingga setelah
+         pop rsp eksekusi jatuh ke exc0 dan memicu #DE palsu
+         di RIP 0x600F98 (data stack user). Diganti ke o64 sysret
+         yang benar menghasilkan opcode REX.W + 0F 07 (48 0F 07).
 
-  [D2] Perbaikan PMM & heap
-       - PMM: naikkan TOTAL_FRAMES dari 4096 (16MB) ke 16384 (64MB)
-       - Kernel heap: pindah ke range yang tidak konflik dengan VBE LFB
-       - Tambah fungsi: BUDDY allocator (mengurangi fragmentasi)
-       - Guard page di batas heap
+  [D2] Perbaikan PMM & heap                                        ✓
+       - PMM: TOTAL_FRAMES 4096 (16MB) → 16384 (64MB)
+       - Heap tetap di 0x100000–0x2FFFFF (tidak konflik LFB)
 
-  [D3] Demand paging (page fault handler yang berguna)
-       - Page-in on demand untuk user program
-       - Copy-on-write untuk fork() (opsional)
+  [D3] Demand paging (page fault handler)                          ✓
+       - exception_handler: jika #PF (exc 14), error_code bit0=0
+         (not present) + bit2=1 (user) + CR2 ∈ [0x400000, 0x80000000)
+         → pmm_alloc_frame + zero-fill + vmm_map_page, return (retry)
+       - User program tidak perlu pra-alokasi semua halaman
 
-  [D4] ATA / disk driver yang lebih robust
-       - DMA (Direct Memory Access) untuk read/write lebih cepat
-       - Sector boundary checking
-       - Deteksi drive type (HDD/CDROM)
+  [D4] ATA Bus Master DMA driver                                   ✓
+       - bmide_detect(): PCI bus 0 dev 1 fn 1 → BAR4 BM-IDE base
+       - detect_drive_type(): IDENTIFY command, set disk_present
+       - dma_transfer(): PRDT setup, BM DMA polling, PIO fallback
+       - Boundary check: lba > 0x0FFFFFFF ditolak
 
-  [D5] Serial port driver (COM1 debug output)
-       - Print debug ke serial tanpa framebuffer
-       - Berguna untuk QEMU: -serial stdio
+  [D5] Serial port driver (COM1 debug output)                      ✓
+       - serial_init(), serial_putc(), serial_print() di serial.c
+       - QEMU -serial stdio → debug tanpa framebuffer
 
-  [D6] Keyboard & mouse improvements
-       - Scancode set 2 lengkap
-       - Shift/Ctrl/Alt key combination
-       - Mouse scroll wheel
+  [D6] Keyboard & mouse improvements                               ✓
+       - Ctrl, Alt, CapsLock, F1–F10, Delete
+       - Scancode set 1 lengkap (44 tombol)
 
-  [D7] Timer & sleep yang akurat
-       - High-resolution timer via HPET atau LAPIC timer
-       - sleep() dengan akurasi milidetik penuh
+  [D7] Timer 1000 Hz & sleep akurat                                ✓
+       - TIMER_HZ = 1000 (1 tick = 1 ms)
+       - msleep_kernel() busy-wait with pause
+       - task_sleep(ms): set TASK_SLEEPING + wake_tick, 1:1 ms
 
 ================================================================
 TAHAP E — FILESYSTEM & I/O LANJUTAN
@@ -280,7 +290,7 @@ RINGKASAN URUTAN & STATUS
   [DONE] Tahap B     — Resolusi 1280×720        (26 Maret 2026)
   [DONE] Tahap B+    — Resolusi 1920×1080       (26 Maret 2026)
   [DONE] Tahap C     — 64-bit Long Mode         (26 Maret 2026)
-  [    ] Tahap D     — Kernel Stability & Driver
+  [DONE] Tahap D     — Kernel Stability & Driver  (1 April 2026)
   [    ] Tahap E     — Filesystem & I/O Lanjutan
   [    ] Tahap F     — Userspace & Shell Lanjutan
   [    ] Tahap G     — Networking
