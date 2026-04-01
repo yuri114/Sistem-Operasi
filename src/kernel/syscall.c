@@ -487,6 +487,25 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         return 0;
     }
 
+    // SYS_THREAD_CREATE(64): buat thread; ebx=entry_va, edx=arg → return tid
+    if (eax == SYS_THREAD_CREATE) {
+        int parent = task_get_current();
+        int tid = task_create_thread(ebx, edx, parent);
+        return (uint64_t)(int64_t)tid;
+    }
+
+    // SYS_THREAD_EXIT(65): keluar dari thread saat ini
+    if (eax == SYS_THREAD_EXIT) {
+        task_exit();
+        return 0; /* tidak dicapai */
+    }
+
+    // SYS_THREAD_JOIN(66): tunggu thread selesai; ebx=tid
+    if (eax == SYS_THREAD_JOIN) {
+        task_wait((int)ebx);
+        return 0;
+    }
+
     return (uint64_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal
 }
 

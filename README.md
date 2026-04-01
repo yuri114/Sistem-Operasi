@@ -19,12 +19,12 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 | Arsitektur | x86_64 — IA-32e Long Mode (64-bit) |
 | Boot | MBR 512-byte → Protected Mode → Long Mode |
 | Resolusi | 1920×1080 @ 32bpp (VBE Linear Framebuffer, ~8.3MB) |
-| Kernel | ~236 KB binary |
+| Kernel | ~258 KB binary |
 | Memory Map | 4-level paging, identity-mapped 4GB, heap kernel 6MB (0x100000–0x6FFFFF) |
 | Multitasking | Round-robin preemptive, hingga 16 task, PIT IRQ0 @ 1000 Hz |
 | Ring | Kernel Ring-0 / User Ring-3 (isolasi penuh per-proses) |
 | Filesystem | MFS3 — 64 file × 64KB, pointer-based, dirty/tmpfs/perms/timestamp, ATA PIO |
-| Syscall | `SYSCALL/SYSRET` (IA32_LSTAR MSR) — 55 syscall tersedia |
+| Syscall | `SYSCALL/SYSRET` (IA32_LSTAR MSR) — 67 syscall tersedia |
 | Build | WSL + `x86_64-linux-gnu-gcc` + NASM, output `os.img` binary raw |
 | Emulator | QEMU `qemu-system-x86_64` |
 
@@ -114,6 +114,16 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **Shell**: `mq_send <pid> <pesan>`, `mq_recv`
 - **lib.h**: `mq_send`, `mq_recv` + struct `MqRecvResult`
 
+### User-space Threading — Tahap N
+- **Thread sejati berbagi address space**: setiap thread pakai `page_dir` yang sama dengan proses induk
+- **Stack isolasi per-thread**: user stack ring-3 di VA `0x700000 + tid×0x1000` (4KB/thread), kernel stack di slot `stacks_base` masing-masing
+- **Argumen thread via RDI**: slot k=5 (rdi) pada initial iretq frame diisi `arg` — `thread_fn(arg)` langsung bekerja
+- **Thread-safe exit**: `task_exit()` cek `is_thread` — jika 1, skip `vfs_close_all` & `vmm_free_user_memory` (page_dir milik proses)
+- **Join via mekanisme waiter**: `task_wait(tid)` existing dipakai ulang untuk `thread_join`
+- **Syscall**: `SYS_THREAD_CREATE(64)`, `SYS_THREAD_EXIT(65)`, `SYS_THREAD_JOIN(66)`
+- **lib.h API**: `thread_create(fn, arg)`, `thread_exit()`, `thread_join(tid)` — inline SYSCALL
+- **Demo**: `threadtest` — spawn 3 thread paralel, join semua, verifikasi shared counter
+
 ### SMP — Tahap H
 - **LAPIC**: enable via IA32_APIC_BASE MSR + SVR register, baca APIC ID, kirim INIT/SIPI IPI via ICR
 - **ACPI MADT parser**: scan RSDP → RSDT → MADT untuk enumerasi CPU/APIC ID
@@ -134,11 +144,12 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **Environment variables**: `export KEY=VAL`, ekspansi `$VAR` di input
 - **Direktori**: `cd <dir>`, `pwd`, direktori-aware `ls`/`read`/`write`/`del`
 - **Background exec**: tambah `&` di akhir perintah
+- **Foreground exec (Tahap N-pre)**: tanpa `&` → shell blok sampai program selesai (`task_wait`)
 - **Jaringan**: `ifconfig` (tampilkan MAC/IP/GW), `ping <ip>` (4 ICMP echo requests + RTT)
-- **SMP info**: `cpuinfo` (jumlah CPU dari MADT + jumlah AP yang online), `taskstat` (distribusi task per-CPU)
-- **VFS shell**: `open <file>`, `fread <fd>`, `fwrite <fd> <teks>`, `fclose <fd>` — akses file via fd
-- **Message queue**: `mq_send <pid> <pesan>`, `mq_recv` — komunikasi antar task
-- **Built-in commands**: `ps`, `kill`, `ls`, `read`, `write`, `del`, `clear`, `help`, `exec`, `sync`, `mkdir`, `chmod`, `cd`, `pwd`, `export`, `env`, `ifconfig`, `ping`, `cpuinfo`, `taskstat`, `open`, `fread`, `fwrite`, `fclose`, `mq_send`, `mq_recv`, ...
+- **SMP info**: `cpuinfo`, `taskstat`
+- **Memory**: `meminfo` (total/used/free PMM frames)
+- **Threading**: `exec threadtest` — demo 3 thread paralel
+- **Built-in commands**: `ps`, `kill`, `ls`, `read`, `write`, `del`, `clear`, `help`, `exec`, `sync`, `mkdir`, `chmod`, `cd`, `pwd`, `export`, `env`, `ifconfig`, `ping`, `cpuinfo`, `taskstat`, `meminfo`, `open`, `fread`, `fwrite`, `fclose`, `mq_send`, `mq_recv`, ...
 
 ### Syscall Interface (user space via `SYSCALL/SYSRET`)
 ```
@@ -153,6 +164,8 @@ SYS_FS_SYNC(49) SYS_FS_TMPWRITE(50) SYS_FS_MKDIR(51) SYS_PIPE_NAMED(52)
 SYS_SHM_CREATE(53) SYS_SHM_ATTACH(54) SYS_SHM_DETACH(55)
 SYS_OPEN(56) SYS_READ_FD(57) SYS_WRITE_FD(58) SYS_CLOSE_FD(59)
 SYS_MQ_SEND(60) SYS_MQ_RECV(61)
+SYS_BRK(62) SYS_WAITPID(63)
+SYS_THREAD_CREATE(64) SYS_THREAD_EXIT(65) SYS_THREAD_JOIN(66)
 ```
 
 ### Libc Minimal (`lib.h`) — Tahap F2
@@ -171,6 +184,7 @@ SYS_MQ_SEND(60) SYS_MQ_RECV(61)
 | `gui_term` | Terminal emulator dalam window GUI |
 | `clock` | Widget jam — tampilkan uptime HH:MM:SS (update tiap detik) |
 | `sysinfo` | Panel info sistem — PID, uptime, tick count, arsitektur |
+| `threadtest` | Demo threading — spawn 3 thread paralel, join, verifikasi counter |
 | `hello` | Hello-world demo user process |
 | `gfxtest` | Demo grafis (pixel, rect, line) |
 | `gui_demo` | Demo window manager |
@@ -193,7 +207,8 @@ SYS_MQ_SEND(60) SYS_MQ_RECV(61)
 │   │   ├── isr.asm           # ISR + SYSCALL entry 64-bit (SAVE_REGS 15 GPR)
 │   │   ├── idt.h / idt.c     # IDT 64-bit (16-byte gate descriptor)
 │   │   ├── tss.h / tss.c     # TSS64 + GDT descriptor 16-byte
-│   │   ├── task.h / task.c   # Multitasking, context-switch, iretq frame
+│   │   ├── task.h / task.c   # Multitasking, threading, context-switch, iretq frame
+│   │   │                       #   + is_thread / parent_tid (Tahap N)
 │   │   ├── vmm.h / vmm.c     # PMM bitmap (64MB) + VMM 4-level paging
 │   │   ├── paging.h / paging.c  # Wrapper paging
 │   │   ├── elf_loader.h / elf_loader.c  # ELF64 loader ke per-proses PML4
@@ -227,7 +242,7 @@ SYS_MQ_SEND(60) SYS_MQ_RECV(61)
 │   │   ├── drv_vga.c / drv_kbd.c    # VGA & keyboard device driver
 │   │   └── *_elf_data.h      # Program user ter-embed sebagai C array
 │   └── programs/
-│       ├── lib.h             # Syscall wrapper + libc minimal (printf/sprintf/strcat/memcpy/...)
+│       ├── lib.h             # Syscall wrapper + libc minimal + thread API (thread_create/exit/join)
 │       ├── user.ld           # Linker script user (ELF64, . = 0x400000)
 │       ├── paint.c           # Aplikasi paint
 │       ├── notepad.c         # Editor teks
@@ -236,11 +251,12 @@ SYS_MQ_SEND(60) SYS_MQ_RECV(61)
 │       ├── gui_term.c        # Terminal GUI
 │       ├── clock.c           # Widget jam — uptime HH:MM:SS
 │       ├── sysinfo.c         # Panel info sistem
+│       ├── threadtest.c      # Demo threading: spawn 3 thread paralel
 │       └── ...               # Program demo lainnya (hello, gfxtest, gui_demo, sender, piper)
 └── build/
     ├── os.img                # Disk image final (2MB, sektor raw)
     ├── disk.img              # Disk data sekunder (8MB, filesystem MFS3)
-    └── kernel.bin            # Kernel binary (~236KB)
+    └── kernel.bin            # Kernel binary (~258KB)
 ```
 
 ---
@@ -296,9 +312,12 @@ Alamat Fisik    Ukuran    Isi
 0x30000–0x8FFFF ~384KB   Stack BSP (tumbuh dari 0x90000 ke bawah)
 0x9B000–0x9EFFF  16KB    Stack per-AP (8KB/AP: AP1=0x9D000, AP2=0x9B000)
 0x100000–0x6FFFFF 6MB    Heap kernel (malloc/free)
-0x400000–0x4FFFFF  1MB   User ELF load address (setiap proses)
+0x400000–0x5FDFFF ~1.9MB User heap (malloc via SYS_BRK, per-proses)
 0x500000–0x507FFF 32KB   Shared memory region (8 slot × 4KB, SHM)
-0x600000–0x600FFF  4KB   User stack (setiap proses, RSP = 0x601000)
+0x5FE000–0x5FEFFF  4KB   Guard page (stack overflow → #PF → task_exit)
+0x5FF000–0x5FFFFF  4KB   User stack proses (demand-paged, RSP = 0x600000)
+0x600000–0x600FFF  4KB   (alias stack slot lama ELF — RSP = 0x601000)
+0x700000–0x70FFFF 64KB   Thread user stacks (1 halaman × 16 slot, 0x700000+id*0x1000)
 0x3000000+        ...    PMM frame pool (0x300000 ke atas dipakai proses)
 
 Boot page tables (sementara, dipakai kernel_entry.asm):

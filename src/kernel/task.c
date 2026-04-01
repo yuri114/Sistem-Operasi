@@ -80,6 +80,8 @@ int task_create(void (*entry)()) {
     /* Tahap M: load balance — kernel task di-assign langsung ke AP jika ada */
     tasks[id].cpu_id    = has_ap ? (int8_t)1 : (int8_t)-1;
     tasks[id].is_user   = 0;   /* ring-0 kernel task */
+    tasks[id].is_thread = 0;
+    tasks[id].parent_tid = -1;
     str_copy_n(tasks[id].name, "[idle]", 32);
     tasks[id].page_dir  = vmm_create_page_dir();
 
@@ -121,6 +123,8 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
     tasks[id].waiter    = -1;
     tasks[id].heap_end  = 0x400000ULL; /* user heap mulai di 0x400000 */
     tasks[id].is_user   = 1;
+    tasks[id].is_thread = 0;
+    tasks[id].parent_tid = -1;
     str_copy_n(tasks[id].name, name ? name : "?", 32);
 
     /* Susun stack awal:
@@ -138,6 +142,70 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
     tasks[id].rsp = (uint64_t)stack_top;
     /* Tahap J: setup fd 0/1/2 untuk task ring-3 */
     vfs_init_task(id);
+    return id;
+}
+
+/* -----------------------------------------------------------------------
+ * task_create_thread — buat user thread yang berbagi page_dir dengan induk.
+ *
+ * entry       : alamat virtual fungsi thread (ring-3)
+ * arg         : nilai yang diteruskan ke rdi saat thread pertama kali jalan
+ * parent_tid  : tid proses pemilik page_dir (biasanya task saat ini)
+ *
+ * Stack thread user ring-3 dialokasikan di VA  0x700000 + id*0x1000 (4KB).
+ * RSP awal = 0x700000 + id*0x1000 + 0x1000 (atas halaman, tumbuh ke bawah).
+ * [RSP] = 0  (fake return addr — thread HARUS panggil thread_exit(), tidak    boleh return biasa)
+ * ----------------------------------------------------------------------- */
+int task_create_thread(uint64_t entry, uint64_t arg, int parent_tid) {
+    int id = -1, i;
+    for (i = 1; i < MAX_TASKS; i++) {
+        if (!tasks[i].used) { id = i; break; }
+    }
+    if (id == -1) return -1;
+    if (id >= task_count) task_count = id + 1;
+
+    if (parent_tid < 0 || parent_tid >= MAX_TASKS || !tasks[parent_tid].used)
+        return -1;
+
+    tasks[id].used       = 1;
+    tasks[id].status     = TASK_RUNNING;
+    tasks[id].wake_tick  = 0;
+    tasks[id].page_dir   = tasks[parent_tid].page_dir;  /* berbagi address space */
+    tasks[id].priority   = 2;
+    tasks[id].ticks      = 2;
+    tasks[id].pipe_id    = -1;
+    tasks[id].cpu_id     = -1;
+    tasks[id].waiter     = -1;
+    tasks[id].heap_end   = tasks[parent_tid].heap_end;  /* thread lihat heap yang sama */
+    tasks[id].is_user    = 1;
+    tasks[id].is_thread  = 1;
+    tasks[id].parent_tid = parent_tid;
+    str_copy_n(tasks[id].name, "thread", 32);
+
+    /* Alokasikan 1 halaman user stack ring-3 untuk thread ini di VA 0x700000+id*0x1000.
+     * Setiap slot task punya halaman stack sendiri sehingga tidak tabrakan. */
+    uint64_t tstack_va = 0x700000ULL + (uint64_t)id * 0x1000ULL;
+    uint64_t tstack_frame = pmm_alloc_frame();
+    if (!tstack_frame) { tasks[id].used = 0; return -1; }
+    vmm_map_page(tasks[id].page_dir, tstack_va, tstack_frame, 7);  /* P+RW+User */
+    uint64_t user_rsp = tstack_va + 0x1000ULL;  /* puncak halaman */
+
+    /* Susun kernel stack awal (sama seperti task_create_user):
+     *   [tinggi] SS, RSP_user, RFLAGS, CS, RIP   iretq frame
+     *   [rendah] 15 GPR slot
+     * Slot k=5 (rdi) diisi dengan arg agar thread_fn(arg) diterima benar */
+    uint64_t *stack_top = (uint64_t *)(stacks_base + (uint64_t)id * STACK_SIZE + STACK_SIZE);
+    *(--stack_top) = 0x23;               /* SS */
+    *(--stack_top) = user_rsp;           /* RSP user */
+    *(--stack_top) = 0x202;              /* RFLAGS: IF=1 */
+    *(--stack_top) = 0x2B;              /* CS user (GDT 0x28 | RPL=3) */
+    *(--stack_top) = entry;              /* RIP */
+    int k;
+    /* k=5 corresponds to rdi (lihat komentar SAVE_REGS di isr.asm):
+     * push order: rax(k=0) rbx(k=1) rcx(k=2) rdx(k=3) rsi(k=4) rdi(k=5) ... */
+    for (k = 0; k < 15; k++) *(--stack_top) = (k == 5) ? arg : 0ULL;
+
+    tasks[id].rsp = (uint64_t)stack_top;
     return id;
 }
 
@@ -294,21 +362,32 @@ void task_switch_ap(int cpu_idx)
 
 void task_exit() {
     int tid = current_task;
-    uint64_t *dir = tasks[tid].page_dir;
-    /* Tahap J: tutup semua fd milik task ini */
-    vfs_close_all(tid);
+    uint8_t is_thr  = tasks[tid].is_thread;
+    uint64_t *dir   = tasks[tid].page_dir;
+
+    /* Thread tidak memiliki page_dir sendiri → jangan tutup fd dan jangan free page_dir.
+     * Proses biasa: tutup semua fd lalu bebaskan seluruh memori user. */
+    if (!is_thr) {
+        /* Tahap J: tutup semua fd milik task ini */
+        vfs_close_all(tid);
+    }
 
     /* Simpan waiter sebelum membersihkan slot */
     int waiter = tasks[tid].waiter;
 
-    tasks[tid].used     = 0;
-    tasks[tid].cpu_id   = (int8_t)-1;   /* kembalikan ke pool */
-    tasks[tid].page_dir = 0;
-    tasks[tid].waiter   = -1;
+    tasks[tid].used      = 0;
+    tasks[tid].cpu_id    = (int8_t)-1;   /* kembalikan ke pool */
+    tasks[tid].page_dir  = 0;
+    tasks[tid].waiter    = -1;
+    tasks[tid].is_thread = 0;
 
-    /* Kembali ke boot PML4 dulu sebelum membebaskan page_dir proses */
+    /* Kembali ke boot PML4 dulu */
     vmm_switch_dir((uint64_t *)0x1000);
-    vmm_free_user_memory(dir);
+
+    if (!is_thr) {
+        /* Hanya proses pemilik yang membebaskan page_dir */
+        vmm_free_user_memory(dir);
+    }
 
     /* Bangunkan task yang sedang menunggu task ini selesai */
     if (waiter >= 0 && waiter < MAX_TASKS && tasks[waiter].used)

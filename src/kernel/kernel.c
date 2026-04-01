@@ -30,6 +30,7 @@
 #include "filemanager_elf_data.h"
 #include "clock_elf_data.h"
 #include "sysinfo_elf_data.h"
+#include "threadtest_elf_data.h"
 #include "ipc.h"
 #include "semaphore.h"
 #include "pipe.h"
@@ -241,6 +242,7 @@ void programs_init() {
     fs_write_bin("filemanager",   build_filemanager_elf,   build_filemanager_elf_len);
     fs_write_bin("clock",         build_clock_elf,         build_clock_elf_len);
     fs_write_bin("sysinfo",       build_sysinfo_elf,       build_sysinfo_elf_len);
+    fs_write_bin("threadtest",    build_threadtest_elf,    build_threadtest_elf_len);
 }
 
 /* Deklarasi handler dari isr.asm */

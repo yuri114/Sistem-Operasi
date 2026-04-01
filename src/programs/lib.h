@@ -933,4 +933,47 @@ static inline void win_msgbox(const char *title, const char *msg) {
     win_destroy(id);
 }
 
+/* ============================================================
+ * Tahap N — User-space Threading
+ * ============================================================ */
+#define SYS_THREAD_CREATE 64  /* buat thread: arg1=entry_va, arg2=arg → return tid */
+#define SYS_THREAD_EXIT   65  /* keluar dari thread saat ini                       */
+#define SYS_THREAD_JOIN   66  /* tunggu thread: arg1=tid → return 0                */
+
+/* typedef untuk fungsi thread: void fn(void *arg) */
+typedef void (*thread_fn_t)(void *);
+
+/* Buat thread baru yang menjalankan fn(arg) dalam address space yang sama.
+ * Return: tid thread, atau -1 jika gagal (slot habis).
+ * PENTING: fn() HARUS memanggil thread_exit() sebelum return. */
+static inline int thread_create(thread_fn_t fn, void *arg) {
+    long ret;
+    __asm__ volatile (
+        "syscall"
+        : "=a"(ret)
+        : "a"((long)SYS_THREAD_CREATE), "D"((long)fn), "S"((long)arg)
+        : "rcx", "r11", "memory"
+    );
+    return (int)ret;
+}
+
+/* Keluar dari thread saat ini. Wajib dipanggil di akhir fungsi thread. */
+static inline void thread_exit(void) {
+    __asm__ volatile (
+        "syscall"
+        :: "a"((long)SYS_THREAD_EXIT)
+        : "rcx", "r11", "memory"
+    );
+    while (1); /* tidak pernah kembali */
+}
+
+/* Tunggu thread tid selesai (blocking join). */
+static inline void thread_join(int tid) {
+    __asm__ volatile (
+        "syscall"
+        :: "a"((long)SYS_THREAD_JOIN), "D"((long)tid)
+        : "rcx", "r11", "memory"
+    );
+}
+
 #endif

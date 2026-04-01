@@ -1,6 +1,6 @@
 ================================================================
   MyOS — ROADMAP PENGEMBANGAN SISTEM
-  Dibuat: 24 Maret 2026 | Diperbarui: 2 April 2026
+  Dibuat: 24 Maret 2026 | Diperbarui: 1 April 2026
 ================================================================
 
 KONDISI SAAT INI (setelah Tahap C)
@@ -361,6 +361,8 @@ RINGKASAN URUTAN & STATUS
   [DONE] Tahap K     — Guard Page (Stack Overflow Protection) (1 April 2026)
   [DONE] Tahap L     — IPC Message Queue          (1 April 2026)
   [DONE] Tahap M     — Load-Balanced AP Dispatch  (1 April 2026)
+  [DONE] Fondasi N   — Stabilitas Sistem (user heap, waitpid, slot reuse)  (1 April 2026)
+  [DONE] Tahap N     — User-space Threading         (1 April 2026)
 
 ================================================================
 
@@ -512,6 +514,64 @@ Tujuan: memperkuat fondasi sebelum Tahap N (Threading) dan seterusnya.
          - free() dengan coalescing blok bebas bersebelahan
          - Heap user otomatis dibebaskan penuh saat task exit (vmm_free_user_memory)
          - waitpid() wrapper di lib.h
+
+================================================================
+TAHAP N — USER-SPACE THREADING
+Status: [SELESAI] ✓ Selesai 1 April 2026 — build 257,736 bytes
+Prasyarat: Fondasi N selesai ✓
+----------------------------------------------------------------
+Tujuan: thread sejati yang berbagi address space dengan proses induk.
+        Setiap thread punya kernel stack + user stack sendiri, tetapi
+        berbagi page_dir (PML4) dan heap_end dengan parent.
+        Thread tidak membebaskan page_dir saat exit (milik proses).
+
+  [N1] ✓ Task struct — tambah field thread
+       - is_thread (uint8_t): 1 = thread, jangan free page_dir saat exit
+       - parent_tid (int): tid proses induk; -1 = bukan thread
+       File: src/kernel/task.h
+
+  [N2] ✓ task_create_thread(entry, arg, parent_tid)
+       - Scan free slot (skip 0 = shell), seperti task_create_user
+       - page_dir = tasks[parent_tid].page_dir  (shared address space)
+       - heap_end = tasks[parent_tid].heap_end   (thread lihat heap yang sama)
+       - User stack ring-3 dialokasikan di VA 0x700000 + id*0x1000 (4KB/thread)
+         → setiap slot task punya halaman stack sendiri, tidak tabrakan
+       - Initial kernel stack: iretq frame (SS/RSP/RFLAGS/CS/RIP) +
+         15 GPR slot; slot k=5 (rdi) diisi arg agar thread_fn(arg) bekerja
+       File: src/kernel/task.c
+
+  [N3] ✓ task_exit — perlakuan thread vs proses
+       - Jika is_thread == 1: skip vfs_close_all, skip vmm_free_user_memory
+         (hanya proses pemilik yang boleh membebaskan page_dir)
+       - Waiter tetap di-wake melalui task_unblock(waiter) — join tetap bekerja
+       File: src/kernel/task.c
+
+  [N4] ✓ Syscall baru (64–66)
+       - SYS_THREAD_CREATE (64): ebx=entry_va, edx=arg → return tid
+         Kernel: task_create_thread(ebx, edx, current_task)
+       - SYS_THREAD_EXIT (65): panggil task_exit() dari thread saat ini
+       - SYS_THREAD_JOIN (66): ebx=tid → task_wait(tid), block sampai thread selesai
+       File: src/kernel/syscall.h, src/kernel/syscall.c
+
+  [N5] ✓ lib.h — threading API user space
+       - thread_create(fn, arg): inline syscall via SYSCALL; arg via RDI (rsi→ebx)
+       - thread_exit(): panggil SYS_THREAD_EXIT, loop tak terbatas (tidak return)
+       - thread_join(tid): panggil SYS_THREAD_JOIN dengan tid
+       - typedef thread_fn_t = void (*)(void *)
+       File: src/programs/lib.h
+
+  [N6] ✓ Program threadtest.c
+       - Spawn 3 thread paralel via thread_create(thread_worker, (void*)id)
+       - thread_worker: print "mulai", busy-loop 500K iter, print "selesai",
+         increment shared counter `done`, panggil thread_exit()
+       - Main: thread_join ketiga thread, print "done. count=3"
+       - Demo: main memblok (join) sampai semua thread selesai
+       File: src/programs/threadtest.c
+
+  [N7] ✓ Build + integrasi
+       - build.ps1: kompilasi threadtest.c → threadtest.elf → threadtest_elf_data.h
+       - kernel.c: #include + fs_write_bin("threadtest", ...)
+       - shell.c: tab-completion + help entry "threadtest"
 
 Status: [SELESAI] ✓ Selesai 24 Maret 2026 — build 171,920 bytes, test QEMU OK
 ----------------------------------------------------------------

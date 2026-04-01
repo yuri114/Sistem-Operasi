@@ -22,6 +22,8 @@ typedef struct {
     int       pipe_id;
     int8_t    cpu_id;     /* CPU yang sedang menjalankan task ini (-1 = bebas) */
     uint8_t   is_user;    /* 1 = ring-3 user task (hanya boleh di BSP/CPU 0)   */
+    uint8_t   is_thread;  /* 1 = thread (berbagi page_dir dgn parent, jangan free saat exit) */
+    int       parent_tid; /* untuk thread: tid proses induk; -1 = bukan thread  */
     int       waiter;     /* tid task yang menunggu task ini selesai (-1 = none) */
     uint64_t  heap_end;   /* akhir heap user (0x400000 awal); 0 = kernel task   */
 } Task;
@@ -29,6 +31,7 @@ typedef struct {
 void task_init();
 int  task_create(void (*entry)());
 int  task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, const char *name);
+int  task_create_thread(uint64_t entry, uint64_t arg, int parent_tid);
 void task_switch();           /* BSP (CPU 0) scheduler — dipanggil dari irq0   */
 void task_switch_ap(int cpu_idx); /* AP scheduler — dipanggil dari lapic_timer_isr */
 void task_set_has_ap(int v);       /* dipanggil smp_init setelah AP online */

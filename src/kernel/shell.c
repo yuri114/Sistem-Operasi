@@ -79,7 +79,7 @@ static const char *shell_commands[] = {
     "sync", "mkdir ", "chmod ",
     "ifconfig", "ping ", "cpuinfo",
     "open ", "fread ", "fwrite ", "fclose ",
-    "mq_send ", "mq_recv", "taskstat", "meminfo",
+    "mq_send ", "mq_recv", "taskstat", "meminfo", "threadtest",
     0
 };
 
@@ -265,6 +265,7 @@ static void shell_execute(){
         print("cpuinfo              - tampilkan info SMP (BSP/AP online)\n");
         print("taskstat             - tampilkan distribusi task per CPU\n");
         print("meminfo              - tampilkan statistik memori fisik & heap\n");
+        print("threadtest           - demo threading: spawn 3 thread secara paralel\n");
         print("open <file>          - buka file, cetak fd\n");
         print("fread <fd>           - baca isi file lewat fd\n");
         print("fwrite <fd> <teks>   - tulis teks ke file lewat fd\n");

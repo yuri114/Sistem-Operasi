@@ -80,6 +80,11 @@
 #define SYS_BRK       62  // perluas user heap: ebx=new_end → return new_end sesungguhnya
 #define SYS_WAITPID   63  // tunggu task selesai: ebx=tid → return 0
 
+/* Tahap N — User-space Threading */
+#define SYS_THREAD_CREATE 64  // buat thread: ebx=entry_va, edx=arg → return tid
+#define SYS_THREAD_EXIT   65  // keluar dari thread saat ini → tidak return
+#define SYS_THREAD_JOIN   66  // tunggu thread selesai: ebx=tid → return 0
+
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);
 
