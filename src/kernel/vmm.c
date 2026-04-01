@@ -1,8 +1,8 @@
 /* vmm.c ? Physical and Virtual Memory Manager (64-bit, 4-level paging)
  *
- * PMM: bitmap untuk 16MB / 4KB = 4096 frame.
- *   Frame 0-767  (0-3MB)   : kernel / boot page tables ? ditandai USED.
- *   Frame 768-4095 (3-16MB): bebas, dialokasikan untuk user processes.
+ * PMM: bitmap untuk 64MB / 4KB = 16384 frame.
+ *   Frame 0-767    (0-3MB)   : kernel / boot page tables — ditandai USED.
+ *   Frame 768-16383 (3-64MB) : bebas, dialokasikan untuk user processes.
  *
  * VMM per-proses:
  *   Setiap proses mempunyai PML4 sendiri.
@@ -19,7 +19,7 @@
 /* ===================================================================
  * Physical Memory Manager
  * =================================================================== */
-#define TOTAL_FRAMES 4096   /* 16MB / 4KB */
+#define TOTAL_FRAMES 16384  /* 64MB / 4KB */
 static uint8_t frame_bitmap[TOTAL_FRAMES / 8];
 
 static void bitmap_set(uint32_t frame) {

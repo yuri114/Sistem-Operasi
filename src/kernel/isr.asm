@@ -17,6 +17,8 @@ global irq0
 global irq1
 global irq12
 global int80_handler
+global syscall_entry
+global syscall_kstack
 
 extern keyboard_handler
 extern timer_handler
@@ -162,6 +164,76 @@ int80_handler:
 ; Exception Handlers INT 0-14
 ; ==================================================================
 extern exception_handler
+
+; ==================================================================
+; SYSCALL/SYSRET Handler (IA32_LSTAR)
+;
+; Entri:  RAX=num, RDI=arg1, RSI=arg2, RCX=user_RIP, R11=user_RFLAGS
+;         RSP masih pointer ke user stack (belum diganti)
+;         IF sudah clear oleh SFMASK
+;
+; Trik kunci: simpan user RSP ke [syscall_tmp_rsp], pindah ke kernel
+; stack, lalu PUSH user RSP ke atas kernel stack agar per-task.
+; Ketika context switch terjadi saat handler berjalan, kernel RSP
+; (yang berisi frame + user RSP) disimpan per-task oleh irq0.
+; Saat task resume, pop rsp di akhir mengembalikan user RSP dengan benar.
+; ==================================================================
+section .data
+align 8
+syscall_kstack:     dq  0x90000     ; diupdate task_switch untuk top-of-kernel-stack task saat ini
+syscall_tmp_rsp:    dq  0           ; scratch sementara (aman: interrupts off saat dipakai)
+
+section .text
+syscall_entry:
+    ; Simpan user RSP ke scratch (IF=0, aman dari race)
+    mov  [rel syscall_tmp_rsp], rsp
+
+    ; Pindah ke kernel stack task saat ini
+    mov  rsp, [rel syscall_kstack]
+
+    ; Simpan user RSP di kernel stack (per-task karena tiap task punya kernel stack sendiri)
+    push qword [rel syscall_tmp_rsp]
+
+    ; Aman untuk re-enable interrupt
+    sti
+
+    ; Simpan register yang dibutuhkan untuk sysretq dan restore benar
+    push rcx        ; user return RIP
+    push r11        ; user RFLAGS
+    push rbp
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+
+    ; Panggil syscall_handler(num=rdi, arg1=rsi, arg2=rdx)
+    ; Konvensi: RAX=num, RDI=arg1, RSI=arg2 → ubah ke handler signature (rdi,rsi,rdx)
+    mov  rdx, rsi   ; arg2
+    mov  rsi, rdi   ; arg1
+    mov  rdi, rax   ; syscall number
+    call syscall_handler
+    ; RAX = return value (sudah di rax)
+
+    ; Pulihkan register
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    pop  rbp
+    pop  r11        ; user RFLAGS (untuk sysretq)
+    pop  rcx        ; user RIP    (untuk sysretq)
+
+    ; Disable interrupts sebelum restore user RSP + sysretq
+    cli
+    pop  rsp        ; restore user RSP dari kernel stack
+
+    ; Kembali ke user space
+    ; CS  = STAR[63:48]+16 | 3 = 0x2B (user code 64-bit)
+    ; SS  = STAR[63:48]+8  | 3 = 0x23 (user data)
+    ; RIP = RCX, RFLAGS = R11
+    o64 sysret          ; NASM mnemonic untuk SYSRETQ (REX.W + 0F 07 = 48 0F 07)
 
 %macro EXC_NOERR 1
 global exc%1

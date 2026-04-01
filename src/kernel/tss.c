@@ -42,8 +42,8 @@ void tss64_init(uint64_t kernel_stack) {
     tss64_desc[14] = 0;
     tss64_desc[15] = 0;
 
-    /* Load TSS register: selector 0x28 (GDT entry 5, 16-byte descriptor) */
-    __asm__ volatile ("ltr %%ax" :: "a"((uint16_t)0x28));
+    /* Load TSS register: selector 0x30 (GDT entry 6, 16-byte descriptor) */
+    __asm__ volatile ("ltr %%ax" :: "a"((uint16_t)0x30));
 }
 
 void tss64_set_kernel_stack(uint64_t rsp) {

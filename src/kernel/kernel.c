@@ -37,6 +37,7 @@
 #include "graphics.h"
 #include "vbe.h"
 #include "keyboard.h"
+#include "serial.h"
 
 /* Bochs VBE 1280x720 @ 32bpp: font 8x8 = 160 kolom x 90 baris */
 #define VGA_COLS 160
@@ -162,7 +163,7 @@ void enter_usermode(uint64_t rip, uint64_t user_rsp) {
         "pop %%rax\n"
         "or $0x200, %%rax\n"    /* set IF */
         "push %%rax\n"
-        "pushq $0x1B\n"         /* CS: user code */
+        "pushq $0x2B\n"         /* CS: user code (GDT 0x28 | RPL=3) */
         "pushq %0\n"            /* RIP */
         "iretq\n"
         :: "r"(rip), "r"(user_rsp) : "rax"
@@ -236,6 +237,7 @@ void programs_init() {
 extern void irq0();
 extern void irq1();
 extern void int80_handler();
+extern void syscall_entry();    /* D1: SYSCALL/SYSRET handler */
 extern void exc0();  extern void exc1();  extern void exc2();
 extern void exc3();  extern void exc4();  extern void exc5();
 extern void exc6();  extern void exc7();  extern void exc8();
@@ -255,9 +257,40 @@ static void print_hex64(uint64_t val) {
 }
 
 /* Dipanggil dari exc_common di isr.asm saat CPU exception terjadi.
- * Tampilkan layar merah dengan info exception, lalu halt sistem. */
+ * Untuk #PF dari user mode (page not present, alamat valid): demand-page.
+ * Semua exception lain: tampilkan Kernel Panic dan halt. */
 void exception_handler(uint64_t exc_num, uint64_t error_code,
                        uint64_t rip,      uint64_t cr2) {
+
+    /* ---- D3: Demand paging ---- */
+    if (exc_num == 14) {
+        /* Kondisi demand-page:
+         *   bit 0 error_code = 0  → page not present (bukan protection violation)
+         *   bit 2 error_code = 1  → akses dari user mode
+         *   cr2 dalam range user space: 0x400000 – 0x7FFFFFFF */
+        if (!(error_code & 1u) && (error_code & 4u)
+            && cr2 >= 0x400000ULL && cr2 < 0x80000000ULL)
+        {
+            /* Baca PML4 dari CR3 */
+            uint64_t cr3;
+            __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+            uint64_t *pml4 = (uint64_t *)(cr3 & ~(uint64_t)0xFFF);
+
+            /* Alokasikan frame baru dan zeroing (keamanan: jangan bocor data) */
+            uint64_t phys = pmm_alloc_frame();
+            if (phys) {
+                /* zero_frame adalah static di vmm.c — panggil via helper yang sudah ada */
+                uint64_t *p = (uint64_t *)phys;
+                int i;
+                for (i = 0; i < (int)(4096 / 8); i++) p[i] = 0;
+
+                /* Petakan halaman yang di-fault (page-aligned) */
+                vmm_map_page(pml4, cr2 & ~(uint64_t)0xFFF, phys, 7);
+                return;  /* kembali: retry instruksi */
+            }
+            /* Tidak cukup memori — jatuh ke panic */
+        }
+    }
     static const char *names[] = {
         "#DE Divide Error",         "#DB Debug",
         "NMI",                      "#BP Breakpoint",
@@ -298,6 +331,10 @@ void exception_handler(uint64_t exc_num, uint64_t error_code,
 
 /*entry point kernel - dipanggil dari kernel_entry.asm*/
 void kernel_main(){
+    /* Inisialisasi serial COM1 sedini mungkin untuk debug output */
+    serial_init();
+    serial_print("[BOOT] kernel_main() entered\n");
+
     /* Diagnostik: tulis ke VGA text buffer (0xB8000) sebelum VBE aktif.
      * Jika huruf 'K' muncul di pojok kiri atas, berarti kernel C sudah dicapai.
      * Ini menggunakan physical address 0xB8000 yang selalu ter-identity-map (< 4MB). */
@@ -341,7 +378,7 @@ void kernel_main(){
     dev_register(DEV_KBD, &drv_kbd);
     dev_init_all();
     programs_init();
-    timer_init(100);
+    timer_init(TIMER_HZ);   /* 1000 Hz = 1ms per tick */
     pic_init();
     idt_init();
     idt_set_gate(32, (uint64_t)irq0);
@@ -375,6 +412,32 @@ void kernel_main(){
     tss64_init(task_get_rsp0(0));
     /* register syscall dengan DPL = 3 agar ring-3 bisa memanggil int 0x80 */
     idt_set_gate_user(0x80, (uint64_t)int80_handler);
+
+    /* D1: Setup SYSCALL/SYSRET via MSR
+     * STAR[47:32] = 0x0008  → SYSCALL CS=0x08, SS=0x10
+     * STAR[63:48] = 0x0018  → SYSRETQ CS=(0x18+16)|3=0x2B, SS=(0x18+8)|3=0x23
+     * LSTAR = address of syscall_entry
+     * SFMASK = 0x200 (clear IF=bit 9 on SYSCALL) */
+    {
+        uint32_t lo, hi;
+        /* Set SCE bit in EFER (bit 0) */
+        __asm__ volatile ("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0xC0000080u));
+        lo |= 0x1u;
+        __asm__ volatile ("wrmsr" :: "c"(0xC0000080u), "a"(lo), "d"(hi));
+        /* STAR MSR */
+        lo = 0;
+        hi = (0x0018u << 16) | 0x0008u;    /* [63:48]=0x0018, [47:32]=0x0008 */
+        __asm__ volatile ("wrmsr" :: "c"(0xC0000081u), "a"(lo), "d"(hi));
+        /* LSTAR MSR */
+        {
+            uint64_t lstar = (uint64_t)(uintptr_t)syscall_entry;
+            __asm__ volatile ("wrmsr" :: "c"(0xC0000082u),
+                              "a"((uint32_t)lstar), "d"((uint32_t)(lstar >> 32)));
+        }
+        /* SFMASK MSR: clear IF (bit 9) on SYSCALL */
+        __asm__ volatile ("wrmsr" :: "c"(0xC0000084u), "a"(0x200u), "d"(0u));
+    }
+    serial_print("[D1] SYSCALL/SYSRET MSR configured\n");
 
     /* IRQ12 — PS/2 Mouse (INT 44 = slave IRQ4) */
     extern void irq12();

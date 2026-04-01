@@ -177,26 +177,32 @@ long_mode_entry:
     jmp  .halt
 
 ; ==================================================================
-; GDT 64-bit
+; GDT 64-bit  (dimodifikasi untuk dukungan SYSCALL/SYSRET)
 ;   0x00  null
-;   0x08  kernel code ring-0  (L=1, D=0, P=1, DPL=0)
-;   0x10  kernel data ring-0  (L=0, D=1, P=1, DPL=0)
-;   0x18  user code  ring-3   (L=1, D=0, P=1, DPL=3) => selector 0x1B
-;   0x20  user data  ring-3   (L=0, D=1, P=1, DPL=3) => selector 0x23
-;   0x28  TSS64 low  (16 byte, 2 entri GDT) -- diisi tss64_init()
-;   0x30  TSS64 high
+;   0x08  kernel code ring-0  (L=1, D=0, P=1, DPL=0)  → selector 0x08
+;   0x10  kernel data ring-0  (L=0, D=1, P=1, DPL=0)  → selector 0x10
+;   0x18  user 32-bit CS DPL=3 (dummy, untuk SYSRETQ SS calculation)
+;   0x20  user data  ring-3   (L=0, D=1, P=1, DPL=3)  → selector 0x23
+;   0x28  user code  ring-3   (L=1, D=0, P=1, DPL=3)  → selector 0x2B
+;   0x30  TSS64 low  (16 byte, 2 entri GDT) -- diisi tss64_init()
+;   0x38  TSS64 high
+;
+; SYSCALL/SYSRET STAR setup:
+;   STAR[47:32] = 0x0008  → SYSCALL CS=0x08, SS=0x10
+;   STAR[63:48] = 0x0018  → SYSRETQ CS=(0x18+16)|3=0x2B, SS=(0x18+8)|3=0x23
 ; ==================================================================
 align 8
 kernel_gdt64:
-    dq 0x0000000000000000
-    dq 0x00AF9A000000FFFF
-    dq 0x00CF92000000FFFF
-    dq 0x00AFFA000000FFFF
-    dq 0x00CFF2000000FFFF
+    dq 0x0000000000000000           ; 0x00 null
+    dq 0x00AF9A000000FFFF           ; 0x08 kernel CS 64-bit DPL=0
+    dq 0x00CF92000000FFFF           ; 0x10 kernel DS DPL=0
+    dq 0x00CFFA000000FFFF           ; 0x18 user 32-bit CS DPL=3 (dummy for SYSRETQ)
+    dq 0x00CFF2000000FFFF           ; 0x20 user DS DPL=3   → selector 0x23
+    dq 0x00AFFA000000FFFF           ; 0x28 user CS 64-bit DPL=3 → selector 0x2B
 global tss64_desc
 tss64_desc:
-    dq 0
-    dq 0
+    dq 0                            ; 0x30 TSS64 low (diisi tss64_init)
+    dq 0                            ; 0x38 TSS64 high
 kernel_gdt64_end:
 
 kernel_gdt64_ptr:

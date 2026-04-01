@@ -96,7 +96,7 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
     *(--stack_top) = 0x23;              /* SS: user data selector */
     *(--stack_top) = user_rsp;          /* RSP: user mode stack */
     *(--stack_top) = 0x202;             /* RFLAGS: IF=1 */
-    *(--stack_top) = 0x1B;              /* CS: user code selector */
+    *(--stack_top) = 0x2B;              /* CS: user code selector (GDT 0x28 | RPL=3) */
     *(--stack_top) = entry;             /* RIP: entry point ELF */
     int k;
     for (k = 0; k < 15; k++) *(--stack_top) = 0;
@@ -134,7 +134,12 @@ void task_switch() {
     next_rsp     = &tasks[next].rsp;
     current_task = next;
 
-    tss64_set_kernel_stack((uint64_t)(stacks_base + (uint64_t)next * STACK_SIZE + STACK_SIZE));
+    uint64_t kstack_top = (uint64_t)(stacks_base + (uint64_t)next * STACK_SIZE + STACK_SIZE);
+    tss64_set_kernel_stack(kstack_top);
+
+    /* D1: update kernel stack pointer untuk syscall_entry */
+    extern volatile uint64_t syscall_kstack;
+    syscall_kstack = kstack_top;
 
     if (tasks[current_task].page_dir)
         vmm_switch_dir(tasks[current_task].page_dir);
@@ -190,8 +195,8 @@ uint64_t task_get_rsp0(int id) {
 }
 
 void task_sleep(uint32_t ms) {
-    uint32_t wait_ticks = (ms * 100 + 999) / 1000;
-    if (wait_ticks == 0) wait_ticks = 1;
+    /* Timer sekarang 1000 Hz, 1 tick = 1 ms */
+    uint32_t wait_ticks = (ms > 0) ? ms : 1;
     tasks[current_task].status    = TASK_SLEEPING;
     tasks[current_task].wake_tick = get_ticks() + wait_ticks;
     __asm__ volatile ("sti");

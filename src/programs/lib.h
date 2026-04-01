@@ -113,39 +113,46 @@ typedef struct { int x, y, w, h; unsigned int color; } GfxRect;
 typedef struct { int x1, y1, x2, y2; unsigned int color; } GfxLine;
 
 // ============================================================
-// syscall — memanggil kernel lewat int 0x80
-//   eax = nomor syscall
-//   ebx = argumen (pointer, nilai, dll)
-//   return value ada di eax setelah int 0x80
 // ============================================================
+// syscall — memanggil kernel lewat SYSCALL instruction (D1)
+//   rax = nomor syscall
+//   rdi = arg1, rsi = arg2
+//   return value ada di rax
+//   rcx dan r11 di-clobber oleh SYSCALL
+// ============================================================
+
+// syscall1: rax=num, rdi=arg1
 static inline long syscall1(long num, long arg) {
     long ret;
     __asm__ volatile (
-        "int $0x80"
+        "syscall"
         : "=a"(ret)
-        : "a"(num), "b"(arg)
+        : "a"(num), "D"(arg)
+        : "rcx", "r11", "memory"
     );
     return ret;
 }
 
-// syscall2: eax=num, ebx=arg1, edx=arg2 (3 argumen)
+// syscall2: rax=num, rdi=arg1, rsi=arg2
 static inline long syscall2(long num, long arg1, long arg2) {
     long ret;
     __asm__ volatile (
-        "int $0x80"
+        "syscall"
         : "=a"(ret)
-        : "a"(num), "b"(arg1), "d"(arg2)
+        : "a"(num), "D"(arg1), "S"(arg2)
+        : "rcx", "r11", "memory"
     );
     return ret;
 }
 
+// syscall0: rax=num
 static inline long syscall0(long num) {
     long ret;
     __asm__ volatile (
-        "int $0x80"
+        "syscall"
         : "=a"(ret)
         : "a"(num)
-        : "rbx"
+        : "rcx", "r11", "memory"
     );
     return ret;
 }

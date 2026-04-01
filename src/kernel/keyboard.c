@@ -63,40 +63,74 @@ static inline uint8_t inb(uint16_t port) {
     return v;
 }
 
-static uint8_t extended     = 0;   /* flag prefix 0xE0 (arrow keys, dll) */
-static uint8_t shift_pressed = 0;  /* 1 = Left/Right Shift sedang ditekan */
+static uint8_t extended      = 0;   /* flag prefix 0xE0 (arrow keys, dll)  */
+static uint8_t shift_pressed = 0;   /* 1 = Left/Right Shift sedang ditekan */
+static uint8_t ctrl_pressed  = 0;   /* 1 = Left/Right Ctrl sedang ditekan  */
+static uint8_t alt_pressed   = 0;   /* 1 = Left Alt sedang ditekan         */
+static uint8_t capslock_on   = 0;   /* 1 = Caps Lock aktif (toggle)        */
+
+int keyboard_ctrl_pressed()    { return (int)ctrl_pressed; }
+int keyboard_alt_pressed()     { return (int)alt_pressed; }
+int keyboard_capslock_state()  { return (int)capslock_on; }
 
 void keyboard_handler() {
     uint8_t sc = inb(KEYBOARD_DATA_PORT);
 
-    /* 0xE0 = extended scancode prefix (arrow keys, Insert, dll) */
+    /* 0xE0 = extended scancode prefix */
     if (sc == 0xE0) { extended = 1; return; }
 
-    /* Shift release: 0xAA = Left Shift up, 0xB6 = Right Shift up */
-    if (sc == 0xAA || sc == 0xB6) { shift_pressed = 0; return; }
+    /* Shift release */
+    if (sc == 0xAA || sc == 0xB6) { shift_pressed = 0; extended = 0; return; }
+    /* Ctrl release: Left=0x9D */
+    if (sc == 0x9D) { ctrl_pressed = 0; extended = 0; return; }
+    /* Alt release: Left=0xB8 */
+    if (sc == 0xB8) { alt_pressed = 0; extended = 0; return; }
 
-    /* Bit 7 = 1: key release — abaikan (kecuali Shift sudah ditangani atas) */
+    /* Key release lainnya (bit 7=1) */
     if (sc & 0x80) { extended = 0; return; }
 
     /* Shift press */
     if (sc == 0x2A || sc == 0x36) { shift_pressed = 1; return; }
+    /* Ctrl press: Left=0x1D */
+    if (sc == 0x1D) { ctrl_pressed = 1; return; }
+    /* Alt press: Left=0x38 */
+    if (sc == 0x38) { alt_pressed = 1; return; }
+    /* Caps Lock toggle: 0x3A */
+    if (sc == 0x3A) { capslock_on ^= 1; return; }
 
-    /* Extended key: arrow keys dikirim sebagai karakter kontrol */
+    /* Extended key: arrow keys, Delete */
     if (extended) {
         extended = 0;
-        if      (sc == 0x48) key_push('\x01');  /* ↑ up    */
-        else if (sc == 0x50) key_push('\x02');  /* ↓ down  */
-        else if (sc == 0x4B) key_push('\x04');  /* ← left  */
-        else if (sc == 0x4D) key_push('\x05');  /* → right */
+        if      (sc == 0x48) key_push(KEY_UP);      /* Arrow Up    */
+        else if (sc == 0x50) key_push(KEY_DOWN);    /* Arrow Down  */
+        else if (sc == 0x4B) key_push(KEY_LEFT);    /* Arrow Left  */
+        else if (sc == 0x4D) key_push(KEY_RIGHT);   /* Arrow Right */
+        else if (sc == 0x53) key_push(KEY_DELETE);  /* Delete      */
+        else if (sc == 0x9D) ctrl_pressed = 0;      /* Right Ctrl release */
         return;
     }
 
-    if (sc == 0x0F) { key_push('\x03'); return; }  /* Tab */
+    /* Tab */
+    if (sc == 0x0F) { key_push(KEY_TAB); return; }
 
-    if      (sc == 0x0E) key_push('\b');            /* Backspace */
-    else if (sc == 0x1C) key_push('\n');            /* Enter */
+    /* F1-F10: scancode 0x3B-0x44 */
+    if (sc >= 0x3B && sc <= 0x44) { key_push((char)(KEY_F1 + (sc - 0x3B))); return; }
+
+    if      (sc == 0x0E) key_push('\b');    /* Backspace */
+    else if (sc == 0x1C) key_push('\n');    /* Enter     */
+    else if (sc == 0x01) key_push(0x1B);   /* Escape    */
     else if (sc < sizeof(scancode_table)) {
         char c = shift_pressed ? scancode_shift_table[sc] : scancode_table[sc];
+        /* Caps Lock: balik huruf kecil/besar */
+        if (c && capslock_on) {
+            if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+            else if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+        }
+        /* Ctrl+huruf: kode kontrol 0x01-0x1A */
+        if (c && ctrl_pressed) {
+            if (c >= 'a' && c <= 'z')      c = (char)(c - 'a' + 1);
+            else if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 1);
+        }
         if (c) key_push(c);
     }
 }
