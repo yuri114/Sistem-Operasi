@@ -460,6 +460,33 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         return (uint64_t)(n > 0 ? 1 : 0);
     }
 
+    // SYS_BRK(62): perluas user heap; ebx=new_end → return new_end aktual
+    if (eax == SYS_BRK) {
+        int tid = task_get_current();
+        uint64_t cur_end = task_get_heap_end(tid);
+        uint64_t new_end = ebx;
+        if (new_end == 0) return cur_end;          /* query current brk */
+        if (new_end <= cur_end) return cur_end;    /* no shrink */
+        if (new_end > 0x5FE000ULL) return cur_end; /* jangan masuk guard page */
+        /* Petakan frame baru untuk halaman yang belum dipetakan */
+        uint64_t *pdir = task_get_page_dir(tid);
+        uint64_t pg;
+        for (pg = (cur_end & ~(uint64_t)0xFFF); pg < new_end; pg += 0x1000) {
+            uint64_t frame = pmm_alloc_frame();
+            if (!frame) break;
+            vmm_map_page(pdir, pg, frame, 7);  /* P+RW+User */
+            cur_end = pg + 0x1000;
+        }
+        task_set_heap_end(tid, cur_end);
+        return cur_end;
+    }
+
+    // SYS_WAITPID(63): tunggu task; ebx=tid → return 0
+    if (eax == SYS_WAITPID) {
+        task_wait((int)ebx);
+        return 0;
+    }
+
     return (uint64_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal
 }
 

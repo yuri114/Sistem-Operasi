@@ -7,6 +7,7 @@
 void     pmm_init();
 uint64_t pmm_alloc_frame();
 void     pmm_free_frame(uint64_t addr);
+uint32_t pmm_free_count();   /* jumlah frame bebas saat ini */
 
 uint64_t *vmm_create_page_dir();
 void      vmm_switch_dir(uint64_t *pml4);

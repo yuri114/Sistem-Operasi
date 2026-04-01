@@ -471,6 +471,48 @@ Tujuan: kernel task di-assign langsung ke AP saat dibuat (bukan work-steal).
 
   [M3] ✓ Shell: taskstat — tampilkan distribusi task per CPU
 
+================================================================
+FONDASI — STABILITAS SISTEM (N-PRE)
+Status: [SELESAI] ✓ Selesai 1 April 2026 — build 247,656 bytes
+Prasyarat: Tahap I-M selesai ✓
+----------------------------------------------------------------
+Tujuan: memperkuat fondasi sebelum Tahap N (Threading) dan seterusnya.
+        Empat area: PMM visibility, user heap isolation, waitpid, slot reuse.
+
+  [F-N1] ✓ pmm_free_count() + shell meminfo
+         - vmm.c: pmm_free_count() iterasi bitmap frame 768..16383
+         - vmm.h: deklarasi pmm_free_count()
+         - Shell: meminfo — tampilkan total/used/free frames (4KB each),
+           kernel reserved range, kernel heap range
+
+  [F-N2] ✓ User heap isolation via SYS_BRK(62)
+         - Task struct: tambah heap_end (0x400000 untuk user task, 0 kernel)
+         - syscall.h: SYS_BRK=62
+         - syscall.c: map halaman baru dalam [old_heap_end..new_end], return new_end aktual
+         - task.h/c: task_get_heap_end, task_set_heap_end
+         - Batas: 0x400000–0x5FE000 (~1.9MB), tidak boleh masuk guard page
+
+  [F-N3] ✓ Task wait (waitpid) + foreground exec
+         - Task struct: tambah waiter (tid yang menunggu, -1 = tidak ada)
+         - task.c: task_wait(tid) — block shell sampai tid selesai;
+                   task_exit() wake waiter via task_unblock
+         - syscall.h/c: SYS_WAITPID(63) untuk user-space
+         - Shell exec: jika foreground (!bg_exec) → task_wait(tid) sebelum
+           kembali ke prompt; jika background → cetak "[N] prog &"
+
+  [F-N4] ✓ Fix task slot reuse
+         - task_create(): scan slot bebas (bukan task_count++) seperti
+           task_create_user — mencegah "slot habis" setelah 15 task exit
+         - task_switch BSP + AP: loop 0..MAX_TASKS-1 (bukan task_count)
+           agar slot yang telah dibebaskan tidak merusak round-robin modulo
+
+  [F-N5] ✓ lib.h malloc/free → user heap (tidak pakai kernel heap)
+         - Alokator blok (_UHdr linked list) mulai di 0x400000
+         - sys_brk() memperluas heap lewat SYS_BRK syscall (kernel memetakan frame)
+         - free() dengan coalescing blok bebas bersebelahan
+         - Heap user otomatis dibebaskan penuh saat task exit (vmm_free_user_memory)
+         - waitpid() wrapper di lib.h
+
 Status: [SELESAI] ✓ Selesai 24 Maret 2026 — build 171,920 bytes, test QEMU OK
 ----------------------------------------------------------------
 Tujuan     : Mengubah framebuffer dari 8bpp (palette 256 warna)

@@ -62,15 +62,21 @@ void task_set_main() {
 }
 
 int task_create(void (*entry)()) {
-    if (task_count >= MAX_TASKS) return -1;
-
-    int id = task_count++;
+    /* Scan slot bebas (skip slot 0 = shell) — bukan sequential increment */
+    int id = -1, i;
+    for (i = 1; i < MAX_TASKS; i++) {
+        if (!tasks[i].used) { id = i; break; }
+    }
+    if (id == -1) return -1;
+    if (id >= task_count) task_count = id + 1;
     tasks[id].used      = 1;
     tasks[id].status    = TASK_RUNNING;
     tasks[id].wake_tick = 0;
     tasks[id].priority  = 1;
     tasks[id].ticks     = 1;
     tasks[id].pipe_id   = -1;
+    tasks[id].waiter    = -1;
+    tasks[id].heap_end  = 0;  /* kernel task: tidak punya user heap */
     /* Tahap M: load balance — kernel task di-assign langsung ke AP jika ada */
     tasks[id].cpu_id    = has_ap ? (int8_t)1 : (int8_t)-1;
     tasks[id].is_user   = 0;   /* ring-0 kernel task */
@@ -112,6 +118,8 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
     tasks[id].ticks     = 2;
     tasks[id].pipe_id   = -1;
     tasks[id].cpu_id    = -1;  /* ring-3 user task: dimulai bebas, BSP akan klaim */
+    tasks[id].waiter    = -1;
+    tasks[id].heap_end  = 0x400000ULL; /* user heap mulai di 0x400000 */
     tasks[id].is_user   = 1;
     str_copy_n(tasks[id].name, name ? name : "?", 32);
 
@@ -154,16 +162,16 @@ void task_switch() {
     /* Cari task berikutnya dengan spinlock agar tidak race dengan AP */
     spinlock_acquire(&task_lock);
 
-    int next = (current_task + 1) % task_count;
+    int next = (current_task + 1) % MAX_TASKS;
     int i;
-    for (i = 0; i < task_count; i++) {
+    for (i = 0; i < MAX_TASKS; i++) {
         /* Jika ada AP, BSP hanya ambil task is_user==1 (shell/ring-3).
          * Task is_user==0 (kernel task) dibiarkan bebas untuk AP. */
         if (tasks[next].used &&
             tasks[next].status == TASK_RUNNING &&
             tasks[next].cpu_id == -1 &&
             (!has_ap || tasks[next].is_user == 1)) break;
-        next = (next + 1) % task_count;
+        next = (next + 1) % MAX_TASKS;
     }
 
     if (!tasks[next].used || tasks[next].status != TASK_RUNNING ||
@@ -226,12 +234,12 @@ void task_switch_ap(int cpu_idx)
     /* Cari task ring-0 bebas dengan spinlock (work stealing) */
     spinlock_acquire(&task_lock);
 
-    int start = (current_task_ap >= 0) ? (current_task_ap + 1) % task_count : 0;
+    int start = (current_task_ap >= 0) ? (current_task_ap + 1) % MAX_TASKS : 0;
     int next = start;
     int found = 0, i;
 
     /* Tahap M: first pass — cari task yang di-assign langsung ke AP ini */
-    for (i = 0; i < task_count; i++) {
+    for (i = 0; i < MAX_TASKS; i++) {
         if (tasks[next].used &&
             tasks[next].status == TASK_RUNNING &&
             tasks[next].cpu_id == (int8_t)cpu_idx &&
@@ -240,13 +248,13 @@ void task_switch_ap(int cpu_idx)
             found = 1;
             break;
         }
-        next = (next + 1) % task_count;
+        next = (next + 1) % MAX_TASKS;
     }
 
     /* Second pass — work-steal: kernel task bebas (cpu_id==-1) */
     if (!found) {
         next = start;
-        for (i = 0; i < task_count; i++) {
+        for (i = 0; i < MAX_TASKS; i++) {
             if (tasks[next].used &&
                 tasks[next].status == TASK_RUNNING &&
                 tasks[next].cpu_id == -1 &&
@@ -254,7 +262,7 @@ void task_switch_ap(int cpu_idx)
                 found = 1;
                 break;
             }
-            next = (next + 1) % task_count;
+            next = (next + 1) % MAX_TASKS;
         }
     }
 
@@ -285,16 +293,26 @@ void task_switch_ap(int cpu_idx)
 }
 
 void task_exit() {
-    uint64_t *dir = tasks[current_task].page_dir;
+    int tid = current_task;
+    uint64_t *dir = tasks[tid].page_dir;
     /* Tahap J: tutup semua fd milik task ini */
-    vfs_close_all(current_task);
-    tasks[current_task].used     = 0;
-    tasks[current_task].cpu_id   = (int8_t)-1;   /* kembalikan ke pool */
-    tasks[current_task].page_dir = 0;
+    vfs_close_all(tid);
+
+    /* Simpan waiter sebelum membersihkan slot */
+    int waiter = tasks[tid].waiter;
+
+    tasks[tid].used     = 0;
+    tasks[tid].cpu_id   = (int8_t)-1;   /* kembalikan ke pool */
+    tasks[tid].page_dir = 0;
+    tasks[tid].waiter   = -1;
 
     /* Kembali ke boot PML4 dulu sebelum membebaskan page_dir proses */
     vmm_switch_dir((uint64_t *)0x1000);
     vmm_free_user_memory(dir);
+
+    /* Bangunkan task yang sedang menunggu task ini selesai */
+    if (waiter >= 0 && waiter < MAX_TASKS && tasks[waiter].used)
+        task_unblock(waiter);
 
     __asm__ volatile ("sti");
     while (1) __asm__ volatile ("hlt");
@@ -307,6 +325,21 @@ const char *task_get_name(int id) { return (id >= 0 && id < MAX_TASKS) ? tasks[i
 int task_get_current() { return current_task; }
 int task_get_cpu(int id) { return (id >= 0 && id < MAX_TASKS) ? (int)tasks[id].cpu_id : -1; }
 int task_get_priority(int id) { return (id >= 0 && id < MAX_TASKS) ? tasks[id].priority : 0; }
+
+uint64_t task_get_heap_end(int id) {
+    return (id >= 0 && id < MAX_TASKS) ? tasks[id].heap_end : 0;
+}
+void task_set_heap_end(int id, uint64_t end) {
+    if (id >= 0 && id < MAX_TASKS) tasks[id].heap_end = end;
+}
+
+void task_wait(int tid) {
+    if (tid <= 0 || tid >= MAX_TASKS) return;
+    if (!tasks[tid].used) return;  /* sudah selesai */
+    tasks[tid].waiter = current_task;  /* daftarkan minat */
+    task_block();  /* tidur sampai task_exit membangunkan kita */
+    if (tid < MAX_TASKS) tasks[tid].waiter = -1;  /* bersihkan */
+}
 
 int task_set_priority(int id, int prio) {
     if (id < 0 || id >= MAX_TASKS || !tasks[id].used) return 0;

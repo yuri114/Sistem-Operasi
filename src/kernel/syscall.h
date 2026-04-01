@@ -76,6 +76,10 @@
 #define SYS_MQ_SEND   60  // kirim MQ: ebx=dst_pid, edx=str_ptr (max 56 char)
 #define SYS_MQ_RECV   61  // terima MQ: ebx=ptr MqRecvResult, edx=unused → return 1/0
 
+/* Fondasi: user heap + waitpid */
+#define SYS_BRK       62  // perluas user heap: ebx=new_end → return new_end sesungguhnya
+#define SYS_WAITPID   63  // tunggu task selesai: ebx=tid → return 0
+
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);
 

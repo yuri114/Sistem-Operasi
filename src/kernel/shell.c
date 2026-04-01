@@ -79,7 +79,7 @@ static const char *shell_commands[] = {
     "sync", "mkdir ", "chmod ",
     "ifconfig", "ping ", "cpuinfo",
     "open ", "fread ", "fwrite ", "fclose ",
-    "mq_send ", "mq_recv", "taskstat",
+    "mq_send ", "mq_recv", "taskstat", "meminfo",
     0
 };
 
@@ -264,6 +264,7 @@ static void shell_execute(){
         print("ping <ip>            - kirim 4 ICMP echo request ke IP\n");
         print("cpuinfo              - tampilkan info SMP (BSP/AP online)\n");
         print("taskstat             - tampilkan distribusi task per CPU\n");
+        print("meminfo              - tampilkan statistik memori fisik & heap\n");
         print("open <file>          - buka file, cetak fd\n");
         print("fread <fd>           - baca isi file lewat fd\n");
         print("fwrite <fd> <teks>   - tulis teks ke file lewat fd\n");
@@ -546,6 +547,7 @@ static void shell_execute(){
         set_color(GFX_WHITE, GFX_BLACK);
     }
     else if(str_starts_with(input_buffer, "exec ")) {
+        /* strip trailing '&' yang sudah di-parse di atas */
         const char *name = input_buffer + 5;
         uint32_t size;
         const uint8_t *data = fs_read_bin(name, &size);
@@ -561,8 +563,14 @@ static void shell_execute(){
                 uint64_t stack_phys = pmm_alloc_frame();
                 vmm_map_page(proc_dir, 0x600000, stack_phys, 7);
                 uint64_t user_esp = 0x600000 + PAGE_SIZE;
-                task_create_user(entry, proc_dir, user_esp, name);
-                print("exec: program dimulai\n");
+                int tid = task_create_user(entry, proc_dir, user_esp, name);
+                if (bg_exec) {
+                    char tbuf[8]; itoa((uint32_t)tid, tbuf);
+                    print("exec: ["); print(tbuf); print("] "); print(name); print(" &\n");
+                } else {
+                    /* Foreground: blok shell sampai program selesai */
+                    task_wait(tid);
+                }
             }
         }
     }
@@ -793,6 +801,25 @@ static void shell_execute(){
             itoa((uint32_t)cnt[i], nbuf); print(nbuf); print("\n");
         }
         print("free  "); itoa((uint32_t)free_cnt, nbuf); print(nbuf); print("\n");
+    }
+    /* Fondasi: meminfo — statistik PMM + kernel heap */
+    else if (str_compare(input_buffer, "meminfo")) {
+        char nbuf[16];
+        uint32_t total = 16384u - 768u;   /* frame user: 768..16383 = 15616 frame */
+        uint32_t free_f = pmm_free_count();
+        uint32_t used_f = total - free_f;
+        set_color(GFX_YELLOW, GFX_BLACK);
+        print("=== Memory Info ===\n");
+        set_color(GFX_WHITE, GFX_BLACK);
+        print("Physical frames (4KB):\n");
+        print("  Total : "); itoa(total, nbuf); print(nbuf); print(" frames (");
+        itoa(total * 4u, nbuf); print(nbuf); print(" KB)\n");
+        print("  Used  : "); itoa(used_f, nbuf); print(nbuf); print(" frames (");
+        itoa(used_f * 4u, nbuf); print(nbuf); print(" KB)\n");
+        print("  Free  : "); itoa(free_f, nbuf); print(nbuf); print(" frames (");
+        itoa(free_f * 4u, nbuf); print(nbuf); print(" KB)\n");
+        print("Kernel reserved: 0-3MB (768 frames)\n");
+        print("Kernel heap    : 0x100000-0x6FFFFF (6MB)\n");
     }
     /* Tahap J: VFS commands */
     else if (str_starts_with(input_buffer, "open ")) {

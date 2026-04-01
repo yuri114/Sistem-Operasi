@@ -22,6 +22,8 @@ typedef struct {
     int       pipe_id;
     int8_t    cpu_id;     /* CPU yang sedang menjalankan task ini (-1 = bebas) */
     uint8_t   is_user;    /* 1 = ring-3 user task (hanya boleh di BSP/CPU 0)   */
+    int       waiter;     /* tid task yang menunggu task ini selesai (-1 = none) */
+    uint64_t  heap_end;   /* akhir heap user (0x400000 awal); 0 = kernel task   */
 } Task;
 
 void task_init();
@@ -38,6 +40,9 @@ void task_unblock(int id);
 void task_check_sleepers();
 void task_yield();
 
+void        task_wait(int tid);             /* tunggu task selesai (block) */
+uint64_t    task_get_heap_end(int id);
+void        task_set_heap_end(int id, uint64_t end);
 int         task_get_max();
 int         task_get_count();     /* jumlah task aktif (bukan MAX_TASKS)  */
 int         task_is_used(int id);

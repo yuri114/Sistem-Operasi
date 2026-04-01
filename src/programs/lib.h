@@ -80,6 +80,10 @@
 #define VFS_O_RDWR    0x03
 #define VFS_O_CREATE  0x04
 
+/* Fondasi: user heap + waitpid */
+#define SYS_BRK       62  // perluas user heap: arg=new_end → return new_end aktual
+#define SYS_WAITPID   63  // tunggu task selesai: arg=tid → return 0
+
 /* Tahap L — Message Queue */
 #define SYS_MQ_SEND   60  // kirim MQ: ebx=dst_pid, edx=str_ptr
 #define SYS_MQ_RECV   61  // terima MQ: ebx=ptr MqRecvResult
@@ -199,14 +203,105 @@ static inline void exit() {
     while (1); // tidak pernah sampai sini, tapi mencegah compiler warning
 }
 
-// Alokasikan memori sejumlah size byte, kembalikan pointer (atau 0 jika gagal)
-static inline void* malloc(int size) {
-    return (void*)syscall1(SYS_ALLOC, (long)size);
+// ============================================================
+// User-space heap allocator (SYS_BRK based, block allocator)
+// Heap region: 0x400000 – 0x5FE000 (~1.9MB)
+// ============================================================
+#define _USER_HEAP_START 0x400000UL
+#define _USER_HEAP_LIMIT 0x5FE000UL  /* guard page batas atas */
+
+typedef struct _UHdr {
+    unsigned int   sz;    /* ukuran data (tidak termasuk header) */
+    unsigned char  free;
+    unsigned char  _p[3];
+    struct _UHdr  *next;
+} _UHdr;
+
+#define _UHSZ ((unsigned int)sizeof(_UHdr))
+
+static _UHdr         *_uheap = 0;
+static unsigned long  _ubrk  = 0;
+
+static inline unsigned long sys_brk(unsigned long new_end) {
+    return (unsigned long)syscall1(SYS_BRK, (long)new_end);
 }
 
-// Bebaskan memori yang sebelumnya dialokasikan dengan malloc
+static inline void waitpid(int tid) {
+    syscall1(SYS_WAITPID, (long)tid);
+}
+
+static _UHdr *_uheap_grow(unsigned int need) {
+    unsigned long want = _ubrk + (unsigned long)need + _UHSZ + 0xFFFUL;
+    want &= ~0xFFFUL;
+    if (want > _USER_HEAP_LIMIT) want = _USER_HEAP_LIMIT;
+    if (want <= _ubrk) return 0;
+    unsigned long got = sys_brk(want);
+    if (got <= _ubrk) return 0;
+    _UHdr *nb = (_UHdr*)_ubrk;
+    nb->sz   = (unsigned int)(got - _ubrk - _UHSZ);
+    nb->free = 1;
+    nb->next = 0;
+    /* Append to list */
+    if (!_uheap) { _uheap = nb; }
+    else {
+        _UHdr *p = _uheap;
+        while (p->next) p = p->next;
+        p->next = nb;
+    }
+    _ubrk = got;
+    return nb;
+}
+
+static inline void* malloc(int size) {
+    if (size <= 0) return 0;
+    unsigned int sz = (unsigned int)((size + 3) & ~3);
+    /* Inisialisasi heap pada panggilan pertama */
+    if (!_uheap) {
+        _ubrk = _USER_HEAP_START;
+        if (!_uheap_grow(sz)) return 0;
+    }
+    /* First-fit search */
+    _UHdr *c = _uheap;
+    while (c) {
+        if (c->free && c->sz >= sz) {
+            /* Split jika ada sisa cukup besar */
+            if (c->sz >= sz + _UHSZ + 4u) {
+                _UHdr *sp = (_UHdr*)((unsigned char*)(c + 1) + sz);
+                sp->sz   = c->sz - sz - _UHSZ;
+                sp->free = 1;
+                sp->next = c->next;
+                c->sz    = sz;
+                c->next  = sp;
+            }
+            c->free = 0;
+            return (void*)(c + 1);
+        }
+        if (!c->next) {
+            /* Tidak ada slot bebas — perluas heap */
+            _UHdr *nb = _uheap_grow(sz);
+            if (!nb) return 0;
+            /* Langsung pakai blok baru ini */
+            continue;
+        }
+        c = c->next;
+    }
+    return 0;
+}
+
 static inline void free(void *ptr) {
-    syscall1(SYS_FREE, (long)ptr);
+    if (!ptr) return;
+    _UHdr *blk = (_UHdr*)ptr - 1;
+    blk->free = 1;
+    /* Coalescing: gabung blok bebas bersebelahan */
+    _UHdr *c = _uheap;
+    while (c) {
+        if (c->free && c->next && c->next->free) {
+            c->sz  += _UHSZ + c->next->sz;
+            c->next = c->next->next;
+        } else {
+            c = c->next;
+        }
+    }
 }
 
 // ============================================================

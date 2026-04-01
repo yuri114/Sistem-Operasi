@@ -56,6 +56,14 @@ void pmm_free_frame(uint64_t addr) {
         bitmap_clear(frame);
 }
 
+uint32_t pmm_free_count() {
+    uint32_t count = 0;
+    int i;
+    for (i = 768; i < TOTAL_FRAMES; i++)
+        if (!bitmap_test(i)) count++;
+    return count;
+}
+
 /* ===================================================================
  * Helpers
  * =================================================================== */
