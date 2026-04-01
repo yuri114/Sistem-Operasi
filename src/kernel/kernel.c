@@ -47,6 +47,7 @@
 #include "net.h"
 #include "smp.h"
 #include "acpi.h"
+#include "condvar.h"
 
 /* Bochs VBE 1280x720 @ 32bpp: font 8x8 = 160 kolom x 90 baris */
 #define VGA_COLS 160
@@ -297,6 +298,23 @@ void exception_handler(uint64_t exc_num, uint64_t error_code,
                 task_exit();
                 for (;;) __asm__ volatile("hlt");
             }
+            /* F-P1: Guard page stack thread — slot di VA 0x700000 + id*0x5000 */
+            if (cr2 >= 0x700000ULL && cr2 < 0x800000ULL) {
+                uint64_t off = cr2 - 0x700000ULL;
+                if ((off % 0x5000ULL) < 0x1000ULL) {
+                    int _tid = task_get_current();
+                    char _nb[8];
+                    fill_screen(GFX_RED);
+                    cursor_row = 0; cursor_col = 0;
+                    set_color(GFX_WHITE, GFX_RED);
+                    print("== THREAD STACK OVERFLOW ==\n");
+                    print("Task ID : "); itoa((uint32_t)_tid, _nb); print(_nb); print("\n");
+                    print("CR2     : 0x"); print_hex64(cr2); print("\n");
+                    print("Task killed.\n");
+                    task_exit();
+                    for (;;) __asm__ volatile("hlt");
+                }
+            }
             /* Baca PML4 dari CR3 */
             uint64_t cr3;
             __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
@@ -400,6 +418,7 @@ void kernel_main(){
     ipc_init();
     sem_init_all();
     pipe_init_all();
+    cv_init_all();
     shm_init();
     // Daftarkan dan inisialisasi device driver
     dev_register(DEV_VGA, &drv_vga);

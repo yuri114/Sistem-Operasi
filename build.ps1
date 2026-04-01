@@ -125,6 +125,7 @@ x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -
 xxd -i build/threadtest.elf > src/kernel/threadtest_elf_data.h
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/semaphore.c  -o build/semaphore.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/pipe.c       -o build/pipe.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/condvar.c    -o build/condvar.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/shm.c        -o build/shm.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/vfs.c        -o build/vfs.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/mq.c         -o build/mq.o
@@ -158,7 +159,7 @@ x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-built
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/mouse.c      -o build/mouse.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/window.c     -o build/window.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/taskbar.c    -o build/taskbar.o
-x86_64-linux-gnu-ld -m elf_x86_64 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o build/shm.o build/vfs.o build/mq.o build/rtl8139.o build/net.o build/apic.o build/acpi.o build/smp.o build/device.o build/drv_vga.o build/drv_kbd.o build/vbe.o build/graphics.o build/ata.o build/serial.o build/mouse.o build/window.o build/taskbar.o -o build/kernel.elf
+x86_64-linux-gnu-ld -m elf_x86_64 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o build/condvar.o build/shm.o build/vfs.o build/mq.o build/rtl8139.o build/net.o build/apic.o build/acpi.o build/smp.o build/device.o build/drv_vga.o build/drv_kbd.o build/vbe.o build/graphics.o build/ata.o build/serial.o build/mouse.o build/window.o build/taskbar.o -o build/kernel.elf
 x86_64-linux-gnu-objcopy -O binary build/kernel.elf build/kernel.bin
 echo done
 "@

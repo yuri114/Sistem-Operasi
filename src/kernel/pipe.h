@@ -11,6 +11,7 @@ typedef struct {
     uint32_t head;           // index baca berikutnya
     uint32_t tail;           // index tulis berikutnya
     uint8_t  used;           // slot aktif?
+    int      reader_waiter;  // tid blokksd di pipe_read (-1 = tidak ada)
 } Pipe;
 
 // Inisialisasi semua slot pipe

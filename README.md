@@ -19,12 +19,12 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 | Arsitektur | x86_64 — IA-32e Long Mode (64-bit) |
 | Boot | MBR 512-byte → Protected Mode → Long Mode |
 | Resolusi | 1920×1080 @ 32bpp (VBE Linear Framebuffer, ~8.3MB) |
-| Kernel | ~260 KB binary |
+| Kernel | ~264 KB binary |
 | Memory Map | 4-level paging, identity-mapped 4GB, heap kernel 6MB (0x100000–0x6FFFFF) |
-| Multitasking | Round-robin preemptive, hingga 16 task, PIT IRQ0 @ 1000 Hz |
+| Multitasking | Round-robin preemptive, hingga **32** task, PIT IRQ0 @ 1000 Hz |
 | Ring | Kernel Ring-0 / User Ring-3 (isolasi penuh per-proses) |
 | Filesystem | MFS3 — 64 file × 64KB, pointer-based, dirty/tmpfs/perms/timestamp, ATA PIO |
-| Syscall | `SYSCALL/SYSRET` (IA32_LSTAR MSR) — 67 syscall tersedia |
+| Syscall | `SYSCALL/SYSRET` (IA32_LSTAR MSR) — **73 syscall** tersedia |
 | Build | WSL + `x86_64-linux-gnu-gcc` + NASM, output `os.img` binary raw |
 | Emulator | QEMU `qemu-system-x86_64` |
 
@@ -116,7 +116,7 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 
 ### User-space Threading — Tahap N
 - **Thread sejati berbagi address space**: setiap thread pakai `page_dir` yang sama dengan proses induk
-- **Stack isolasi per-thread**: user stack ring-3 di VA `0x700000 + tid×0x1000` (4KB/thread), kernel stack di slot `stacks_base` masing-masing
+- **Stack isolasi per-thread**: user stack ring-3 di VA `0x700000 + tid×0x5000` (16KB/thread + guard page), kernel stack di slot `stacks_base` masing-masing
 - **Argumen thread via RDI**: slot k=5 (rdi) pada initial iretq frame diisi `arg` — `thread_fn(arg)` langsung bekerja
 - **Thread-safe exit**: `task_exit()` cek `is_thread` — jika 1, skip `vfs_close_all` & `vmm_free_user_memory` (page_dir milik proses)
 - **Join via mekanisme waiter**: `task_wait(tid)` existing dipakai ulang untuk `thread_join`
@@ -130,6 +130,40 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **Proteksi parent-exits-before-threads**: saat proses induk `exit()`, semua thread anak di-force-kill terlebih dahulu (free stack frame, clear slot, wake joiner) sebelum `vmm_free_user_memory()` dipanggil — mencegah use-after-free
 - **Semaphore blocking sejati**: `sem_wait()` diganti dari `task_sleep(10)` busy-wait ke `task_block()` sejati; `sem_post()` memanggil `task_unblock(waiter)` — CPU tidak terbuang saat menunggu semaphore
 - **Thread-safe malloc/free**: `lib.h` kini punya mutex `_umtx` (semaphore id, lazy-init); semua operasi `malloc()`/`free()` dibungkus `sem_wait(_umtx)`/`sem_post(_umtx)` — aman untuk multi-thread
+
+### Fondasi P/Q/R — Fondasi Lanjutan (1 April 2026)
+
+#### F-P1 — Thread Stack 16KB + Guard Page per-Thread
+- **Stack 16KB per-thread**: naik dari 4KB; VA slot = `0x700000 + tid×0x5000` (5 halaman)
+- **Guard page per-thread**: halaman pertama tiap slot tidak dipetakan → `#PF` = "THREAD STACK OVERFLOW"
+- **4 frame fisik**: `tstack_frames[4]` di Task struct; dialokasikan `pmm_alloc_frame()` × 4 saat thread dibuat, dibebaskan saat exit
+- **exception_handler**: deteksi CR2 di `[0x700000..0x800000)` dan `(offset % 0x5000) < 0x1000` → layar merah, `task_exit()`
+
+#### F-P2 — Multiple Semaphore Waiters
+- **FIFO ring waiter**: `waiters[SEM_WAITER_MAX=4]` menggantikan satu `waiter` integer → hingga 4 task bisa antri `sem_wait()` secara bersamaan
+- **Urutan adil (FIFO)**: `sem_post()` membangunkan task yang paling lama menunggu
+- **Aman untuk mutex 3+ thread**: racing pada semaphore yang sama tidak lagi menjatuhkan waiter yang antri
+
+#### F-P3 — Thread Naming
+- **`task_set_name(id, name)`**: kernel dapat set nama thread sewaktu-waktu
+- **Syscall `SYS_THREAD_SET_NAME (67)`**: user-space wrapper `thread_set_name(tid, name)` di `lib.h`
+- **Terlihat di `ps` / sysinfo**: nama thread custom muncul di task list
+
+#### F-P4 — Condition Variable
+- **`condvar.h/c`** — baru: `CV_MAX=8` condvar, `CV_WAITER_MAX=4` waiter per condvar, FIFO ring
+- **`cv_wait(id, sem_id)`**: lepas mutex atomik → `task_block()` → reacquire mutex saat dibangunkan
+- **`cv_signal(id)`**: bangunkan 1 waiter FIFO
+- **`cv_broadcast(id)`**: bangunkan semua waiter
+- **Syscall**: `SYS_COND_ALLOC(68)`, `SYS_COND_FREE(69)`, `SYS_COND_WAIT(70)`, `SYS_COND_SIGNAL(71)`, `SYS_COND_BROADCAST(72)`
+- **lib.h**: `cond_alloc()`, `cond_free()`, `cond_wait()`, `cond_signal()`, `cond_broadcast()`
+
+#### F-P5 — MAX_TASKS 32
+- `MAX_TASKS` naik dari 16 → **32** untuk mendukung lebih banyak thread/proses serentak
+
+#### F-R1 — Blocking I/O Sejati
+- **Keyboard non-blocking CPU**: `vfs_read(fd=0)` kini `task_block()` sampai `keyboard_handler` memanggil `task_unblock(kwaiter)` — CPU bebas untuk task lain saat menunggu input
+- **Pipe blocking sejati**: `pipe_read()` ganti `task_sleep(10)` busy-wait → `task_block()`; `pipe_write()` langsung memanggil `task_unblock(reader_waiter)` setelah menulis
+- **VFS stdin blocking**: `vfs_read(VFS_TYPE_STDIN)` loop `keyboard_set_waiter + task_block()` bukan spin
 
 ### SMP — Tahap H
 - **LAPIC**: enable via IA32_APIC_BASE MSR + SVR register, baca APIC ID, kirim INIT/SIPI IPI via ICR
@@ -173,6 +207,8 @@ SYS_OPEN(56) SYS_READ_FD(57) SYS_WRITE_FD(58) SYS_CLOSE_FD(59)
 SYS_MQ_SEND(60) SYS_MQ_RECV(61)
 SYS_BRK(62) SYS_WAITPID(63)
 SYS_THREAD_CREATE(64) SYS_THREAD_EXIT(65) SYS_THREAD_JOIN(66)
+SYS_THREAD_SET_NAME(67)
+SYS_COND_ALLOC(68) SYS_COND_FREE(69) SYS_COND_WAIT(70) SYS_COND_SIGNAL(71) SYS_COND_BROADCAST(72)
 ```
 
 ### Libc Minimal (`lib.h`) — Tahap F2
@@ -239,9 +275,10 @@ SYS_THREAD_CREATE(64) SYS_THREAD_EXIT(65) SYS_THREAD_JOIN(66)
 │   │   ├── fs.h / fs.c              # Filesystem MFS3 (64×64KB, dirty/tmp/perms)
 │   │   ├── ata.h / ata.c            # ATA PIO + Bus Master DMA driver
 │   │   ├── ipc.h / ipc.c            # Message passing antar proses
-│   │   ├── semaphore.h / semaphore.c
-│   │   ├── pipe.h / pipe.c          # Anonymous pipe + named pipe
+│   │   ├── semaphore.h / semaphore.c  # Semaphore FIFO multi-waiter (hingga 4 antrian)
+│   │   ├── pipe.h / pipe.c          # Anonymous pipe + named pipe (blocking read/write)
 │   │   ├── shm.h / shm.c            # Shared memory (8 region × 4KB)
+│   │   ├── condvar.h / condvar.c    # Condition variable (cv_wait/signal/broadcast)
 │   │   ├── rtl8139.h / rtl8139.c    # RTL8139 NIC driver (PCI, TX/RX polling)
 │   │   ├── net.h / net.c            # Network stack: Ethernet + ARP + IPv4 + ICMP
 │   │   ├── serial.h / serial.c      # COM1 debug output
@@ -249,7 +286,7 @@ SYS_THREAD_CREATE(64) SYS_THREAD_EXIT(65) SYS_THREAD_JOIN(66)
 │   │   ├── drv_vga.c / drv_kbd.c    # VGA & keyboard device driver
 │   │   └── *_elf_data.h      # Program user ter-embed sebagai C array
 │   └── programs/
-│       ├── lib.h             # Syscall wrapper + libc minimal + thread API (thread_create/exit/join)
+│       ├── lib.h             # Syscall wrapper + libc minimal + thread API + condvar API
 │       ├── user.ld           # Linker script user (ELF64, . = 0x400000)
 │       ├── paint.c           # Aplikasi paint
 │       ├── notepad.c         # Editor teks
@@ -263,7 +300,7 @@ SYS_THREAD_CREATE(64) SYS_THREAD_EXIT(65) SYS_THREAD_JOIN(66)
 └── build/
     ├── os.img                # Disk image final (2MB, sektor raw)
     ├── disk.img              # Disk data sekunder (8MB, filesystem MFS3)
-    └── kernel.bin            # Kernel binary (~258KB)
+    └── kernel.bin            # Kernel binary (~264KB)
 ```
 
 ---

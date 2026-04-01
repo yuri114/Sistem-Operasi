@@ -959,6 +959,14 @@ static inline void win_msgbox(const char *title, const char *msg) {
 #define SYS_THREAD_EXIT   65  /* keluar dari thread saat ini                       */
 #define SYS_THREAD_JOIN   66  /* tunggu thread: arg1=tid → return 0                */
 
+/* Fondasi P — Thread naming + Condition Variable */
+#define SYS_THREAD_SET_NAME 67  /* set nama thread: arg1=tid, arg2=name_ptr */
+#define SYS_COND_ALLOC      68  /* alokasi condvar → return id              */
+#define SYS_COND_FREE       69  /* bebaskan condvar: arg1=id                */
+#define SYS_COND_WAIT       70  /* cv_wait: arg1=cond_id, arg2=sem_id       */
+#define SYS_COND_SIGNAL     71  /* bangunkan 1 waiter: arg1=cond_id         */
+#define SYS_COND_BROADCAST  72  /* bangunkan semua waiter: arg1=cond_id     */
+
 /* typedef untuk fungsi thread: void fn(void *arg) */
 typedef void (*thread_fn_t)(void *);
 
@@ -993,6 +1001,37 @@ static inline void thread_join(int tid) {
         :: "a"((long)SYS_THREAD_JOIN), "D"((long)tid)
         : "rcx", "r11", "memory"
     );
+}
+
+/* Set nama thread (ditampilkan di debug/taskbar). */
+static inline void thread_set_name(int tid, const char *name) {
+    syscall2(SYS_THREAD_SET_NAME, (long)tid, (long)name);
+}
+
+/* Alokasi condition variable baru, return id atau -1 jika penuh. */
+static inline int cond_alloc(void) {
+    return (int)syscall0(SYS_COND_ALLOC);
+}
+
+/* Bebaskan condition variable. */
+static inline void cond_free(int id) {
+    syscall1(SYS_COND_FREE, (long)id);
+}
+
+/* Atomik: lepas mutex sem_id, block, lalu reacquire setelah dibangunkan.
+ * HARUS dipanggil saat memiliki mutex (sem_id sudah di-wait). */
+static inline int cond_wait(int id, int sem_id) {
+    return (int)syscall2(SYS_COND_WAIT, (long)id, (long)sem_id);
+}
+
+/* Bangunkan satu waiter pada condvar. */
+static inline int cond_signal(int id) {
+    return (int)syscall1(SYS_COND_SIGNAL, (long)id);
+}
+
+/* Bangunkan semua waiter pada condvar. */
+static inline int cond_broadcast(int id) {
+    return (int)syscall1(SYS_COND_BROADCAST, (long)id);
 }
 
 #endif

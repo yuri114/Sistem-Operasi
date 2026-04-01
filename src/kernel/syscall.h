@@ -85,6 +85,14 @@
 #define SYS_THREAD_EXIT   65  // keluar dari thread saat ini → tidak return
 #define SYS_THREAD_JOIN   66  // tunggu thread selesai: ebx=tid → return 0
 
+/* Fondasi P — Thread Naming + Condition Variable */
+#define SYS_THREAD_SET_NAME 67  // set nama thread: ebx=tid, edx=name_ptr
+#define SYS_COND_ALLOC      68  // alokasi condvar → return id
+#define SYS_COND_FREE       69  // bebaskan condvar: ebx=id
+#define SYS_COND_WAIT       70  // cv_wait: ebx=cond_id, edx=sem_id
+#define SYS_COND_SIGNAL     71  // cv_signal: ebx=cond_id
+#define SYS_COND_BROADCAST  72  // cv_broadcast: ebx=cond_id
+
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);
 

@@ -72,9 +72,16 @@ static uint8_t capslock_on   = 0;   /* 1 = Caps Lock aktif (toggle)        */
 int keyboard_ctrl_pressed()    { return (int)ctrl_pressed; }
 int keyboard_alt_pressed()     { return (int)alt_pressed; }
 int keyboard_capslock_state()  { return (int)capslock_on; }
+int keyboard_has_char()        { return key_head != key_tail; }
+
+/* tid task yang menunggu karakter keyboard (-1 = tidak ada) */
+static int kwaiter = -1;
+
+void keyboard_set_waiter(int tid) { kwaiter = tid; }
 
 void keyboard_handler() {
     uint8_t sc = inb(KEYBOARD_DATA_PORT);
+    int wake = -1;  /* tid yang akan dibangunkan setelah proses, √ jika ada char baru */
 
     /* 0xE0 = extended scancode prefix */
     if (sc == 0xE0) { extended = 1; return; }
@@ -111,10 +118,10 @@ void keyboard_handler() {
     }
 
     /* Tab */
-    if (sc == 0x0F) { key_push(KEY_TAB); return; }
+    if (sc == 0x0F) { key_push(KEY_TAB); wake = kwaiter; kwaiter = -1; if (wake >= 0) task_unblock(wake); return; }
 
     /* F1-F10: scancode 0x3B-0x44 */
-    if (sc >= 0x3B && sc <= 0x44) { key_push((char)(KEY_F1 + (sc - 0x3B))); return; }
+    if (sc >= 0x3B && sc <= 0x44) { key_push((char)(KEY_F1 + (sc - 0x3B))); wake = kwaiter; kwaiter = -1; if (wake >= 0) task_unblock(wake); return; }
 
     if      (sc == 0x0E) key_push('\b');    /* Backspace */
     else if (sc == 0x1C) key_push('\n');    /* Enter     */
@@ -133,5 +140,9 @@ void keyboard_handler() {
         }
         if (c) key_push(c);
     }
+    /* Bangunkan task yang menunggu karakter keyboard */
+    wake = kwaiter;
+    kwaiter = -1;
+    if (wake >= 0) task_unblock(wake);
 }
 

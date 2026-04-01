@@ -85,7 +85,11 @@ int vfs_read(int task_id, int fd, char *buf, int len)
 
     if (f->type == VFS_TYPE_STDIN) {
         if (len < 1) return 0;
-        /* Baca satu karakter dari keyboard (blocking) */
+        /* Baca satu karakter dari keyboard — true blocking via keyboard_set_waiter */
+        while (!keyboard_has_char()) {
+            keyboard_set_waiter(task_get_current());
+            task_block();
+        }
         buf[0] = keyboard_getchar();
         return 1;
     }

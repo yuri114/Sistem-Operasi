@@ -151,9 +151,10 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
  * arg         : nilai yang diteruskan ke rdi saat thread pertama kali jalan
  * parent_tid  : tid proses pemilik page_dir (biasanya task saat ini)
  *
- * Stack thread user ring-3 dialokasikan di VA  0x700000 + id*0x1000 (4KB).
- * RSP awal = 0x700000 + id*0x1000 + 0x1000 (atas halaman, tumbuh ke bawah).
- * [RSP] = 0  (fake return addr — thread HARUS panggil thread_exit(), tidak    boleh return biasa)
+ * Stack thread user ring-3 dialokasikan di VA  0x700000 + id*0x5000 (16KB).
+ * Slot per task: 5 halaman — halaman 0 (guard, tidak dipetakan) + 4 halaman data.
+ * RSP awal = 0x700000 + id*0x5000 + 0x5000 (puncak slot, tumbuh ke bawah).
+ * [RSP] = 0  (fake return addr — thread HARUS panggil thread_exit(), tidak boleh return biasa)
  * ----------------------------------------------------------------------- */
 int task_create_thread(uint64_t entry, uint64_t arg, int parent_tid) {
     int id = -1, i;
@@ -181,13 +182,31 @@ int task_create_thread(uint64_t entry, uint64_t arg, int parent_tid) {
     tasks[id].parent_tid = parent_tid;
     str_copy_n(tasks[id].name, "thread", 32);
 
-    /* Alokasikan 1 halaman user stack ring-3 untuk thread ini di VA 0x700000+id*0x1000.
-     * Setiap slot task punya halaman stack sendiri sehingga tidak tabrakan. */
-    uint64_t tstack_va = 0x700000ULL + (uint64_t)id * 0x1000ULL;
-    uint64_t tstack_frame = pmm_alloc_frame();
-    if (!tstack_frame) { tasks[id].used = 0; return -1; }
-    vmm_map_page(tasks[id].page_dir, tstack_va, tstack_frame, 7);  /* P+RW+User */
-    uint64_t user_rsp = tstack_va + 0x1000ULL;  /* puncak halaman */
+    /* Alokasikan 4 halaman data stack ring-3 untuk thread ini.
+     * Slot VA: 0x700000 + id*0x5000  → 5 halaman per slot.
+     *   Halaman 0 (guard): tidak dipetakan  → #PF = stack overflow.
+     *   Halaman 1-4 (data): dipetakan P+RW+User. */
+    uint64_t tstack_va = 0x700000ULL + (uint64_t)id * 0x5000ULL;
+    int k;
+    for (k = 0; k < 4; k++) {
+        uint64_t frame = pmm_alloc_frame();
+        if (!frame) {
+            int j;
+            for (j = 0; j < k; j++) {
+                vmm_unmap_page(tasks[id].page_dir,
+                               tstack_va + 0x1000ULL + (uint64_t)j * 0x1000ULL);
+                pmm_free_frame(tasks[id].tstack_frames[j]);
+                tasks[id].tstack_frames[j] = 0;
+            }
+            tasks[id].used = 0;
+            return -1;
+        }
+        vmm_map_page(tasks[id].page_dir,
+                     tstack_va + 0x1000ULL + (uint64_t)k * 0x1000ULL,
+                     frame, 7);  /* P+RW+User */
+        tasks[id].tstack_frames[k] = frame;
+    }
+    uint64_t user_rsp = tstack_va + 0x5000ULL;  /* puncak slot */
 
     /* Susun kernel stack awal (sama seperti task_create_user):
      *   [tinggi] SS, RSP_user, RFLAGS, CS, RIP   iretq frame
@@ -199,13 +218,11 @@ int task_create_thread(uint64_t entry, uint64_t arg, int parent_tid) {
     *(--stack_top) = 0x202;              /* RFLAGS: IF=1 */
     *(--stack_top) = 0x2B;              /* CS user (GDT 0x28 | RPL=3) */
     *(--stack_top) = entry;              /* RIP */
-    int k;
     /* k=5 corresponds to rdi (lihat komentar SAVE_REGS di isr.asm):
      * push order: rax(k=0) rbx(k=1) rcx(k=2) rdx(k=3) rsi(k=4) rdi(k=5) ... */
     for (k = 0; k < 15; k++) *(--stack_top) = (k == 5) ? arg : 0ULL;
 
     tasks[id].rsp = (uint64_t)stack_top;
-    tasks[id].tstack_frame = tstack_frame;  /* simpan untuk dibebaskan saat thread exit */
     return id;
 }
 
@@ -362,11 +379,13 @@ void task_switch_ap(int cpu_idx)
 
 void task_exit() {
     int tid = current_task;
-    uint8_t   is_thr       = tasks[tid].is_thread;
-    uint64_t *dir          = tasks[tid].page_dir;
-    uint64_t  tstack_frame = tasks[tid].tstack_frame;
-    int       ptid         = tasks[tid].parent_tid;
-    uint64_t  tstack_va    = 0x700000ULL + (uint64_t)tid * 0x1000ULL;
+    uint8_t   is_thr    = tasks[tid].is_thread;
+    uint64_t *dir       = tasks[tid].page_dir;
+    int       ptid      = tasks[tid].parent_tid;
+    uint64_t  tstack_va = 0x700000ULL + (uint64_t)tid * 0x5000ULL;
+    uint64_t  tstack_fs[4];
+    int k;
+    for (k = 0; k < 4; k++) tstack_fs[k] = tasks[tid].tstack_frames[k];
 
     /* Thread tidak memiliki page_dir sendiri → jangan tutup fd dan jangan free page_dir.
      * Proses biasa: tutup semua fd lalu bebaskan seluruh memori user. */
@@ -378,33 +397,38 @@ void task_exit() {
     /* Simpan waiter sebelum membersihkan slot */
     int waiter = tasks[tid].waiter;
 
-    tasks[tid].used         = 0;
-    tasks[tid].cpu_id       = (int8_t)-1;   /* kembalikan ke pool */
-    tasks[tid].page_dir     = 0;
-    tasks[tid].waiter       = -1;
-    tasks[tid].is_thread    = 0;
-    tasks[tid].tstack_frame = 0;
+    tasks[tid].used      = 0;
+    tasks[tid].cpu_id    = (int8_t)-1;   /* kembalikan ke pool */
+    tasks[tid].page_dir  = 0;
+    tasks[tid].waiter    = -1;
+    tasks[tid].is_thread = 0;
+    for (k = 0; k < 4; k++) tasks[tid].tstack_frames[k] = 0;
 
     /* Kembali ke boot PML4 dulu */
     vmm_switch_dir((uint64_t *)0x1000);
 
     if (is_thr) {
-        /* F-O1: bebaskan frame stack thread dan hapus pemetaannya dari page_dir induk.
-         * Ini mencegah vmm_free_user_memory induk men-double-free frame ini. */
-        if (tstack_frame) {
-            if (ptid >= 0 && ptid < MAX_TASKS && tasks[ptid].used)
-                vmm_unmap_page(tasks[ptid].page_dir, tstack_va);
-            pmm_free_frame(tstack_frame);
+        /* F-P1: bebaskan 4 frame stack thread dan hapus pemetaannya dari page_dir induk. */
+        if (ptid >= 0 && ptid < MAX_TASKS && tasks[ptid].used) {
+            for (k = 0; k < 4; k++) {
+                if (tstack_fs[k]) {
+                    vmm_unmap_page(tasks[ptid].page_dir,
+                                   tstack_va + 0x1000ULL + (uint64_t)k * 0x1000ULL);
+                    pmm_free_frame(tstack_fs[k]);
+                }
+            }
         }
     } else {
-        /* F-O2: bunuh semua thread yang masih hidup sebelum membebaskan halaman.
-         * Mencegah use-after-free saat page_dir dibebaskan. */
+        /* F-O2: bunuh semua thread yang masih hidup sebelum membebaskan halaman. */
         int i;
         for (i = 1; i < MAX_TASKS; i++) {
             if (tasks[i].used && tasks[i].is_thread && tasks[i].parent_tid == tid) {
                 int tw = tasks[i].waiter;
-                if (tasks[i].tstack_frame)
-                    pmm_free_frame(tasks[i].tstack_frame);
+                int j;
+                for (j = 0; j < 4; j++) {
+                    if (tasks[i].tstack_frames[j])
+                        pmm_free_frame(tasks[i].tstack_frames[j]);
+                }
                 tasks[i].used   = 0;
                 tasks[i].cpu_id = (int8_t)-1;
                 /* Bangunkan siapapun yang sedang thread_join ke thread ini */
@@ -422,6 +446,11 @@ void task_exit() {
 
     __asm__ volatile ("sti");
     while (1) __asm__ volatile ("hlt");
+}
+
+void task_set_name(int id, const char *name) {
+    if (id < 0 || id >= MAX_TASKS || !tasks[id].used || !name) return;
+    str_copy_n(tasks[id].name, name, 32);
 }
 
 int task_get_max()       { return MAX_TASKS; }

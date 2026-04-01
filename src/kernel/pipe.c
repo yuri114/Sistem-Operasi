@@ -6,9 +6,10 @@ static Pipe pipes[PIPE_MAX];
 void pipe_init_all() {
     int i;
     for (i = 0; i < PIPE_MAX; i++) {
-        pipes[i].used = 0;
-        pipes[i].head = 0;
-        pipes[i].tail = 0;
+        pipes[i].used          = 0;
+        pipes[i].head          = 0;
+        pipes[i].tail          = 0;
+        pipes[i].reader_waiter = -1;
     }
 }
 
@@ -16,13 +17,14 @@ int pipe_alloc() {
     int i;
     for (i = 0; i < PIPE_MAX; i++) {
         if (!pipes[i].used) {
-            pipes[i].used = 1;
-            pipes[i].head = 0;
-            pipes[i].tail = 0;
+            pipes[i].used          = 1;
+            pipes[i].head          = 0;
+            pipes[i].tail          = 0;
+            pipes[i].reader_waiter = -1;
             return i;
         }
     }
-    return -1; // semua slot penuh
+    return -1;
 }
 
 void pipe_free(int id) {
@@ -33,47 +35,51 @@ void pipe_free(int id) {
 // Tulis null-terminated string ke ring buffer.
 // Setiap pesan diakhiri '\0' sebagai separator di buffer.
 int pipe_write(int id, const char *str) {
+    int w;
     if (id < 0 || id >= PIPE_MAX || !pipes[id].used) return -1;
     if (!str) return -1;
     __asm__ volatile ("cli");
     Pipe *p = &pipes[id];
     int written = 0;
-    // tulis karakter demi karakter
     while (*str) {
         uint32_t next = (p->tail + 1) % PIPE_BUF;
-        if (next == p->head) break; // buffer penuh, hentikan
+        if (next == p->head) break;
         p->buf[p->tail] = *str++;
         p->tail = next;
         written++;
     }
-    // tulis null terminator sebagai akhir pesan
     uint32_t next = (p->tail + 1) % PIPE_BUF;
     if (next != p->head) {
         p->buf[p->tail] = '\0';
         p->tail = next;
     }
+    /* Bangunkan pembaca yang sedang menunggu */
+    w = p->reader_waiter;
+    p->reader_waiter = -1;
     __asm__ volatile ("sti");
+    if (w >= 0) task_unblock(w);
     return written;
 }
 
 // Baca satu pesan (sampai '\0') dari ring buffer ke buf.
-// Memblokir (tidur 10ms) sampai data tersedia. Return bytes dibaca.
+// Memblokir (true block) sampai data tersedia. Return bytes dibaca.
 int pipe_read(int id, char *buf) {
     if (id < 0 || id >= PIPE_MAX || !pipes[id].used) return -1;
     if (!buf) return -1;
-    // Tunggu sampai ada data — sleep antara cek
+    /* Tunggu sampai ada data — true blocking (tidak busy-wait) */
     while (1) {
         __asm__ volatile ("cli");
-        if (pipes[id].head != pipes[id].tail) break; // ada data
+        if (pipes[id].head != pipes[id].tail) break;  /* ada data */
+        pipes[id].reader_waiter = task_get_current();
         __asm__ volatile ("sti");
-        task_sleep(10); // tidur 10ms lalu coba lagi
+        task_block();  /* tidur sampai pipe_write membangunkan */
     }
     Pipe *p = &pipes[id];
     int i = 0;
     while (p->head != p->tail && i < PIPE_BUF - 1) {
         char c = p->buf[p->head];
         p->head = (p->head + 1) % PIPE_BUF;
-        if (c == '\0') break; // akhir pesan
+        if (c == '\0') break;
         buf[i++] = c;
     }
     buf[i] = '\0';

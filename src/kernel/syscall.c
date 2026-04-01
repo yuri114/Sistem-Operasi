@@ -1,3 +1,4 @@
+#include "condvar.h"
 #include "syscall.h"
 #include "keyboard.h"
 #include "task.h"
@@ -504,6 +505,39 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
     if (eax == SYS_THREAD_JOIN) {
         task_wait((int)ebx);
         return 0;
+    }
+
+    // SYS_THREAD_SET_NAME(67): set nama thread; ebx=tid, edx=name_ptr
+    if (eax == SYS_THREAD_SET_NAME) {
+        if (!is_user_ptr(edx)) return (uint64_t)-1;
+        task_set_name((int)ebx, (const char *)edx);
+        return 0;
+    }
+
+    // SYS_COND_ALLOC(68): alokasi condvar → return id
+    if (eax == SYS_COND_ALLOC) {
+        return (uint64_t)(int64_t)cv_alloc();
+    }
+
+    // SYS_COND_FREE(69): bebaskan condvar; ebx=id
+    if (eax == SYS_COND_FREE) {
+        cv_free((int)ebx);
+        return 0;
+    }
+
+    // SYS_COND_WAIT(70): cv_wait; ebx=cond_id, edx=sem_id
+    if (eax == SYS_COND_WAIT) {
+        return (uint64_t)(int64_t)cv_wait((int)ebx, (int)edx);
+    }
+
+    // SYS_COND_SIGNAL(71): cv_signal; ebx=cond_id
+    if (eax == SYS_COND_SIGNAL) {
+        return (uint64_t)(int64_t)cv_signal((int)ebx);
+    }
+
+    // SYS_COND_BROADCAST(72): cv_broadcast; ebx=cond_id
+    if (eax == SYS_COND_BROADCAST) {
+        return (uint64_t)(int64_t)cv_broadcast((int)ebx);
     }
 
     return (uint64_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal

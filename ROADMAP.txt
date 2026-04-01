@@ -364,6 +364,8 @@ RINGKASAN URUTAN & STATUS
   [DONE] Fondasi N   — Stabilitas Sistem (user heap, waitpid, slot reuse)  (1 April 2026)
   [DONE] Tahap N     — User-space Threading         (1 April 2026)
   [DONE] Fondasi O   — Stabilitas Threading (stack leak, blocking sem, thread-safe malloc)  (1 April 2026)
+  [DONE] Fondasi P   — Threading Lanjutan (stack 16KB, multi-waiter sem, naming, condvar)  (1 April 2026)
+  [DONE] Fondasi R1  — Blocking I/O Sejati (keyboard, pipe, VFS stdin)  (1 April 2026)
 
 ================================================================
 
@@ -641,6 +643,121 @@ Tujuan: memperkuat fondasi threading sebelum fitur-fitur lanjutan.
            - malloc(): _umtx_init(); sem_wait(_umtx); ... sem_post(_umtx)
            - free():   _umtx_init(); sem_wait(_umtx); ... sem_post(_umtx)
          File: src/programs/lib.h
+
+================================================================
+FONDASI P — THREADING LANJUTAN
+Status: [SELESAI] ✓ Selesai 1 April 2026 — build 263,720 bytes
+Prasyarat: Fondasi O selesai ✓
+----------------------------------------------------------------
+Tujuan: perkuat fondasi threading — stack lebih besar, sinkronisasi
+        lebih kaya (multi-waiter, condvar), dan manajemen identitas thread.
+
+  [F-P1] ✓ Thread stack 16KB + guard page per-thread
+         Masalah: 4KB terlalu kecil untuk program yang memanggil fungsi
+           bersarang dalam atau memiliki array lokal besar.
+         Fix:
+           - task.h: tstack_frame (1 field) → tstack_frames[4] (array 4 frame)
+           - task.c (task_create_thread):
+               tstack_va = 0x700000 + id * 0x5000  (5 halaman per-slot)
+               Halaman 0 (VA = tstack_va): guard — dibiarkan TIDAK dipetakan
+               Halaman 1-4 (VA = tstack_va + 0x1000..+0x4000): dipetakan P+RW+User
+               RSP awal = tstack_va + 0x5000 (puncak slot)
+               Simpan frame ke tasks[id].tstack_frames[0..3]
+           - task.c (task_exit, thread path):
+               Loop k=0..3: vmm_unmap_page + pmm_free_frame(tstack_frames[k])
+           - task.c (task_exit, proses path / force-kill threads):
+               Loop 4 frame per-thread anak sebelum vmm_free_user_memory
+           - kernel.c (exception_handler, #PF):
+               Tambah cek guard page thread:
+               if CR2 in [0x700000, 0x800000) AND (offset % 0x5000) < 0x1000:
+                 cetak "== THREAD STACK OVERFLOW ==", task_exit()
+         File: src/kernel/task.h, src/kernel/task.c, src/kernel/kernel.c
+
+  [F-P2] ✓ Multiple semaphore waiters (FIFO ring)
+         Masalah: Semaphore hanya punya 1 int waiter — jika 2+ thread
+           concurrent memanggil sem_wait pada value==0, hanya 1 yang
+           masuk antrian; yang lain langsung lost.
+         Fix (semaphore.h + semaphore.c):
+           - semaphore.h: SEM_WAITER_MAX=4; struct Semaphore ganti
+             int waiter → int waiters[4], uint8_t whead, wtail (ring FIFO)
+           - sem_enqueue / sem_dequeue: static helper ring
+           - sem_init_all / sem_alloc: inisialisasi whead=wtail=0, waiters=-1
+           - sem_wait: enqueue current_task ke ring, task_block();
+             loop pada spurious wake (cek value setelah dibangunkan)
+           - sem_post: dequeue 1 waiter → task_unblock(w)
+         File: src/kernel/semaphore.h, src/kernel/semaphore.c
+
+  [F-P3] ✓ Thread naming (SYS_THREAD_SET_NAME)
+         - task.c: task_set_name(id, name) — str_copy_n ke tasks[id].name
+         - syscall.h: SYS_THREAD_SET_NAME = 67  (ebx=tid, edx=name_ptr)
+         - syscall.c: handler — validasi is_user_ptr(edx), panggil task_set_name
+         - lib.h: thread_set_name(tid, name) inline syscall2 wrapper
+         File: src/kernel/task.c, src/kernel/syscall.h, src/kernel/syscall.c,
+               src/programs/lib.h
+
+  [F-P4] ✓ Condition variable
+         File baru: src/kernel/condvar.h, src/kernel/condvar.c
+         - condvar.h: CV_MAX=8, CV_WAITER_MAX=4; struct CondVar {used, waiters[4], whead, wtail}
+         - cv_init_all(), cv_alloc(), cv_free()
+         - cv_wait(id, sem_id):
+             1. cli; enqueue current_task ke ring cv
+             2. sem_post(sem_id)  ← lepas mutex atomik (IRQ kembali aktif di dalam)
+             3. sti; task_block() ← tidur
+             4. sem_wait(sem_id)  ← reacquire mutex setelah dibangunkan
+         - cv_signal(id):   dequeue 1 waiter → task_unblock
+         - cv_broadcast(id): dequeue semua → task_unblock tiap waiter
+         Syscall baru:
+           SYS_COND_ALLOC(68), SYS_COND_FREE(69), SYS_COND_WAIT(70),
+           SYS_COND_SIGNAL(71), SYS_COND_BROADCAST(72)
+         lib.h: cond_alloc(), cond_free(), cond_wait(), cond_signal(), cond_broadcast()
+         kernel.c: #include "condvar.h", cv_init_all() di kernel_main
+         build.ps1: tambah kondvar.c compile + link
+         File: src/kernel/condvar.h, src/kernel/condvar.c,
+               src/kernel/syscall.h, src/kernel/syscall.c,
+               src/kernel/kernel.c, src/programs/lib.h, build.ps1
+
+  [F-P5] ✓ MAX_TASKS 16 → 32
+         - task.h: MAX_TASKS = 32
+         - Semua array yang depend MAX_TASKS (vfs.c fd_table, mq.c mailbox)
+           otomatis ikut karena gunakan MAX_TASKS sebagai ukuran
+         File: src/kernel/task.h
+
+================================================================
+FONDASI R1 — BLOCKING I/O SEJATI
+Status: [SELESAI] ✓ Selesai 1 April 2026 — build 263,720 bytes
+Prasyarat: Fondasi O, Tahap N selesai ✓
+----------------------------------------------------------------
+Tujuan: ganti busy-wait dan spin-loop pada semua jalur I/O dengan
+        true blocking (task_block / task_unblock) agar CPU tidak
+        terbuang saat menunggu data keyboard atau pipe.
+
+  [F-R1a] ✓ Keyboard blocking sejati
+          Masalah: SYS_GETKEY spin-loops pada keyboard_getchar(); vfs_read
+            stdin juga memanggil keyboard_getchar() tanpa blocking.
+          Fix:
+            - keyboard.h: tambah keyboard_has_char() dan keyboard_set_waiter(tid)
+            - keyboard.c: static int kwaiter = -1; keyboard_set_waiter; keyboard_has_char
+            - keyboard_handler: setelah setiap key_push, cek kwaiter >= 0
+              → simpan ke wake, reset kwaiter=-1, task_unblock(wake)
+            - vfs.c (VFS_TYPE_STDIN):
+                while (!keyboard_has_char()) { keyboard_set_waiter(current); task_block(); }
+                buf[0] = keyboard_getchar(); return 1;
+          File: src/kernel/keyboard.h, src/kernel/keyboard.c, src/kernel/vfs.c
+
+  [F-R1b] ✓ Pipe blocking sejati
+          Masalah: pipe_read() menggunakan task_sleep(10) dalam loop →
+            CPU terbuang 10ms per-retry; pipe_write() tidak memberi tahu
+            pembaca bahwa data sudah tersedia.
+          Fix:
+            - pipe.h: tambah int reader_waiter ke struct Pipe
+            - pipe.c (pipe_init_all + pipe_alloc): inisialisasi reader_waiter = -1
+            - pipe_read():
+                Ganti task_sleep(10) dengan:
+                  cli; if kosong: pipes[id].reader_waiter = current; sti; task_block()
+                Loop sampai ada data (retry setelah dibangunkan)
+            - pipe_write():
+                Setelah tulis: w = reader_waiter; reader_waiter = -1; sti; task_unblock(w)
+          File: src/kernel/pipe.h, src/kernel/pipe.c
 
 ----------------------------------------------------------------
 Tujuan     : Mengubah framebuffer dari 8bpp (palette 256 warna)
