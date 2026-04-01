@@ -559,8 +559,8 @@ static void shell_execute(){
         int i;
         int cur = task_get_current();
         set_color(GFX_YELLOW, GFX_BLACK);
-        print("ID  PRIO  STATUS     NAMA\n");
-        print("--- ----- ---------- ----------------\n");
+        print("ID  PRIO  STATUS     CPU  NAMA\n");
+        print("--- ----- ---------- ---- ----------------\n");
         set_color(GFX_WHITE, GFX_BLACK);
         for (i = 0; i < task_get_max(); i++) {
             if (!task_is_used(i)) continue;
@@ -586,6 +586,9 @@ static void shell_execute(){
                 print("ready      ");
             }
             set_color(GFX_WHITE, GFX_BLACK);
+            int cpu_id = task_get_cpu(i);
+            if (cpu_id < 0) print("free ");
+            else { itoa((uint32_t)cpu_id, buf); print("cpu"); print(buf); print(" "); }
             print(task_get_name(i));
             print("\n");
         }
@@ -737,6 +740,11 @@ static void shell_execute(){
 
         print("ap online: ");
         itoa(smp_ap_started, nbuf);
+        print(nbuf);
+        print("\n");
+
+        print("ap ticks:  ");
+        itoa(smp_ap_ticks, nbuf);
         print(nbuf);
         print("\n");
 

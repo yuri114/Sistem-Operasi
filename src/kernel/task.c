@@ -1,9 +1,10 @@
-/* task.c ? Penjadwal task (priority weighted round-robin) 64-bit Long Mode */
+/* task.c — Penjadwal task (priority weighted round-robin, multi-core) */
 #include "task.h"
 #include "timer.h"
 #include "vmm.h"
 #include "tss.h"
 #include "memory.h"
+#include "spinlock.h"
 
 static void str_copy_n(char *dst, const char *src, int n) {
     int i;
@@ -15,6 +16,18 @@ static Task tasks[MAX_TASKS];
 static uint8_t *stacks_base;
 static int current_task = 0;
 static int task_count   = 0;
+
+/* Spinlock: melindungi cpu_id field saat claim/release task oleh BSP dan AP. */
+static volatile int task_lock = 0;
+
+/* Set 1 oleh smp_init setelah AP online — BSP tidak boleh ambil is_user==0 task */
+static volatile int has_ap = 0;
+void task_set_has_ap(int v) { has_ap = v; }
+
+/* Per-AP scheduler state (untuk 1 AP; diperluas ke array jika CPU > 2). */
+static int current_task_ap = -1;  /* task yg sedang jalan di AP, -1 = belum ada */
+uint64_t *ap_current_rsp   = 0;   /* dibaca lapic_timer_isr (asm) */
+uint64_t *ap_next_rsp      = 0;   /* dibaca lapic_timer_isr (asm) */
 
 /* Ditulis task_switch, dibaca irq0.
  * current_rsp: alamat tasks[current].rsp (untuk simpan RSP lama)
@@ -40,6 +53,8 @@ void task_set_main() {
     tasks[0].priority  = 3;
     tasks[0].ticks     = 3;
     tasks[0].pipe_id   = -1;
+    tasks[0].cpu_id    = 0;    /* shell: selalu di BSP */
+    tasks[0].is_user   = 1;    /* pin ke BSP, AP tidak boleh ambil */
     /* Gunakan boot PML4 di alamat fisik 0x1000 (identity mapped = VA 0x1000) */
     tasks[0].page_dir  = (uint64_t *)0x1000;
     str_copy_n(tasks[0].name, "[shell]", 32);
@@ -55,13 +70,20 @@ int task_create(void (*entry)()) {
     tasks[id].priority  = 1;
     tasks[id].ticks     = 1;
     tasks[id].pipe_id   = -1;
+    tasks[id].cpu_id    = -1;  /* bebas, bisa dijalankan CPU manapun */
+    tasks[id].is_user   = 0;   /* ring-0 kernel task */
     str_copy_n(tasks[id].name, "[idle]", 32);
     tasks[id].page_dir  = vmm_create_page_dir();
 
     /* Susun stack awal:
-     *   [tinggi] RFLAGS, CS, RIP   (iretq frame ring-0->ring-0, 3 qword)
-     *   [rendah] 15 x 0            (GPR slots: rax..r15) */
-    uint64_t *stack_top = (uint64_t *)(stacks_base + (uint64_t)id * STACK_SIZE + STACK_SIZE);
+     * Di 64-bit mode, iretq SELALU pop 5 item: RIP, CS, RFLAGS, RSP, SS
+     * (bahkan untuk same-privilege ring-0 → ring-0).
+     *   [tinggi] SS, RSP, RFLAGS, CS, RIP  (iretq frame, 5 qword)
+     *   [rendah] 15 x 0                    (GPR slots: rax..r15) */
+    uint64_t stack_base = (uint64_t)(stacks_base + (uint64_t)id * STACK_SIZE + STACK_SIZE);
+    uint64_t *stack_top = (uint64_t *)stack_base;
+    *(--stack_top) = 0x10;                /* SS: kernel data segment */
+    *(--stack_top) = stack_base;          /* RSP: top of task's own stack */
     *(--stack_top) = 0x202;               /* RFLAGS: IF=1 */
     *(--stack_top) = 0x08;                /* CS: kernel code */
     *(--stack_top) = (uint64_t)entry;     /* RIP */
@@ -87,6 +109,8 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
     tasks[id].priority  = 2;
     tasks[id].ticks     = 2;
     tasks[id].pipe_id   = -1;
+    tasks[id].cpu_id    = 0;   /* ring-3 user task: hanya BSP yang boleh jalan */
+    tasks[id].is_user   = 1;
     str_copy_n(tasks[id].name, name ? name : "?", 32);
 
     /* Susun stack awal:
@@ -111,6 +135,7 @@ void task_switch() {
 
     if (task_count < 2) return;
 
+    /* Tick countdown: task masih punya jatah, jangan switch */
     if (tasks[current_task].used &&
         tasks[current_task].status == TASK_RUNNING &&
         tasks[current_task].ticks > 1) {
@@ -118,17 +143,36 @@ void task_switch() {
         return;
     }
 
+    /* Reset ticks task yang selesai jatah-nya */
     if (tasks[current_task].used && tasks[current_task].status == TASK_RUNNING)
         tasks[current_task].ticks = tasks[current_task].priority;
+
+    /* Cari task berikutnya dengan spinlock agar tidak race dengan AP */
+    spinlock_acquire(&task_lock);
 
     int next = (current_task + 1) % task_count;
     int i;
     for (i = 0; i < task_count; i++) {
-        if (tasks[next].used && tasks[next].status == TASK_RUNNING) break;
+        /* Jika ada AP, BSP hanya ambil task is_user==1 (shell/ring-3).
+         * Task is_user==0 (kernel task) dibiarkan bebas untuk AP. */
+        if (tasks[next].used &&
+            tasks[next].status == TASK_RUNNING &&
+            tasks[next].cpu_id == -1 &&
+            (!has_ap || tasks[next].is_user == 1)) break;
         next = (next + 1) % task_count;
     }
-    if (!tasks[next].used || tasks[next].status != TASK_RUNNING) return;
-    if (next == current_task) return;
+
+    if (!tasks[next].used || tasks[next].status != TASK_RUNNING ||
+        tasks[next].cpu_id != -1 || next == current_task) {
+        spinlock_release(&task_lock);
+        return;
+    }
+
+    /* Lepas task lama (kembalikan ke pool), klaim task baru untuk BSP */
+    tasks[current_task].cpu_id = (int8_t)-1;
+    tasks[next].cpu_id         = (int8_t)0;
+
+    spinlock_release(&task_lock);
 
     current_rsp  = &tasks[current_task].rsp;
     next_rsp     = &tasks[next].rsp;
@@ -145,9 +189,83 @@ void task_switch() {
         vmm_switch_dir(tasks[current_task].page_dir);
 }
 
+/* ------------------------------------------------------------------
+ * task_switch_ap — scheduler untuk Application Processor (AP).
+ *
+ * Dipanggil dari lapic_timer_isr pada setiap AP timer tick.
+ * Menggunakan work stealing: ambil task ring-0 (is_user==0) yang
+ * tidak sedang dijalankan oleh CPU manapun (cpu_id==-1).
+ *
+ * Setelah fungsi ini kembali, lapic_timer_isr membaca ap_current_rsp
+ * dan ap_next_rsp untuk melakukan context switch.
+ * ------------------------------------------------------------------ */
+void task_switch_ap(int cpu_idx)
+{
+    ap_current_rsp = 0;
+    ap_next_rsp    = 0;
+
+    if (task_count < 1) return;
+
+    /* Tick countdown AP — hanya AP yang akses current_task_ap, tanpa lock */
+    if (current_task_ap >= 0 && tasks[current_task_ap].used &&
+        tasks[current_task_ap].status == TASK_RUNNING &&
+        tasks[current_task_ap].ticks > 1) {
+        tasks[current_task_ap].ticks--;
+        return;
+    }
+
+    /* Reset ticks */
+    if (current_task_ap >= 0 && tasks[current_task_ap].used &&
+        tasks[current_task_ap].status == TASK_RUNNING)
+        tasks[current_task_ap].ticks = tasks[current_task_ap].priority;
+
+    /* Cari task ring-0 bebas dengan spinlock (work stealing) */
+    spinlock_acquire(&task_lock);
+
+    int start = (current_task_ap >= 0) ? (current_task_ap + 1) % task_count : 0;
+    int next = start;
+    int found = 0, i;
+    for (i = 0; i < task_count; i++) {
+        if (tasks[next].used &&
+            tasks[next].status == TASK_RUNNING &&
+            tasks[next].cpu_id == -1 &&
+            tasks[next].is_user == 0) {   /* hanya kernel task */
+            found = 1;
+            break;
+        }
+        next = (next + 1) % task_count;
+    }
+
+    if (!found || next == current_task_ap) {
+        /* Tidak ada task baru — pertahankan task saat ini (re-klaim) */
+        if (current_task_ap >= 0 && tasks[current_task_ap].used)
+            tasks[current_task_ap].cpu_id = (int8_t)cpu_idx;
+        spinlock_release(&task_lock);
+        return;
+    }
+
+    /* Lepas task lama, klaim task baru */
+    if (current_task_ap >= 0 && tasks[current_task_ap].used)
+        tasks[current_task_ap].cpu_id = (int8_t)-1;
+    tasks[next].cpu_id = (int8_t)cpu_idx;
+
+    spinlock_release(&task_lock);
+
+    /* Set pointer RSP untuk context switch di asm */
+    if (current_task_ap >= 0 && tasks[current_task_ap].used)
+        ap_current_rsp = &tasks[current_task_ap].rsp;
+    ap_next_rsp    = &tasks[next].rsp;
+    current_task_ap = next;
+
+    /* Update TSS RSP0 AP agar exception di ring-0 punya stack bersih */
+    uint64_t kstack = (uint64_t)(stacks_base + (uint64_t)next * STACK_SIZE + STACK_SIZE);
+    tss64_set_kernel_stack_cpu(cpu_idx, kstack);
+}
+
 void task_exit() {
     uint64_t *dir = tasks[current_task].page_dir;
     tasks[current_task].used     = 0;
+    tasks[current_task].cpu_id   = (int8_t)-1;   /* kembalikan ke pool */
     tasks[current_task].page_dir = 0;
 
     /* Kembali ke boot PML4 dulu sebelum membebaskan page_dir proses */
@@ -159,9 +277,11 @@ void task_exit() {
 }
 
 int task_get_max()       { return MAX_TASKS; }
+int task_get_count()     { return task_count; }
 int task_is_used(int id) { return (id >= 0 && id < MAX_TASKS) ? tasks[id].used : 0; }
 const char *task_get_name(int id) { return (id >= 0 && id < MAX_TASKS) ? tasks[id].name : ""; }
 int task_get_current() { return current_task; }
+int task_get_cpu(int id) { return (id >= 0 && id < MAX_TASKS) ? (int)tasks[id].cpu_id : -1; }
 int task_get_priority(int id) { return (id >= 0 && id < MAX_TASKS) ? tasks[id].priority : 0; }
 
 int task_set_priority(int id, int prio) {

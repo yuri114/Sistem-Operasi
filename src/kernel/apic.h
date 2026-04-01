@@ -22,4 +22,16 @@ void    apic_send_init(uint8_t apic_id);
 /* Kirim STARTUP IPI (SIPI) ke AP; vector = trampoline_addr >> 12. */
 void    apic_send_sipi(uint8_t apic_id, uint8_t vector);
 
+/* ------------------------------------------------------------------
+ * LAPIC Timer
+ * ------------------------------------------------------------------ */
+
+/* Inisialisasi LAPIC timer periodic pada core saat ini.
+ *   vector : nomor INT yang akan di-trigger (misalnya 0x40 = INT 64)
+ *   ms     : periode dalam milidetik (dikalibrasi terhadap PIT tick)
+ */
+void    apic_timer_calibrate(void);                        /* BSP: kalibrasi saja, timer tetap masked */
+void    apic_timer_init(uint8_t vector, uint32_t ms);      /* BSP: kalibrasi + program (opsional) */
+void    apic_timer_ap_start(uint8_t vector, uint32_t ms);  /* AP: program pakai kalibrasi BSP */
+
 #endif /* APIC_H */

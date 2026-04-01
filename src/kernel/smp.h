@@ -7,15 +7,17 @@
 /* Diisi oleh AP setelah berhasil start di mode 64-bit. */
 extern volatile uint32_t smp_ap_started;
 
-/* Inisialisasi SMP pada BSP:
- *   - enable LAPIC
- *   - parse MADT, kirim INIT/SIPI ke AP
- *   - tunggu AP melapor via smp_ap_started
- */
+/* Counter yang dinaikkan background task AP setiap 500ms.
+ * Dipakai sebagai demonstrasi bahwa AP benar-benar mengeksekusi task. */
+extern volatile uint32_t smp_ap_ticks;
+
+/* Inisialisasi SMP pada BSP. */
 void smp_init(void);
 
-/* Dipanggil oleh AP saat masuk kernel via trampoline.
- * Menandai AP online lalu halt (untuk tahap awal). */
+/* Dipanggil oleh AP saat masuk kernel via trampoline. */
 void smp_ap_entry(void);
+
+/* Background kernel task yang dijalankan AP; bisa di-spawn via task_create(). */
+void smp_background_task(void);
 
 #endif /* SMP_H */

@@ -43,6 +43,7 @@
 #include "serial.h"
 #include "net.h"
 #include "smp.h"
+#include "acpi.h"
 
 /* Bochs VBE 1280x720 @ 32bpp: font 8x8 = 160 kolom x 90 baris */
 #define VGA_COLS 160
@@ -450,6 +451,10 @@ void kernel_main(){
 
     /* Tahap H: bootstrap SMP (LAPIC + ACPI MADT + INIT/SIPI AP). */
     smp_init();
+
+    /* Tahap I: buat background kernel task untuk AP (work stealing). */
+    if (cpu_count > 1)
+        task_create(smp_background_task);
 
     /* IRQ12 — PS/2 Mouse (INT 44 = slave IRQ4) */
     extern void irq12();

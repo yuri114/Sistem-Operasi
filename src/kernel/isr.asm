@@ -19,6 +19,7 @@ global irq12
 global int80_handler
 global syscall_entry
 global syscall_kstack
+global lapic_timer_isr
 
 extern keyboard_handler
 extern timer_handler
@@ -27,6 +28,9 @@ extern task_switch
 extern current_rsp
 extern next_rsp
 extern syscall_handler
+extern lapic_timer_handler
+extern ap_current_rsp
+extern ap_next_rsp
 
 ; ------------------------------------------------------------------
 ; Macro simpan/pulihkan semua GPR
@@ -290,4 +294,32 @@ exc_common:
 
     RESTORE_REGS
     add  rsp, 16                ; buang exc_num + error_code
+    iretq
+
+; ------------------------------------------------------------------
+; LAPIC Timer ISR (INT 0x40) — AP scheduler tick
+; Mirrors irq0 tapi pakai ap_current_rsp/ap_next_rsp dan LAPIC EOI.
+; ------------------------------------------------------------------
+lapic_timer_isr:
+    SAVE_REGS
+
+    call lapic_timer_handler    ; sets ap_current_rsp / ap_next_rsp
+
+    mov  rax, [ap_current_rsp]
+    test rax, rax
+    jz   .skip_save_ap
+    mov  [rax], rsp
+.skip_save_ap:
+
+    mov  rax, [ap_next_rsp]
+    test rax, rax
+    jz   .no_switch_ap
+    mov  rsp, [rax]
+.no_switch_ap:
+
+    ; LAPIC EOI: write 0 to LAPIC EOI register (0xFEE000B0)
+    mov  rcx, 0x00000000FEE000B0
+    mov  dword [rcx], 0
+
+    RESTORE_REGS
     iretq

@@ -93,3 +93,9 @@ void tss64_set_kernel_stack(uint64_t rsp)
     /* BSP: update rsp0 saat task switch ring-3 -> ring-0 */
     tss_table[0].rsp0 = rsp;
 }
+
+void tss64_set_kernel_stack_cpu(int cpu_idx, uint64_t rsp)
+{
+    if (cpu_idx >= 0 && cpu_idx < SMP_MAX_CPUS)
+        tss_table[cpu_idx].rsp0 = rsp;
+}
