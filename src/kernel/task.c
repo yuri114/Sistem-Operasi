@@ -182,31 +182,16 @@ int task_create_thread(uint64_t entry, uint64_t arg, int parent_tid) {
     tasks[id].parent_tid = parent_tid;
     str_copy_n(tasks[id].name, "thread", 32);
 
-    /* Alokasikan 4 halaman data stack ring-3 untuk thread ini.
+    /* F-Q3: Demand paging untuk thread stack.
      * Slot VA: 0x700000 + id*0x5000  → 5 halaman per slot.
-     *   Halaman 0 (guard): tidak dipetakan  → #PF = stack overflow.
-     *   Halaman 1-4 (data): dipetakan P+RW+User. */
-    uint64_t tstack_va = 0x700000ULL + (uint64_t)id * 0x5000ULL;
+     *   Halaman 0 (guard): tidak dipetakan → #PF = stack overflow.
+     *   Halaman 1-4: TIDAK dipetakan sekarang → demand paged saat diakses pertama kali.
+     * Tidak ada pmm_alloc_frame() di sini; tstack_frames[] dibersihkan ke 0. */
     int k;
-    for (k = 0; k < 4; k++) {
-        uint64_t frame = pmm_alloc_frame();
-        if (!frame) {
-            int j;
-            for (j = 0; j < k; j++) {
-                vmm_unmap_page(tasks[id].page_dir,
-                               tstack_va + 0x1000ULL + (uint64_t)j * 0x1000ULL);
-                pmm_free_frame(tasks[id].tstack_frames[j]);
-                tasks[id].tstack_frames[j] = 0;
-            }
-            tasks[id].used = 0;
-            return -1;
-        }
-        vmm_map_page(tasks[id].page_dir,
-                     tstack_va + 0x1000ULL + (uint64_t)k * 0x1000ULL,
-                     frame, 7);  /* P+RW+User */
-        tasks[id].tstack_frames[k] = frame;
-    }
-    uint64_t user_rsp = tstack_va + 0x5000ULL;  /* puncak slot */
+    for (k = 0; k < 4; k++) tasks[id].tstack_frames[k] = 0;
+
+    uint64_t tstack_va = 0x700000ULL + (uint64_t)id * 0x5000ULL;
+    uint64_t user_rsp  = tstack_va + 0x5000ULL;  /* puncak slot */
 
     /* Susun kernel stack awal (sama seperti task_create_user):
      *   [tinggi] SS, RSP_user, RFLAGS, CS, RIP   iretq frame
@@ -408,13 +393,15 @@ void task_exit() {
     vmm_switch_dir((uint64_t *)0x1000);
 
     if (is_thr) {
-        /* F-P1: bebaskan 4 frame stack thread dan hapus pemetaannya dari page_dir induk. */
+        /* F-P1/F-Q3: bebaskan frame stack thread.
+         * Gunakan vmm_get_phys agar demand-paged frames (F-Q3) juga ikut dibersihkan. */
         if (ptid >= 0 && ptid < MAX_TASKS && tasks[ptid].used) {
             for (k = 0; k < 4; k++) {
-                if (tstack_fs[k]) {
-                    vmm_unmap_page(tasks[ptid].page_dir,
-                                   tstack_va + 0x1000ULL + (uint64_t)k * 0x1000ULL);
-                    pmm_free_frame(tstack_fs[k]);
+                uint64_t page_va = tstack_va + 0x1000ULL + (uint64_t)k * 0x1000ULL;
+                uint64_t phys = vmm_get_phys(tasks[ptid].page_dir, page_va);
+                if (phys >= 768ULL * PAGE_SIZE) {
+                    vmm_unmap_page(tasks[ptid].page_dir, page_va);
+                    pmm_free_frame(phys);
                 }
             }
         }
@@ -425,9 +412,13 @@ void task_exit() {
             if (tasks[i].used && tasks[i].is_thread && tasks[i].parent_tid == tid) {
                 int tw = tasks[i].waiter;
                 int j;
+                /* F-Q3: gunakan vmm_get_phys agar demand-paged thread stack ikut dibebaskan */
+                uint64_t ts_va = 0x700000ULL + (uint64_t)i * 0x5000ULL;
                 for (j = 0; j < 4; j++) {
-                    if (tasks[i].tstack_frames[j])
-                        pmm_free_frame(tasks[i].tstack_frames[j]);
+                    uint64_t page_va = ts_va + 0x1000ULL + (uint64_t)j * 0x1000ULL;
+                    uint64_t phys = vmm_get_phys(dir, page_va);
+                    if (phys >= 768ULL * PAGE_SIZE)
+                        pmm_free_frame(phys);
                 }
                 tasks[i].used   = 0;
                 tasks[i].cpu_id = (int8_t)-1;
@@ -511,6 +502,79 @@ uint64_t task_get_rsp0(int id) {
 uint64_t *task_get_page_dir(int id) {
     if (id < 0 || id >= MAX_TASKS || !tasks[id].used) return 0;
     return tasks[id].page_dir;
+}
+
+void task_set_page_dir(int id, uint64_t *dir) {
+    if (id >= 0 && id < MAX_TASKS) tasks[id].page_dir = dir;
+}
+
+/*
+ * task_create_fork — buat task anak (child) untuk fork().
+ *
+ * child_rip : VA user-space tempat anak melanjutkan eksekusi (resume setelah syscall)
+ * child_rsp : RSP user-space anak (sama persis dengan induk saat fork() dipanggil)
+ *
+ * Kernel stack anak dibuat dalam format iretq (sama dengan task_create_user),
+ * dengan rax=0 agar fork() mengembalikan 0 di proses anak.
+ */
+int task_create_fork(int parent_tid, uint64_t child_rip, uint64_t child_rsp) {
+    int id = -1, i;
+    for (i = 1; i < MAX_TASKS; i++) {
+        if (!tasks[i].used) { id = i; break; }
+    }
+    if (id == -1) return -1;
+    if (id >= task_count) task_count = id + 1;
+
+    /* Salin seluruh Task struct dari induk, sesuaikan field yang perlu berbeda */
+    tasks[id] = tasks[parent_tid];
+
+    tasks[id].used       = 1;
+    tasks[id].status     = TASK_RUNNING;
+    tasks[id].cpu_id     = (int8_t)-1;   /* bebas, BSP akan klaim */
+    tasks[id].waiter     = -1;
+    tasks[id].is_thread  = 0;
+    tasks[id].parent_tid = -1;           /* child adalah proses mandiri */
+    tasks[id].wake_tick  = 0;
+    /* page_dir diberi nilai dari caller (child_pml4) setelah vmm_copy_cow */
+
+    /* Susun kernel stack anak dalam format iretq ring-3.
+     *
+     * Layout GPR di kernel stack induk (relative ke parent_kstack_top setelah SAVE_REGS):
+     *   kstack_top-48  = rax (k=0) — syscall num, anak harus 0
+     *   kstack_top-56  = rbx (k=1)
+     *   kstack_top-64  = rcx (k=2)
+     *   kstack_top-72  = rdx (k=3)
+     *   kstack_top-80  = rsi (k=4)
+     *   kstack_top-88  = rdi (k=5)
+     *   kstack_top-96  = rbp (k=6)  ← PENTING: frame pointer
+     *   kstack_top-104 = r8  (k=7)
+     *   ...
+     *   kstack_top-160 = r15 (k=14)
+     *
+     * Anak mendapat salinan GPR induk (kecuali rax=0) agar frame pointer
+     * (rbp) dan semua register lain tetap valid setelah iretq.
+     */
+    uint64_t parent_kstack_top = (uint64_t)(stacks_base + (uint64_t)parent_tid * STACK_SIZE + STACK_SIZE);
+    /* RFLAGS induk (kstack_top-24) — salin agar flag state konsisten */
+    uint64_t parent_rflags = *(uint64_t *)(parent_kstack_top - 24);
+
+    uint64_t *stack_top = (uint64_t *)(stacks_base + (uint64_t)id * STACK_SIZE + STACK_SIZE);
+    *(--stack_top) = 0x23;           /* SS: user data */
+    *(--stack_top) = child_rsp;      /* RSP: user stack (sama dgn induk) */
+    *(--stack_top) = parent_rflags;  /* RFLAGS: salin dari induk */
+    *(--stack_top) = 0x2B;           /* CS: user code (RPL=3) */
+    *(--stack_top) = child_rip;      /* RIP: resume point setelah syscall */
+    int k;
+    for (k = 0; k < 15; k++) {
+        /* Salin GPR induk; hanya rax (k=0) di-override jadi 0 (fork return di anak) */
+        uint64_t gpr = (k == 0) ? 0ULL
+                                 : *(uint64_t *)(parent_kstack_top - 48 - (uint64_t)k * 8);
+        *(--stack_top) = gpr;
+    }
+
+    tasks[id].rsp = (uint64_t)stack_top;
+    vfs_init_task(id);   /* child mulai dengan fd set bersih */
+    return id;
 }
 
 void task_sleep(uint32_t ms) {

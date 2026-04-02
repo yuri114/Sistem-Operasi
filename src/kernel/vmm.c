@@ -21,6 +21,7 @@
  * =================================================================== */
 #define TOTAL_FRAMES 16384  /* 64MB / 4KB */
 static uint8_t frame_bitmap[TOTAL_FRAMES / 8];
+static uint8_t frame_cow_cnt[TOTAL_FRAMES];  /* COW ref-count per frame */
 
 static void bitmap_set(uint32_t frame) {
     frame_bitmap[frame / 8] |= (1 << (frame % 8));
@@ -92,7 +93,9 @@ void vmm_map_page(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags) 
     uint64_t pt_idx   = (virt >> 12) & 0x1FF;
     uint64_t mask     = ~(uint64_t)0xFFF;
 
-    /* PML4 -> PDPT */
+    /* PML4 -> PDPT
+     * Intermediate entries HARUS P+RW+User=7 agar CPU bisa walk ke level berikutnya.
+     * Proteksi akses (RO/RW, COW) ditentukan sepenuhnya di leaf PTE. */
     uint64_t *pdpt;
     if (pml4[pml4_idx] & 1) {
         pdpt = (uint64_t *)(pml4[pml4_idx] & mask);
@@ -101,7 +104,7 @@ void vmm_map_page(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags) 
         if (!p) return;
         zero_frame(p);
         pdpt = (uint64_t *)p;
-        pml4[pml4_idx] = p | flags | 1;
+        pml4[pml4_idx] = p | 7;   /* P+RW+User — intermediate selalu writable */
     }
 
     /* PDPT -> PD */
@@ -113,7 +116,7 @@ void vmm_map_page(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags) 
         if (!p) return;
         zero_frame(p);
         pd = (uint64_t *)p;
-        pdpt[pdpt_idx] = p | flags | 1;
+        pdpt[pdpt_idx] = p | 7;   /* P+RW+User — intermediate selalu writable */
     }
 
     /* Cek apakah PDE adalah 2MB large page (bit 7 = PS) */
@@ -128,10 +131,10 @@ void vmm_map_page(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags) 
         if (!p) return;
         zero_frame(p);
         pt = (uint64_t *)p;
-        pd[pd_idx] = p | flags | 1;
+        pd[pd_idx] = p | 7;       /* P+RW+User — intermediate selalu writable */
     }
 
-    pt[pt_idx] = (phys & mask) | flags | 1;
+    pt[pt_idx] = (phys & mask) | flags | 1;  /* leaf PTE: pakai flags caller */
     __asm__ volatile ("invlpg (%0)" :: "r"(virt) : "memory");
 }
 
@@ -230,8 +233,16 @@ void vmm_free_user_memory(uint64_t *pml4) {
         for (j = 0; j < 512; j++) {
             if (!(pt[j] & 1)) continue;
             uint64_t phys = pt[j] & mask;
-            if (phys >= 768ULL * PAGE_SIZE)
-                pmm_free_frame(phys);
+            if (phys >= 768ULL * PAGE_SIZE) {
+                /* Respek COW refcount: hanya free jika tidak ada proses lain yang berbagi */
+                uint32_t fn = (uint32_t)(phys / PAGE_SIZE);
+                if (frame_cow_cnt[fn] > 0) {
+                    frame_cow_cnt[fn]--;
+                    /* Jangan pmm_free — masih dipakai proses lain */
+                } else {
+                    pmm_free_frame(phys);
+                }
+            }
         }
         /* Bebaskan frame PT itu sendiri */
         uint64_t pt_phys = pd_low[i] & mask;
@@ -257,4 +268,140 @@ free_pml4:
         pmm_free_frame(pml4_phys);
 
     (void)k;
+}
+
+/* ===================================================================
+ * F-Q: Copy-on-Write helpers
+ * =================================================================== */
+
+/* Kembalikan alamat fisik untuk VA pada pml4, atau 0 jika tidak terpetakan. */
+uint64_t vmm_get_phys(uint64_t *pml4, uint64_t virt) {
+    if (!pml4) return 0;
+    uint64_t mask     = ~(uint64_t)0xFFF;
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx   = (virt >> 21) & 0x1FF;
+    uint64_t pt_idx   = (virt >> 12) & 0x1FF;
+
+    if (!(pml4[pml4_idx] & 1)) return 0;
+    uint64_t *pdpt = (uint64_t *)(pml4[pml4_idx] & mask);
+    if (!(pdpt[pdpt_idx] & 1)) return 0;
+    uint64_t *pd = (uint64_t *)(pdpt[pdpt_idx] & mask);
+    if (!(pd[pd_idx] & 1)) return 0;
+    if (pd[pd_idx] & (1ULL << 7)) {
+        /* 2MB large page */
+        return (pd[pd_idx] & ~(uint64_t)0x1FFFFF) + (virt & 0x1FFFFF);
+    }
+    uint64_t *pt = (uint64_t *)(pd[pd_idx] & mask);
+    if (!(pt[pt_idx] & 1)) return 0;
+    return pt[pt_idx] & mask;
+}
+
+/* Kembalikan pointer ke PTE untuk VA, atau NULL jika tidak ada PT. */
+uint64_t *vmm_get_pte(uint64_t *pml4, uint64_t virt) {
+    if (!pml4) return 0;
+    uint64_t mask     = ~(uint64_t)0xFFF;
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx   = (virt >> 21) & 0x1FF;
+    uint64_t pt_idx   = (virt >> 12) & 0x1FF;
+
+    if (!(pml4[pml4_idx] & 1)) return 0;
+    uint64_t *pdpt = (uint64_t *)(pml4[pml4_idx] & mask);
+    if (!(pdpt[pdpt_idx] & 1)) return 0;
+    uint64_t *pd = (uint64_t *)(pdpt[pdpt_idx] & mask);
+    if (!(pd[pd_idx] & 1)) return 0;
+    if (pd[pd_idx] & (1ULL << 7)) return 0;  /* large page, tidak ada PT */
+    uint64_t *pt = (uint64_t *)(pd[pd_idx] & mask);
+    return &pt[pt_idx];
+}
+
+/*
+ * vmm_copy_cow — setup Copy-on-Write antara parent dan child (fork).
+ *
+ * Untuk setiap halaman user (phys >= 3MB) di parent:
+ *   - Set bit COW (bit 9) + clear RW pada PTE parent
+ *   - Petakan halaman yang sama di child dengan flag yang sama (RO + COW)
+ *   - Increment frame_cow_cnt
+ *
+ * Setelah ini, write pertama ke halaman bersama akan menyebabkan #PF
+ * yang ditangani oleh vmm_cow_fault().
+ */
+void vmm_copy_cow(uint64_t *parent_pml4, uint64_t *child_pml4) {
+    if (!parent_pml4 || !child_pml4) return;
+    uint64_t mask = ~(uint64_t)0xFFF;
+    int i, j;
+
+    /* Hanya PML4[0] (0-1GB, user space per-proses) */
+    if (!(parent_pml4[0] & 1)) return;
+    uint64_t *parent_pdpt = (uint64_t *)(parent_pml4[0] & mask);
+
+    /* Hanya PDPT[0] (proc_pd_low) */
+    if (!(parent_pdpt[0] & 1)) return;
+    uint64_t *parent_pd = (uint64_t *)(parent_pdpt[0] & mask);
+
+    for (i = 0; i < 512; i++) {
+        if (!(parent_pd[i] & 1)) continue;
+        if (parent_pd[i] & (1ULL << 7)) continue;  /* 2MB large page = kernel, skip */
+
+        uint64_t *parent_pt = (uint64_t *)(parent_pd[i] & mask);
+        for (j = 0; j < 512; j++) {
+            if (!(parent_pt[j] & 1)) continue;
+            uint64_t phys = parent_pt[j] & mask;
+            if (phys < 768ULL * PAGE_SIZE) continue;  /* frame kernel, skip */
+
+            /* VA halaman ini */
+            uint64_t va = (uint64_t)i * 0x200000ULL + (uint64_t)j * 0x1000ULL;
+
+            /* Tandai parent PTE: RO + COW (clear bit1, set bit9) */
+            parent_pt[j] = phys | 0x205ULL;  /* P=1, RO, User=1, COW=bit9 */
+            __asm__ volatile ("invlpg (%0)" :: "r"(va) : "memory");
+
+            /* Petakan di child dengan flag yang sama */
+            vmm_map_page(child_pml4, va, phys, 0x205ULL);
+
+            /* Tambah ref count: parent + child masing-masing 1 counter = +2 */
+            uint32_t fn = (uint32_t)(phys / PAGE_SIZE);
+            if (frame_cow_cnt[fn] < 254) frame_cow_cnt[fn] += 2;
+            else frame_cow_cnt[fn] = 255;
+        }
+    }
+}
+
+/*
+ * vmm_cow_fault — tangani write fault ke halaman COW.
+ *
+ * Dipanggil dari exception_handler ketika:
+ *   error_code & 1  (present), error_code & 2  (write), error_code & 4  (user).
+ *
+ * Kembalikan 1 jika berhasil ditangani (instruksi boleh di-retry),
+ * 0 jika bukan COW page (panic elsewhere).
+ */
+int vmm_cow_fault(uint64_t *pml4, uint64_t virt) {
+    uint64_t fa   = virt & ~(uint64_t)0xFFF;
+    uint64_t *pte = vmm_get_pte(pml4, fa);
+    if (!pte || !(*pte & 1)) return 0;        /* halaman tidak present */
+    if (!(*pte & PTE_COW))   return 0;        /* bukan COW */
+
+    uint64_t old_phys  = *pte & ~(uint64_t)0xFFF;
+    uint32_t old_frame = (uint32_t)(old_phys / PAGE_SIZE);
+
+    if (frame_cow_cnt[old_frame] > 1) {
+        /* Masih ada proses lain yang berbagi frame ini — alokasi frame baru */
+        uint64_t new_phys = pmm_alloc_frame();
+        if (!new_phys) return 0;  /* OOM — biarkan kernel panic */
+        /* Salin isi lama ke frame baru */
+        uint8_t *src = (uint8_t *)old_phys;
+        uint8_t *dst = (uint8_t *)new_phys;
+        int k;
+        for (k = 0; k < (int)PAGE_SIZE; k++) dst[k] = src[k];
+        /* Remap dengan RW, clear COW */
+        *pte = new_phys | 7ULL;  /* P+RW+User */
+        frame_cow_cnt[old_frame]--;
+    } else {
+        /* Kita satu-satunya pemilik — cukup remap RW, clear COW */
+        *pte = old_phys | 7ULL;  /* P+RW+User */
+    }
+    __asm__ volatile ("invlpg (%0)" :: "r"(fa) : "memory");
+    return 1;
 }

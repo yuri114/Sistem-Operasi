@@ -368,6 +368,7 @@ RINGKASAN URUTAN & STATUS
   [DONE] Fondasi R1  — Blocking I/O Sejati (keyboard, pipe, VFS stdin)  (1 April 2026)
   [DONE] Fitur C1    — ps thread display [T:X], shell redirect > <, condtest (condvar demo)  (2 April 2026)
   [DONE] Fitur C2    — TCP/UDP stack: net_tcp_connect/send/recv/close, tcp_get HTTP client  (2 April 2026)
+  [DONE] Fondasi Q   — fork()+COW, exec_replace(), demand-page thread stack, mmap/munmap  (2 April 2026)
 
 ================================================================
 
@@ -1042,7 +1043,7 @@ Berikut adalah pekerjaan fondasi yang perlu diselesaikan sebelum
 melaju ke fitur besar berikutnya (fork, TCP/UDP, filesystem inode,
 dynamic linker, dll.).
 
-Urutan prioritas: Fondasi P → Fondasi Q → Fondasi R
+Urutan prioritas: Fondasi P ✓ → Fondasi Q ✓ → Fondasi R
 
 ================================================================
 RENCANA FONDASI P — THREADING LANJUTAN
@@ -1137,41 +1138,49 @@ Prasyarat: Fondasi O selesai ✓
                  src/programs/lib.h
 
 ================================================================
-RENCANA FONDASI Q — PROSES & MEMORI LANJUTAN
-Status: [RENCANA]
+FONDASI Q — PROSES & MEMORI LANJUTAN
+Status: [SELESAI] ✓ Selesai 2 April 2026 — build 296,136 bytes, forktest OK
 Prasyarat: Fondasi P selesai
 ----------------------------------------------------------------
-  [F-Q1] fork() + copy-on-write (COW)
-         Rencana:
-           - SYS_FORK(72): duplikasi struct Task, dup user stack page,
-             mark semua page user di kedua proses sebagai read-only (COW flag)
-           - #PF handler: write ke page COW → alokasi frame baru,
-             salin isi lama, remap RW di proses yang menulis (page fault fix-up)
-           File: src/kernel/task.c, src/kernel/vmm.c (COW bit),
-                 src/kernel/kernel.c (exception_handler)
+  [F-Q1] ✓ fork() + copy-on-write (COW)
+           - SYS_FORK(73): duplikasi struct Task via int $0x80 (bukan syscall)
+           - Kernel baca child_rip/child_rsp langsung dari iretq frame di
+             kernel stack induk (kstack_top-40, kstack_top-16) — reliable
+           - task_create_fork(): susun iretq frame anak + salin GPR parent
+             (terutama rbp) dari kstack induk; hanya rax=0 (fork return anak)
+           - vmm_copy_cow(): semua page user >= 3MB ditandai RO+COW (bit 9)
+             di parent DAN child; frame_cow_cnt += 2 (parent+child share)
+           - vmm_cow_fault(): write ke page COW → alokasi frame baru + copy +
+             decrement counter; jika counter sudah 1 → remap RW langsung
+           - vmm_map_page(): intermediate entries (PML4/PDPT/PD) selalu P+RW+User;
+             proteksi akses hanya di leaf PTE — kunci x86-64 COW
+           File: task.h/c, vmm.h/c, kernel.c, syscall.h/c, lib.h
 
-  [F-Q2] exec() pengganti proses (bukan buat task baru)
-         Rencana:
-           - SYS_EXEC_REPLACE(73): muat ELF baru ke address space yang SAMA
-           - Bebaskan mapping lama (vmm_free_user_memory partial), muat
-             segmen ELF baru, reset RSP user, jalan dari entry baru
-           - Beda dari SYS_EXEC saat ini yang membuat task baru
-           File: src/kernel/elf_loader.c, src/kernel/syscall.c
+  [F-Q2] ✓ exec_replace() — pengganti proses in-place
+           - SYS_EXEC_REPLACE(74): muat ELF baru ke PML4 baru
+           - Bebaskan PML4 lama, switch CR3, inline __asm__ iretq ke entry baru
+           - Stack baru di 0x600000 (1 frame), tidak pernah kembali ke pemanggil
+           File: syscall.c
 
-  [F-Q3] Demand-paging untuk thread stack (otomatis tumbuh)
-         Rencana:
-           - Saat #PF di range stack thread (0x700000+id*0x5000..+0x4000),
-             otomatis petakan halaman berikutnya (seperti proses sudah ada)
-           - Tidak perlu alokasi semua frame di awal thread_create
-           File: src/kernel/kernel.c (exception_handler)
+  [F-Q3] ✓ Demand-paging thread stack
+           - task_create_thread(): tidak lagi alokasi 4 frame di awal
+           - tstack_frames[k] = 0 — halaman dipetakan on-demand saat #PF
+           - task_exit() thread cleanup: gunakan vmm_get_phys() untuk temukan
+             frame yang sudah ter-demand-page
+           File: task.c, kernel.c (exception_handler sudah cover range)
 
-  [F-Q4] mmap() sederhana
-         Rencana:
-           - SYS_MMAP(74): petakan n halaman di VA yang tersedia di atas 0x900000
-           - SYS_MUNMAP(75): lepas pemetaan + pmm_free_frame
-           - Gunakan untuk file-backed mapping, anonymous large buffer,
-             atau shared memory antar thread/proses
-           File: src/kernel/syscall.h/c, src/kernel/vmm.c
+  [F-Q4] ✓ mmap() / munmap() sederhana
+           - SYS_MMAP(75): bump allocator mulai 0x900000, petakan n halaman
+             anonim (zero-fill) di VA berurutan
+           - SYS_MUNMAP(76): vmm_unmap_page + pmm_free_frame tiap halaman
+           - lib.h: mmap(n_pages), munmap(addr, n_pages)
+           File: syscall.h/c, lib.h
+
+  [F-Q5] ✓ vmm_free_user_memory COW-aware
+           - Sebelumnya selalu pmm_free_frame tanpa cek refcount
+           - Kini: if frame_cow_cnt[fn] > 0 → decrement only (jangan free)
+             else → pmm_free_frame — aman saat child exit tidak double-free
+           File: vmm.c
 
 ================================================================
 RENCANA FONDASI R — I/O & DRIVER LANJUTAN

@@ -93,6 +93,12 @@
 #define SYS_COND_SIGNAL     71  // cv_signal: ebx=cond_id
 #define SYS_COND_BROADCAST  72  // cv_broadcast: ebx=cond_id
 
+/* Fondasi Q — Proses & Memori Lanjutan */
+#define SYS_FORK          73  // fork(); ebx=child_rip, edx=child_rsp → 0=child, tid=parent
+#define SYS_EXEC_REPLACE  74  // ganti image proses: ebx=nama_ptr → tidak return ke caller
+#define SYS_MMAP          75  // alloc N halaman anonim: ebx=n_pages → VA, atau 0 gagal
+#define SYS_MUNMAP        76  // bebaskan: ebx=va, edx=n_pages
+
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);
 

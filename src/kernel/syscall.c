@@ -547,6 +547,150 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         return (uint64_t)(int64_t)cv_broadcast((int)ebx);
     }
 
+    // ---------------------------------------------------------------
+    // Fondasi Q — Proses & Memori Lanjutan
+    // ---------------------------------------------------------------
+
+    // SYS_FORK(73): fork() via int 0x80.
+    // Kernel membaca RIP dan RSP user langsung dari iretq frame di kernel stack induk.
+    // Induk mendapat tid anak; anak melanjutkan eksekusi dari RIP user dengan rax=0.
+    if (eax == SYS_FORK) {
+        int parent = task_get_current();
+        uint64_t *parent_pml4 = task_get_page_dir(parent);
+        if (!parent_pml4) return (uint64_t)-1;
+
+        /* Baca RIP dan RSP user dari frame iretq di kernel stack induk.
+         * Layout kernel stack saat int80_handler + call syscall_handler:
+         *   kstack_top-8   = SS user
+         *   kstack_top-16  = RSP user   ← kita ambil
+         *   kstack_top-24  = RFLAGS
+         *   kstack_top-32  = CS user
+         *   kstack_top-40  = RIP user   ← kita ambil (= titik resume setelah int $0x80)
+         */
+        uint64_t kstack_top = task_get_rsp0(parent);
+        uint64_t child_rip  = *(uint64_t *)(kstack_top - 40);
+        uint64_t child_rsp  = *(uint64_t *)(kstack_top - 16);
+
+        if (!is_user_ptr(child_rip) || !is_user_ptr(child_rsp))
+            return (uint64_t)-1;
+
+        /* Buat PML4 anak */
+        uint64_t *child_pml4 = vmm_create_page_dir();
+        if (!child_pml4) return (uint64_t)-1;
+
+        /* Setup COW antara parent dan child */
+        vmm_copy_cow(parent_pml4, child_pml4);
+
+        /* Buat task anak */
+        int child = task_create_fork(parent, child_rip, child_rsp);
+        if (child < 0) { vmm_free_user_memory(child_pml4); return (uint64_t)-1; }
+
+        /* Pasang PML4 anak */
+        task_set_page_dir(child, child_pml4);
+
+        return (uint64_t)(int64_t)child;  /* induk mendapat tid anak */
+    }
+
+    // SYS_EXEC_REPLACE(74): ganti image proses; ebx=ptr nama file
+    // Tidak pernah kembali ke pemanggil — langsung iretq ke entry baru.
+    if (eax == SYS_EXEC_REPLACE) {
+        if (!is_user_ptr(ebx)) return (uint64_t)-1;
+        const char *name = (const char *)ebx;
+        uint32_t sz = 0;
+        const uint8_t *data = fs_read_bin(name, &sz);
+        if (!data || sz == 0) return (uint64_t)-1;
+
+        /* Muat ELF ke PML4 baru */
+        uint64_t *new_dir = vmm_create_page_dir();
+        if (!new_dir) return (uint64_t)-1;
+        uint64_t entry = elf_load(data, sz, new_dir);
+        if (!entry) { vmm_free_user_memory(new_dir); return (uint64_t)-1; }
+
+        /* Alokasikan stack user baru di 0x600000 */
+        uint64_t stack_frame = pmm_alloc_frame();
+        if (!stack_frame) { vmm_free_user_memory(new_dir); return (uint64_t)-1; }
+        vmm_map_page(new_dir, 0x600000ULL, stack_frame, 7);
+
+        int tid = task_get_current();
+        uint64_t *old_dir = task_get_page_dir(tid);
+
+        /* Reset state task */
+        task_set_page_dir(tid, new_dir);
+        task_set_heap_end(tid, 0x600000ULL); /* heap kosong, di bawah stack */
+        vfs_close_all(tid);
+        vfs_init_task(tid);
+
+        /* Switch ke PML4 baru dan bebaskan PML4 lama */
+        vmm_switch_dir(new_dir);
+        vmm_free_user_memory(old_dir);
+
+        /* Lompat langsung ke user space lewat iretq — tidak kembali dari syscall */
+        __asm__ volatile (
+            "cli\n\t"
+            "push $0x23\n\t"        /* SS: user data  */
+            "push %1\n\t"           /* RSP: user stack */
+            "push $0x202\n\t"       /* RFLAGS: IF=1   */
+            "push $0x2B\n\t"        /* CS: user code  */
+            "push %0\n\t"           /* RIP: entry     */
+            "iretq\n\t"
+            :: "r"(entry), "r"((uint64_t)0x601000)
+            : "memory"
+        );
+        __builtin_unreachable();
+    }
+
+    // SYS_MMAP(75): alloc N halaman anonim; ebx=n_pages → return VA awal, 0=gagal
+    if (eax == SYS_MMAP) {
+        uint64_t n = ebx;
+        if (n == 0 || n > 256) return 0;   /* batasi 1MB per mmap */
+        int tid = task_get_current();
+        uint64_t *pdir = task_get_page_dir(tid);
+        if (!pdir) return 0;
+        /* VA bump allocator mulai dari 0x900000 */
+        static uint64_t mmap_next_va = 0x900000ULL;
+        uint64_t va_base = mmap_next_va;
+        uint64_t i;
+        for (i = 0; i < n; i++) {
+            uint64_t frame = pmm_alloc_frame();
+            if (!frame) {
+                /* rollback: unmap yang sudah dipetakan */
+                uint64_t j;
+                for (j = 0; j < i; j++) {
+                    uint64_t va = va_base + j * 0x1000ULL;
+                    uint64_t phys = vmm_get_phys(pdir, va);
+                    vmm_unmap_page(pdir, va);
+                    if (phys >= 768ULL * 4096) pmm_free_frame(phys);
+                }
+                return 0;
+            }
+            /* zero-fill frame */
+            uint8_t *fp = (uint8_t *)frame;
+            uint32_t b;
+            for (b = 0; b < 4096; b++) fp[b] = 0;
+            vmm_map_page(pdir, va_base + i * 0x1000ULL, frame, 7);
+        }
+        mmap_next_va += n * 0x1000ULL;
+        return va_base;
+    }
+
+    // SYS_MUNMAP(76): bebaskan mapping; ebx=va, edx=n_pages
+    if (eax == SYS_MUNMAP) {
+        uint64_t va   = ebx & ~(uint64_t)0xFFF;
+        uint64_t n    = edx;
+        if (n == 0 || va < 0x900000ULL) return 0;
+        int tid = task_get_current();
+        uint64_t *pdir = task_get_page_dir(tid);
+        if (!pdir) return 0;
+        uint64_t i;
+        for (i = 0; i < n; i++) {
+            uint64_t page_va = va + i * 0x1000ULL;
+            uint64_t phys = vmm_get_phys(pdir, page_va);
+            vmm_unmap_page(pdir, page_va);
+            if (phys >= 768ULL * 4096) pmm_free_frame(phys);
+        }
+        return 0;
+    }
+
     return (uint64_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal
 }
 

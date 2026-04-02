@@ -64,6 +64,10 @@ int         task_get_current_pipe();
 uint64_t    task_get_rsp0(int id);
 int         task_get_status(int id);
 uint64_t   *task_get_page_dir(int id);
+void        task_set_page_dir(int id, uint64_t *dir);  /* F-Q: ganti page_dir */
+
+/* F-Q: buat task anak untuk fork(); RIP/RSP sudah di-set sesuai resume point user */
+int         task_create_fork(int parent_tid, uint64_t child_rip, uint64_t child_rsp);
 
 /* Pointer RSP untuk context switch AP — dibaca langsung oleh lapic_timer_isr */
 extern uint64_t *ap_current_rsp;

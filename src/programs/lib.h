@@ -1034,4 +1034,64 @@ static inline int cond_broadcast(int id) {
     return (int)syscall1(SYS_COND_BROADCAST, (long)id);
 }
 
+// ============================================================
+// Fondasi Q — Proses & Memori Lanjutan
+// ============================================================
+
+#define SYS_FORK         73
+#define SYS_EXEC_REPLACE 74
+#define SYS_MMAP         75
+#define SYS_MUNMAP       76
+
+/*
+ * fork() — duplikasi proses.
+ * Return: 0 di anak, tid anak di induk, -1 jika gagal.
+ *
+ * Menggunakan int 0x80 (bukan syscall) agar kernel bisa membaca RSP user
+ * langsung dari frame iretq yang dibuat CPU (reliable, tidak bergantung
+ * pada userspace argument passing).
+ *
+ * Kernel mengambil: child_rip dari [rsp+15*8+0] (RIP di iretq frame),
+ *                   child_rsp dari [rsp+15*8+24] (RSP di iretq frame).
+ * User hanya mengirimkan SYS_FORK (rax=73), kernel compute sisanya sendiri.
+ *
+ * Induk mendapat rax = tid anak; anak mendapat rax = 0 (dari task_create_fork).
+ */
+static inline int fork(void) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80\n\t"
+        : "=a"(ret)
+        : "a"((long)SYS_FORK)
+        : "rbx", "rcx", "rdx", "rsi", "rdi",
+          "r8",  "r9",  "r10", "r11", "r12",
+          "r13", "r14", "r15", "memory"
+    );
+    return ret;
+}
+
+/*
+ * exec_replace(name) — ganti image proses dengan program lain.
+ * Jika berhasil, tidak pernah kembali ke pemanggil.
+ * Return -1 jika gagal (program tidak ditemukan).
+ */
+static inline int exec_replace(const char *name) {
+    return (int)syscall1(SYS_EXEC_REPLACE, (long)name);
+}
+
+/*
+ * mmap(n_pages) — alokasi n_pages halaman anonim.
+ * Return: pointer ke area yang dipetakan, atau NULL jika gagal.
+ */
+static inline void *mmap(int n_pages) {
+    return (void *)syscall1(SYS_MMAP, (long)(unsigned)n_pages);
+}
+
+/*
+ * munmap(addr, n_pages) — bebaskan area mmap.
+ */
+static inline void munmap(void *addr, int n_pages) {
+    syscall2(SYS_MUNMAP, (long)addr, (long)(unsigned)n_pages);
+}
+
 #endif

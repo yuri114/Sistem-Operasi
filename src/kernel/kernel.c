@@ -32,6 +32,7 @@
 #include "sysinfo_elf_data.h"
 #include "threadtest_elf_data.h"
 #include "condtest_elf_data.h"
+#include "forktest_elf_data.h"
 #include "ipc.h"
 #include "semaphore.h"
 #include "pipe.h"
@@ -246,6 +247,7 @@ void programs_init() {
     fs_write_bin("sysinfo",       build_sysinfo_elf,       build_sysinfo_elf_len);
     fs_write_bin("threadtest",    build_threadtest_elf,    build_threadtest_elf_len);
     fs_write_bin("condtest",      build_condtest_elf,      build_condtest_elf_len);
+    fs_write_bin("forktest",      build_forktest_elf,      build_forktest_elf_len);
 }
 
 /* Deklarasi handler dari isr.asm */
@@ -276,6 +278,16 @@ static void print_hex64(uint64_t val) {
  * Semua exception lain: tampilkan Kernel Panic dan halt. */
 void exception_handler(uint64_t exc_num, uint64_t error_code,
                        uint64_t rip,      uint64_t cr2) {
+
+    /* ---- F-Q1: Copy-on-Write fault (present + write + user) ---- */
+    if (exc_num == 14 && (error_code & 7u) == 7u) {
+        /* error_code bit0=present, bit1=write, bit2=user — semua set */
+        uint64_t cr3;
+        __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+        uint64_t *pml4 = (uint64_t *)(cr3 & ~(uint64_t)0xFFF);
+        if (vmm_cow_fault(pml4, cr2)) return;  /* COW ditangani, retry instruksi */
+        /* Bukan COW — jatuh ke #PF panic di bawah */
+    }
 
     /* ---- D3: Demand paging ---- */
     if (exc_num == 14) {

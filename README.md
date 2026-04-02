@@ -166,6 +166,31 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 #### F-P5 — MAX_TASKS 32
 - `MAX_TASKS` naik dari 16 → **32** untuk mendukung lebih banyak thread/proses serentak
 
+### Fondasi Q — Proses & Memori Lanjutan (2 April 2026)
+
+#### F-Q1 — fork() + Copy-on-Write (COW)
+- **`fork()`** via `int $0x80`: kernel membaca `child_rip`/`child_rsp` dari iretq frame di kernel stack induk (`kstack_top-40`, `kstack_top-16`) — tidak bergantung pada argumen user-space
+- **`task_create_fork()`**: salin seluruh GPR parent ke kernel stack anak (terutama `rbp` frame pointer); hanya `rax=0` (return value fork di anak)
+- **`vmm_copy_cow()`**: tandai semua page user (≥ 3MB) di parent DAN child menjadi **RO + COW (bit 9)**; `frame_cow_cnt += 2` per frame
+- **`vmm_cow_fault()`**: write ke page COW → alokasi frame baru + `memcpy` + decrement counter; counter=1 → remap RW langsung (proses terakhir)
+- **`vmm_map_page()` fix**: intermediate entries (PML4/PDPT/PD) selalu `P+RW+User`; proteksi akses hanya di **leaf PTE** — wajib untuk COW x86-64
+- **`vmm_free_user_memory()` COW-aware**: cek `frame_cow_cnt` sebelum `pmm_free_frame` — cegah double-free saat child exit
+
+#### F-Q2 — exec_replace()
+- **`exec_replace(name)`**: muat ELF baru ke PML4 baru, switch CR3, bebaskan PML4 lama, lompat langsung ke entry baru via inline `iretq` — tidak pernah kembali
+- **Syscall `SYS_EXEC_REPLACE (74)`**, **lib.h**: `exec_replace(name)`
+
+#### F-Q3 — Demand-paging Thread Stack
+- **`task_create_thread()`**: tidak lagi alokasi 4 frame fisik di awal — `tstack_frames[k]=0`
+- **On-demand**: kernel stack thread dipetakan hanya saat `#PF` pertama (sudah ditangani demand-paging handler yang ada)
+- **`task_exit()` cleanup**: gunakan `vmm_get_phys()` untuk menemukan frame yang ter-demand-page
+
+#### F-Q4 — mmap() / munmap()
+- **`mmap(n_pages)`**: alokasi `n` halaman anonim (zero-fill) mulai VA `0x900000` (bump allocator per-proses)
+- **`munmap(addr, n_pages)`**: `vmm_unmap_page` + `pmm_free_frame` tiap halaman
+- **Syscall `SYS_MMAP (75)`, `SYS_MUNMAP (76)`**, **lib.h**: `mmap()`, `munmap()`
+- **Demo**: `forktest` — fork+waitpid, mmap write/read/munmap, fork+exec_replace(`hello`)
+
 #### F-R1 — Blocking I/O Sejati
 - **Keyboard non-blocking CPU**: `vfs_read(fd=0)` kini `task_block()` sampai `keyboard_handler` memanggil `task_unblock(kwaiter)` — CPU bebas untuk task lain saat menunggu input
 - **Pipe blocking sejati**: `pipe_read()` ganti `task_sleep(10)` busy-wait → `task_block()`; `pipe_write()` langsung memanggil `task_unblock(reader_waiter)` setelah menulis
@@ -485,6 +510,7 @@ Lihat [ROADMAP.txt](ROADMAP.txt) untuk roadmap lengkap.
 | Fondasi O — Stabilitas Threading | 1 Apr 2026 | Stack frame leak fix, blocking semaphore, thread-safe malloc, parent-exit guard |
 | Fondasi P+R — Threading Lanjutan | 2 Apr 2026 | Condvar, condtest, ps thread display, shell redirect >, <, SYS_PRINT via VFS |
 | TCP/UDP Stack | 2 Apr 2026 | TCP 3-way handshake, UDP send, tcp_get HTTP client, terverifikasi HTTP GET 2403 bytes |
+| Fondasi Q — Proses & Memori Lanjutan | 2 Apr 2026 | fork()+COW, exec_replace(), demand-paging thread stack, mmap/munmap, vmm_map_page intermediate fix |
 
 ---
 
