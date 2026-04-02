@@ -88,6 +88,11 @@
 #define SYS_SIGACTION   87  // daftarkan handler sinyal: ebx=sig, edx=handler_va
 #define SYS_SIGKILL_SIG 88  // kirim sinyal: ebx=tid, edx=sig → 0
 
+/* F-U — Futex + TLS */
+#define SYS_FUTEX_WAIT  89  // futex wait: ebx=addr, edx=expected → 0=dibangunkan, -1=mismatch
+#define SYS_FUTEX_WAKE  90  // futex wake: ebx=addr, edx=n_wake → jumlah yang dibangunkan
+#define SYS_GET_TLS     91  // get TLS base VA task ini
+
 /* Konstanta sinyal */
 #define SIGINT   2
 #define SIGKILL  9
@@ -264,6 +269,53 @@ static inline int waitpid_ex(int tid) {
 // F-T: kirim sinyal ke proses (seperti POSIX kill)
 static inline int kill(int tid, int sig) {
     return (int)syscall2(SYS_SIGKILL_SIG, (long)tid, (long)sig);
+}
+
+/* -----------------------------------------------------------------------
+ * F-U: Futex primitif + Mutex sederhana + Thread-Local Storage
+ * ----------------------------------------------------------------------- */
+
+/* futex_wait: blok jika *addr == expected (nilai belum berubah).
+ * Kembali 0 bila dibangunkan; -1 bila *addr sudah bukan expected (tidak blok). */
+static inline int futex_wait(int *addr, int expected) {
+    return (int)syscall2(SYS_FUTEX_WAIT, (long)addr, (long)expected);
+}
+
+/* futex_wake: bangunkan hingga n_wake waiter yang menunggu di addr.
+ * Kembalikan jumlah thread yang benar-benar dibangunkan. */
+static inline int futex_wake(int *addr, int n_wake) {
+    return (int)syscall2(SYS_FUTEX_WAKE, (long)addr, (long)n_wake);
+}
+
+/* Mutex ringan berbasis futex (tidak membutuhkan syscall jika tidak ada persaingan). */
+typedef struct { int val; } Mutex;
+
+static inline void mutex_lock(Mutex *m) {
+    while (1) {
+        /* CAS atomik: jika m->val == 0, tukar ke 1 dan kembalikan old (0) */
+        int old = __sync_val_compare_and_swap(&m->val, 0, 1);
+        if (old == 0) return;      /* berhasil ambil kunci */
+        futex_wait(&m->val, 1);    /* tunggu selama val masih 1 */
+    }
+}
+
+static inline void mutex_unlock(Mutex *m) {
+    m->val = 0;
+    __sync_synchronize();          /* memory barrier */
+    futex_wake(&m->val, 1);        /* bangunkan satu waiter */
+}
+
+/* tls_get: baca qword pertama halaman TLS thread ini via FS segment.
+ * Untuk menulis ke TLS gunakan pointer yang dikembalikan SYS_GET_TLS. */
+static inline void *tls_get_base(void) {
+    long addr;
+    __asm__ volatile ("mov %%fs:0, %0" : "=r"(addr));
+    return (void *)addr;
+}
+
+/* get_tls: kembalikan VA dasar TLS dari kernel (lebih portabel). */
+static inline void *get_tls(void) {
+    return (void *)syscall0(SYS_GET_TLS);
 }
 
 static _UHdr *_uheap_grow(unsigned int need) {

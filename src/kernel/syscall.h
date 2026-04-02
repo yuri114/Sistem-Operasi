@@ -117,6 +117,11 @@
 #define SYS_SIGACTION     87  // daftarkan handler sinyal: ebx=sig, edx=handler_va → 0
 #define SYS_SIGKILL_SIG   88  // kirim sinyal: ebx=tid, edx=sig → 0
 
+/* F-U — Futex + TLS */
+#define SYS_FUTEX_WAIT    89  // futex wait: ebx=addr, edx=expected → 0=dibangunkan, -1=mismatch
+#define SYS_FUTEX_WAKE    90  // futex wake: ebx=addr, edx=n_wake → jumlah yang dibangunkan
+#define SYS_GET_TLS       91  // get TLS base: → VA halaman TLS task ini (0x800000+tid*0x1000)
+
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);
 

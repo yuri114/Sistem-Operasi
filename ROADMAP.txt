@@ -1506,9 +1506,9 @@ RINGKASAN URUTAN & TARGET 100%
   [DONE] Fondasi R1  — Blocking I/O sejati
   [DONE] Fondasi R2  — VFS_TYPE_PIPE/NET/TTY, fd inheritance fork
   [DONE] Fondasi R3  — MFS4 inode: symlink, hardlink, stat, mkdir
-  [ TODO ] Fondasi S — Shell pipeline | sejati via VFS fd  (~82%)
-  [ TODO ] Fondasi T — Signal: SIGKILL/SIGINT, Ctrl+C, exit code  (~87%)
-  [ TODO ] Fondasi U — Futex + TLS  (~90%)
+  [DONE] Fondasi S   — Shell pipeline | sejati via VFS fd
+  [DONE] Fondasi T   — Signal: SIGKILL/SIGINT, Ctrl+C, exit code
+  [DONE] Fondasi U   — Futex + TLS  (~93%)
   [ TODO ] Fondasi V — MFS4 disk persistence + rename  (~94%)
   [ TODO ] Fondasi W — poll/select + non-blocking fd  (~97%)
   [ TODO ] Fondasi X — TCP retransmit + DNS  (~100%)

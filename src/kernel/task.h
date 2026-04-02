@@ -29,6 +29,7 @@ typedef struct {
     uint64_t  tstack_frames[4]; /* frame fisik tiap halaman stack thread (0 = kosong) */
     uint32_t  pending_signals;  /* F-T: bitmask sinyal pending (bit-N = sinyal N) */
     int       exit_code;        /* F-T: kode exit; diset oleh task_exit_code()   */
+    uint64_t  tls_frame;        /* F-U: frame fisik halaman TLS (0 = belum dialokasi) */
 } Task;
 
 /* F-T: konstanta sinyal standar */

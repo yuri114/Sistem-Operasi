@@ -211,6 +211,23 @@ int task_create_thread(uint64_t entry, uint64_t arg, int parent_tid) {
     for (k = 0; k < 15; k++) *(--stack_top) = (k == 5) ? arg : 0ULL;
 
     tasks[id].rsp = (uint64_t)stack_top;
+
+    /* F-U2: alokasi halaman TLS dan petakan di VA 0x800000 + id*0x1000.
+     * FS MSR (IA32_FS_BASE = 0xC0000100) disetel ke VA tersebut agar
+     * instruksi 'mov %%fs:offset, reg' bekerja dari user space thread. */
+    {
+        uint64_t tls_va   = 0x800000ULL + (uint64_t)id * 0x1000ULL;
+        uint64_t tls_phys = pmm_alloc_frame();
+        /* zero-fill halaman TLS */
+        uint8_t *tp = (uint8_t *)(tls_phys);
+        int zi; for (zi = 0; zi < 4096; zi++) tp[zi] = 0;
+        vmm_map_page(tasks[parent_tid].page_dir, tls_va, tls_phys, 7); /* u/s, r/w, p */
+        tasks[id].tls_frame = tls_phys;
+        /* Tulis IA32_FS_BASE MSR: ECX=0xC0000100, EDX:EAX = tls_va */
+        uint32_t lo = (uint32_t)tls_va;
+        uint32_t hi = (uint32_t)(tls_va >> 32);
+        __asm__ volatile ("wrmsr" :: "c"(0xC0000100u), "a"(lo), "d"(hi));
+    }
     return id;
 }
 
@@ -272,6 +289,14 @@ void task_switch() {
 
     if (tasks[current_task].page_dir)
         vmm_switch_dir(tasks[current_task].page_dir);
+
+    /* F-U2: jika task berikutnya adalah thread, restore FS MSR ke TLS-nya */
+    if (tasks[current_task].is_thread && tasks[current_task].tls_frame) {
+        uint64_t tls_va = 0x800000ULL + (uint64_t)current_task * 0x1000ULL;
+        uint32_t lo = (uint32_t)tls_va;
+        uint32_t hi = (uint32_t)(tls_va >> 32);
+        __asm__ volatile ("wrmsr" :: "c"(0xC0000100u), "a"(lo), "d"(hi));
+    }
 }
 
 /* ------------------------------------------------------------------
@@ -398,6 +423,10 @@ void task_exit_code(int code) {
     tasks[tid].pending_signals  = 0;
     for (k = 0; k < 4; k++) tasks[tid].tstack_frames[k] = 0;
 
+    /* F-U2: bebaskan halaman TLS thread */
+    uint64_t tls_frame_saved = tasks[tid].tls_frame;
+    tasks[tid].tls_frame = 0;
+
     /* Kembali ke boot PML4 dulu */
     vmm_switch_dir((uint64_t *)0x1000);
 
@@ -412,6 +441,12 @@ void task_exit_code(int code) {
                     vmm_unmap_page(tasks[ptid].page_dir, page_va);
                     pmm_free_frame(phys);
                 }
+            }
+            /* F-U2: unmap dan bebaskan halaman TLS thread */
+            if (tls_frame_saved) {
+                uint64_t tls_va = 0x800000ULL + (uint64_t)tid * 0x1000ULL;
+                vmm_unmap_page(tasks[ptid].page_dir, tls_va);
+                pmm_free_frame(tls_frame_saved);
             }
         }
     } else {

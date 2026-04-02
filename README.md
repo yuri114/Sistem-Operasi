@@ -235,7 +235,77 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - `SYS_PRINT` kini cek `vfs_stdout_is_file(tid)` — jika fd 1 adalah file, tulis via VFS bukan layar
 - Bisa dikombinasi: `exec prog < input > output`
 
-### SMP — Tahap H
+### Fondasi S — Shell Pipeline `|` (2 April 2026)
+
+#### F-S: Pipeline `prog1 | prog2` via VFS
+- **Parser `|`** di shell: `prog1 | prog2` dan `exec prog1 | exec prog2` keduanya didukung
+- **EOF propagation**: `write_refs` bitmask per pipe; saat prog1 exit → `vfs_close_all()` memanggil `pipe_writer_detach()` → `eof=1` → `pipe_read()` kembali 0 bukan block
+- **`vfs_stdout_is_file()`** diperluas ke `VFS_TYPE_PIPE/NET/TTY` — `SYS_PRINT` kini benar-benar menulis ke pipe jika fd 1 diredirect
+- **`vfs_redirect_out_pipe()`**: memanggil `pipe_writer_attach()` — tidak lagi salin ke fd[2] (stderr tetap ke layar)
+- **`vfs_close` + `vfs_close_all`**: memanggil `pipe_writer_detach()` untuk setiap write-end pipe yang ditutup
+- **New programs**: `ls.c` (fs_list via syscall → stdout), `grep.c` (baca stdin, filter baris berisi "test")
+- **Demo**: `exec ls | grep` → output hanya file yang namanya mengandung "test"
+
+### Fondasi T — Signal & Process Control (2 April 2026)
+
+#### F-T1 — Infrastruktur Sinyal Kernel
+- **Task struct** tambah `uint32_t pending_signals` (bitmask) + `int exit_code`
+- **`task_send_signal(tid, sig)`**: set bit + `task_unblock()` target
+- **`task_check_signals()`**: cek `SIGKILL/SIGTERM/SIGINT` pending → `task_exit_code(128+sig)`; dipanggil di awal setiap syscall dan setelah `task_block()` di `pipe_read()`
+- **Konstanta**: `SIGINT=2`, `SIGKILL=9`, `SIGTERM=15`
+
+#### F-T2 — Deliver Sinyal + Syscall
+- **`SYS_EXIT`** sekarang menerima exit code via `ebx` → `task_exit_code(ebx)`
+- **`SYS_WAITPID`** mengembalikan exit code (sebelumnya selalu 0)
+- **`SYS_SIGKILL_SIG(88)`**: kirim sinyal `edx` ke tid `ebx`
+- **`SYS_SIGACTION(87)`**: stub siap untuk handler user-space
+- **`exit_codes[MAX_TASKS]`**: array terpisah agar exit code tidak hilang saat slot dibersihkan
+
+#### F-T3 — Ctrl+C → SIGINT Foreground
+- **`keyboard_set_fg_pid(pid)`**: shell menyimpan tid foreground sebelum `task_wait()`
+- **`keyboard_handler`**: Ctrl+C (scancode 0x2E) → `task_send_signal(fg_pid, SIGINT)`, tidak masukkan karakter ke buffer
+- **Pipeline `|`**: Ctrl+C dikirim ke prog1 (writer) → EOF otomatis terkirim ke prog2 → keduanya berhenti
+
+#### F-T4 — lib.h API
+- **`exit_code(n)`**: exit dengan kode n; `exit()` delegate ke `exit_code(0)`
+- **`kill(tid, sig)`**: kirim sinyal; `waitpid_ex(tid)`**: tunggu + return exit code
+- **`task_kill(id)`**: rename dari `kill(id)` lama untuk menghindari konflik nama
+
+#### F-T5 — Demo: sigtest
+- Fork + anak sleep 10s + induk kirim SIGTERM 500ms kemudian + `waitpid_ex()` → exit code **143** (128+SIGTERM)
+- Verifikasi: anak mati jauh sebelum 10 detik
+
+---
+
+### Fondasi U — Futex + Thread-Local Storage (3 April 2026)
+
+#### F-U1 — Futex Kernel
+- **`SYS_FUTEX_WAIT(89)`**: `if (*(int*)addr == expected)` → masuk `futex_table`, `task_block()`; kembalikan 0; jika nilai sudah berubah → kembalikan -1 tanpa blok
+- **`SYS_FUTEX_WAKE(90)`**: scan `futex_table` untuk `addr`; bangunkan hingga N waiter (`task_unblock()`); kembalikan jumlah yang dibangunkan
+- **`futex_table[32]`**: array kernel `{addr, tid, used}` — maksimal 32 waiter bersamaan
+- **Fast path**: mutex tidak mengalami syscall jika kunci sedang bebas (CAS atomik user-space)
+
+#### F-U2 — Thread-Local Storage (TLS)
+- **Satu halaman TLS per thread** di VA `0x800000 + tid * 0x1000` — tidak overlap thread stack (`0x700000`)
+- **`task_create_thread()`**: alokasi frame fisik via `pmm_alloc_frame()`, peta ke page_dir parent, zero-fill, tulis MSR `IA32_FS_BASE (0xC0000100)` via `WRMSR`
+- **`task_switch()`**: restore MSR `IA32_FS_BASE` saat switch ke thread dengan `tls_frame != 0`
+- **`task_exit_code()`**: unmap + `pmm_free_frame()` TLS saat thread exit
+- **`SYS_GET_TLS(91)`**: kembalikan VA halaman TLS task saat ini
+
+#### F-U3 — lib.h API
+- **`futex_wait(addr, expected)`**: syscall wrapper → 0 jika dibangunkan, -1 jika mismatch
+- **`futex_wake(addr, n)`**: bangunkan hingga n waiter; kembalikan jumlah dibangunkan
+- **`Mutex` struct**: `{ int val; }` — inisialisasi `= {0}`
+- **`mutex_lock(m)`**: CAS loop → jika gagal `futex_wait`
+- **`mutex_unlock(m)`**: store 0 + `__sync_synchronize()` + `futex_wake(&m->val, 1)`
+- **`get_tls()`**: `SYS_GET_TLS` — kembalikan VA TLS task ini
+
+#### F-U4 — Demo: futextest
+- Spawn 4 thread, masing-masing increment shared `counter` 1000× via `mutex_lock/unlock`
+- Setiap thread cetak `TLS_VA` uniknya (membuktikan halaman TLS berbeda per thread)
+- Verifikasi akhir: `counter == 4000` → **LULUS**
+
+
 - **LAPIC**: enable via IA32_APIC_BASE MSR + SVR register, baca APIC ID, kirim INIT/SIPI IPI via ICR
 - **ACPI MADT parser**: scan RSDP → RSDT → MADT untuk enumerasi CPU/APIC ID
 - **AP trampoline** di 0x7000: real mode → 32-bit protected → 64-bit long mode
@@ -279,6 +349,8 @@ SYS_BRK(62) SYS_WAITPID(63)
 SYS_THREAD_CREATE(64) SYS_THREAD_EXIT(65) SYS_THREAD_JOIN(66)
 SYS_THREAD_SET_NAME(67)
 SYS_COND_ALLOC(68) SYS_COND_FREE(69) SYS_COND_WAIT(70) SYS_COND_SIGNAL(71) SYS_COND_BROADCAST(72)
+SYS_SIGACTION(87) SYS_SIGKILL_SIG(88)
+SYS_FUTEX_WAIT(89) SYS_FUTEX_WAKE(90) SYS_GET_TLS(91)
 ```
 
 ### Libc Minimal (`lib.h`) — Tahap F2
@@ -298,6 +370,7 @@ SYS_COND_ALLOC(68) SYS_COND_FREE(69) SYS_COND_WAIT(70) SYS_COND_SIGNAL(71) SYS_C
 | `clock` | Widget jam — tampilkan uptime HH:MM:SS (update tiap detik) |
 | `sysinfo` | Panel info sistem — PID, uptime, tick count, arsitektur |
 | `threadtest` | Demo threading — spawn 3 thread paralel, join, verifikasi counter |
+| `futextest` | Demo Fondasi U — 4 thread × 1000 iterasi via mutex futex; verifikasi counter == 4000 |
 | `hello` | Hello-world demo user process |
 | `gfxtest` | Demo grafis (pixel, rect, line) |
 | `gui_demo` | Demo window manager |
@@ -366,6 +439,8 @@ SYS_COND_ALLOC(68) SYS_COND_FREE(69) SYS_COND_WAIT(70) SYS_COND_SIGNAL(71) SYS_C
 │       ├── clock.c           # Widget jam — uptime HH:MM:SS
 │       ├── sysinfo.c         # Panel info sistem
 │       ├── threadtest.c      # Demo threading: spawn 3 thread paralel
+│       ├── sigtest.c         # Demo sinyal: fork + SIGTERM + waitpid_ex → exit code 143
+│       ├── futextest.c       # Demo Fondasi U: 4 thread × 1000 iterasi via mutex futex
 │       └── ...               # Program demo lainnya (hello, gfxtest, gui_demo, sender, piper)
 └── build/
     ├── os.img                # Disk image final (2MB, sektor raw)

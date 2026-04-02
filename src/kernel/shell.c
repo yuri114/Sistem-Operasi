@@ -81,7 +81,7 @@ static const char *shell_commands[] = {
     "ifconfig", "ping ", "cpuinfo",
     "udp_send ", "tcp_get ",
     "open ", "fread ", "fwrite ", "fclose ",
-    "mq_send ", "mq_recv", "taskstat", "meminfo", "threadtest",
+    "mq_send ", "mq_recv", "taskstat", "meminfo", "threadtest", "futextest",
     0
 };
 
@@ -361,6 +361,7 @@ static void shell_execute(){
         print("taskstat             - tampilkan distribusi task per CPU\n");
         print("meminfo              - tampilkan statistik memori fisik & heap\n");
         print("threadtest           - demo threading: spawn 3 thread secara paralel\n");
+        print("futextest            - demo futex+TLS: 4 thread increment counter 4000x\n");
         print("condtest             - demo condition variable: producer-consumer\n");
         print("open <file>          - buka file, cetak fd\n");
         print("fread <fd>           - baca isi file lewat fd\n");

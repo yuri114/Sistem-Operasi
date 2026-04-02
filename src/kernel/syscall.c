@@ -22,6 +22,18 @@
 extern void print(const char *str); // dari kernel.c
 extern void clear_screen();         // dari kernel.c
 
+/* -----------------------------------------------------------------------
+ * F-U1: Futex table — maks 32 waiter sekaligus
+ * ----------------------------------------------------------------------- */
+typedef struct {
+    uint64_t addr;  /* alamat virtual user yang ditunggu */
+    int      tid;   /* task yang menunggu */
+    int      used;  /* 1 = slot terpakai */
+} FutexEntry;
+
+#define FUTEX_TABLE_SIZE 32
+static FutexEntry futex_table[FUTEX_TABLE_SIZE];
+
 /* Validasi pointer dari user space: tolak NULL dan pointer ke kernel space (<0x300000).
  * User programs dimuat di 0x300000+. Stack user di 0x400000+. */
 static int is_user_ptr(uint64_t ptr) {
@@ -796,6 +808,52 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
     if (eax == SYS_SIGKILL_SIG) {
         task_send_signal((int)ebx, (int)edx);
         return 0;
+    }
+
+    // SYS_FUTEX_WAIT(89): jika *(int*)ebx == (int)edx → masuk futex_table, blok, return 0
+    //                     jika nilai sudah berubah → return -1 (tidak blok)
+    if (eax == SYS_FUTEX_WAIT) {
+        if (!is_user_ptr(ebx)) return (uint64_t)-1;
+        // Baca nilai atomik dari user space
+        int cur = *(volatile int *)(uint64_t)ebx;
+        if (cur != (int)edx) return (uint64_t)-1;  // nilai sudah lain, tidak perlu tunggu
+
+        // Daftarkan ke futex_table
+        int slot = -1, fi;
+        for (fi = 0; fi < FUTEX_TABLE_SIZE; fi++) {
+            if (!futex_table[fi].used) { slot = fi; break; }
+        }
+        if (slot == -1) return (uint64_t)-1;  // table penuh
+
+        int cur_tid = task_get_current();
+        futex_table[slot].addr = (uint64_t)ebx;
+        futex_table[slot].tid  = cur_tid;
+        futex_table[slot].used = 1;
+
+        task_block();  // blok sampai SYS_FUTEX_WAKE membangunkan
+        return 0;
+    }
+
+    // SYS_FUTEX_WAKE(90): bangunkan maks (int)edx waiter yang menunggu di addr ebx
+    if (eax == SYS_FUTEX_WAKE) {
+        int n_wake = (int)edx;
+        int count  = 0, fi;
+        for (fi = 0; fi < FUTEX_TABLE_SIZE && count < n_wake; fi++) {
+            if (futex_table[fi].used && futex_table[fi].addr == (uint64_t)ebx) {
+                int wtid = futex_table[fi].tid;
+                futex_table[fi].used = 0;
+                futex_table[fi].addr = 0;
+                task_unblock(wtid);
+                count++;
+            }
+        }
+        return (uint64_t)(uint32_t)count;
+    }
+
+    // SYS_GET_TLS(91): kembalikan VA halaman TLS task saat ini
+    if (eax == SYS_GET_TLS) {
+        int cur = task_get_current();
+        return 0x800000ULL + (uint64_t)(uint32_t)cur * 0x1000ULL;
     }
 
     return (uint64_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal
