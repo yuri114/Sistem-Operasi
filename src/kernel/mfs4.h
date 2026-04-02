@@ -84,4 +84,15 @@ int mfs4_unlink(const char *path);
  * Dipanggil otomatis setelah fs_write/fs_mkdir. */
 int mfs4_register(const char *path, uint8_t type);
 
+/* F-V: Rename inode (dan file MFS3 bila bertipe FILE).
+ * Kembalikan 0 jika berhasil, -1 jika old_path tidak ada atau new_path sudah ada. */
+int mfs4_rename(const char *old_path, const char *new_path);
+
+/* F-V1: Tulis inode table ke disk (LBA 513-549). Dipanggil dari fs_flush(). */
+void mfs4_flush(void);
+
+/* F-V1: Baca inode table dari disk; return 0 jika berhasil, -1 jika tidak ada data.
+ * Dipanggil dari mfs4_init() sebelum scan MFS3. */
+int mfs4_load(void);
+
 #endif /* MFS4_H */

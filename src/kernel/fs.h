@@ -60,4 +60,8 @@ uint32_t fs_get_mtime(const char *name);
 /* F-R3: akses langsung tabel file untuk mfs4_init() */
 FSFile  *fs_get_table(void);
 
+/* F-V3: rename file di MFS3 — update name field, tulis ke disk.
+ * Return 0 jika berhasil, -1 jika old tidak ada atau new sudah ada. */
+int fs_rename(const char *old_name, const char *new_name);
+
 #endif

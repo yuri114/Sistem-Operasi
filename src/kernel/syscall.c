@@ -856,6 +856,12 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         return 0x800000ULL + (uint64_t)(uint32_t)cur * 0x1000ULL;
     }
 
+    // SYS_MFS4_RENAME(92): rename inode MFS4; ebx=old_path, edx=new_path → 0/-1
+    if (eax == SYS_MFS4_RENAME) {
+        if (!is_user_ptr(ebx) || !is_user_ptr(edx)) return (uint64_t)-1;
+        return (uint64_t)(int64_t)mfs4_rename((const char*)ebx, (const char*)edx);
+    }
+
     return (uint64_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal
 }
 

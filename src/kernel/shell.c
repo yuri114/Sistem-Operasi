@@ -15,6 +15,7 @@
 #include "vfs.h"
 #include "mq.h"
 #include "keyboard.h"
+#include "mfs4.h"
 
 /*fungsi dari kernel.c*/
 void print(const char *str);
@@ -75,7 +76,7 @@ static int str_find_space(const char *str) {
 static const char *shell_commands[] = {
     "help", "clear", "about", "memtest", "uptime",
     "time", "reboot", "ls", "paging", "ps",
-    "echo ", "exec ", "read ", "write ", "del ", "kill ",
+    "echo ", "exec ", "read ", "write ", "del ", "rename ", "kill ",
     "cd ", "pwd", "export ", "env",
     "sync", "mkdir ", "chmod ",
     "ifconfig", "ping ", "cpuinfo",
@@ -348,6 +349,7 @@ static void shell_execute(){
         print("read <nama>          - baca file\n");
         print("write <nama> <isi>   - simpan file\n");
         print("del <nama>           - hapus file\n");
+        print("rename <lama> <baru> - ganti nama file (MFS4)\n");
         print("mkdir <nama>         - buat direktori\n");
         print("chmod <nama> <hex>   - ubah permission file\n");
         print("sync                 - flush dirty file ke disk\n");
@@ -519,6 +521,34 @@ static void shell_execute(){
             print(name);
             print("\n");
             set_color(GFX_WHITE, GFX_BLACK);
+        }
+    }
+    else if (str_starts_with(input_buffer, "rename ")) {
+        /* rename <lama> <baru>: pisahkan dua argumen nama file */
+        const char *args = input_buffer + 7;
+        int sp = str_find_space(args);
+        if (sp < 0) {
+            print("gunakan: rename <nama_lama> <nama_baru>\n");
+        } else {
+            char old_buf[64], new_buf[64], op[64], np[64];
+            int i;
+            for (i = 0; i < sp && i < 63; i++) old_buf[i] = args[i];
+            old_buf[sp < 63 ? sp : 63] = '\0';
+            const char *rest = args + sp + 1;
+            for (i = 0; rest[i] && i < 63; i++) new_buf[i] = rest[i];
+            new_buf[i] = '\0';
+            const char *oldp = make_path(old_buf, op, 64);
+            const char *newp = make_path(new_buf, np, 64);
+            int rc = mfs4_rename(oldp, newp);
+            if (rc == 0) {
+                set_color(GFX_LGREEN, GFX_BLACK);
+                print("Renamed: "); print(oldp); print(" -> "); print(newp); print("\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+            } else {
+                set_color(GFX_LRED, GFX_BLACK);
+                print("rename gagal (file tidak ada atau tujuan sudah ada)\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+            }
         }
     }
     else if(str_compare(input_buffer, "write")){

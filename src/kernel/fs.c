@@ -1,5 +1,6 @@
 #include "fs.h"
 #include "ata.h"
+#include "mfs4.h"
 #include "memory.h"
 
 extern uint32_t get_ticks(void);
@@ -417,6 +418,8 @@ int fs_flush(void) {
             count++;
         }
     }
+    /* F-V2: flush inode table MFS4 ke disk setelah MFS3 selesai */
+    mfs4_flush();
     return count;
 }
 
@@ -449,3 +452,22 @@ uint32_t fs_get_mtime(const char *name) {
 
 /* F-R3: Ekspos tabel file MFS3 ke mfs4.c untuk inode scan. */
 FSFile *fs_get_table(void) { return files; }
+
+/* F-V3: Rename file di MFS3 — update name field dan tulis ulang slot ke disk. */
+int fs_rename(const char *old_name, const char *new_name) {
+    int i;
+    if (!old_name || !new_name) return -1;
+    /* Periksa new_name belum dipakai */
+    for (i = 0; i < FS_MAX_FILES; i++)
+        if (files[i].used && fs_strcmp(files[i].name, new_name)) return -1;
+    for (i = 0; i < FS_MAX_FILES; i++) {
+        if (files[i].used && fs_strcmp(files[i].name, old_name)) {
+            fs_strcpy(files[i].name, new_name, FS_MAX_NAME);
+            files[i].dirty = 1;
+            files[i].mtime = timer_get_ticks();
+            fs_disk_save(i);
+            return 0;
+        }
+    }
+    return -1;  /* old_name tidak ditemukan */
+}

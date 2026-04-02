@@ -122,6 +122,9 @@
 #define SYS_FUTEX_WAKE    90  // futex wake: ebx=addr, edx=n_wake → jumlah yang dibangunkan
 #define SYS_GET_TLS       91  // get TLS base: → VA halaman TLS task ini (0x800000+tid*0x1000)
 
+/* F-V — MFS4 Disk Persistence + Rename */
+#define SYS_MFS4_RENAME   92  // rename: ebx=old_path_ptr, edx=new_path_ptr → 0/-1
+
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);
 

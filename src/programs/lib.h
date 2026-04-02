@@ -1186,6 +1186,8 @@ static inline void munmap(void *addr, int n_pages) {
 #define SYS_MFS4_LISTDIR   84
 #define SYS_MFS4_UNLINK    85
 #define SYS_MFS4_MKDIR     86
+/* F-V3 */
+#define SYS_MFS4_RENAME    92  /* rename inode: ebx=old_path, edx=new_path → 0/-1 */
 
 /*
  * pipe2(fds) — buat anonymous pipe.
@@ -1260,6 +1262,9 @@ static inline int mfs4_unlink(const char *path) {
 }
 static inline int mfs4_mkdir(const char *path) {
     return (int)syscall1(SYS_MFS4_MKDIR, (long)path);
+}
+static inline int mfs4_rename_u(const char *old_path, const char *new_path) {
+    return (int)syscall2(SYS_MFS4_RENAME, (long)old_path, (long)new_path);
 }
 
 #endif

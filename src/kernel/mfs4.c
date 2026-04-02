@@ -1,10 +1,27 @@
 /* mfs4.c — MFS4 inode layer */
 #include "mfs4.h"
 #include "fs.h"
+#include "ata.h"
 #include "timer.h"
 #include <stdint.h>
 
 extern void print(const char *s);
+
+/* -----------------------------------------------------------------------
+ * F-V1: Layout disk persistence MFS4
+ *   LBA 513       : metadata — magic[4] + next_inode_id[4]
+ *   LBA 514–549   : inode table — 128 × sizeof(MFS4Inode) = 18432 bytes
+ *                   = 36 sektor (18432 / 512 = 36 tepat)
+ * ----------------------------------------------------------------------- */
+#define MFS4_MAGIC0     'M'
+#define MFS4_MAGIC1     'F'
+#define MFS4_MAGIC2     'S'
+#define MFS4_MAGIC3     '4'
+#define MFS4_LBA_META   513u
+#define MFS4_LBA_DATA   514u
+/* sizeof(MFS4Inode) = 144 bytes; 128 * 144 = 18432 B = 36 sektor */
+#define MFS4_INODE_BYTES  ((uint32_t)(MFS4_MAX_INODES * sizeof(MFS4Inode)))
+#define MFS4_INODE_SECTS  ((MFS4_INODE_BYTES + 511u) / 512u)
 
 /* ------------------------------------------------------------------ */
 static MFS4Inode inodes[MFS4_MAX_INODES];
@@ -60,7 +77,10 @@ void mfs4_init(void)
     for (i = 0; i < MFS4_MAX_INODES; i++) inodes[i].used = 0;
     next_inode_id = 1;
 
-    /* Scan semua file/dir MFS3 dan daftarkan */
+    /* F-V1: coba baca dari disk dulu — jika berhasil, data persisten digunakan */
+    if (mfs4_load() == 0) return;
+
+    /* Disk kosong / belum pernah flush: scan semua file/dir MFS3 dan daftarkan */
     extern FSFile *fs_get_table(void);  /* akses langsung tabel MFS3 */
     FSFile *tbl = fs_get_table();
     if (!tbl) return;
@@ -262,3 +282,97 @@ int mfs4_register(const char *path, uint8_t type)
 
 /* Ekspos tabel inode untuk fs.c */
 FSFile *fs_get_table(void);
+
+/* -----------------------------------------------------------------------
+ * F-V1: mfs4_flush — tulis inode table ke disk
+ * ----------------------------------------------------------------------- */
+void mfs4_flush(void)
+{
+    int i;
+    uint8_t buf[512];
+
+    if (!ata_disk_present()) return;
+
+    /* Sektor metadata: magic + next_inode_id */
+    for (i = 0; i < 512; i++) buf[i] = 0;
+    buf[0] = MFS4_MAGIC0; buf[1] = MFS4_MAGIC1;
+    buf[2] = MFS4_MAGIC2; buf[3] = MFS4_MAGIC3;
+    buf[4] = (uint8_t)(next_inode_id);
+    buf[5] = (uint8_t)(next_inode_id >> 8);
+    buf[6] = (uint8_t)(next_inode_id >> 16);
+    buf[7] = (uint8_t)(next_inode_id >> 24);
+    ata_write_sector(MFS4_LBA_META, buf);
+
+    /* Sektor data: inode table mentah */
+    const uint8_t *raw = (const uint8_t *)inodes;
+    uint32_t total  = MFS4_INODE_BYTES;
+    uint32_t offset = 0;
+    uint32_t lba    = MFS4_LBA_DATA;
+
+    while (offset < total) {
+        uint32_t n = total - offset;
+        if (n > 512u) n = 512u;
+        for (i = 0; i < (int)n; i++)    buf[i] = raw[offset + i];
+        for (i = (int)n; i < 512; i++) buf[i] = 0;
+        ata_write_sector(lba, buf);
+        offset += 512u;
+        lba++;
+    }
+}
+
+/* -----------------------------------------------------------------------
+ * F-V1: mfs4_load — baca inode table dari disk
+ * Return 0 jika berhasil (magic cocok), -1 jika tidak ada data.
+ * ----------------------------------------------------------------------- */
+int mfs4_load(void)
+{
+    int i;
+    uint8_t buf[512];
+
+    if (!ata_disk_present()) return -1;
+
+    if (ata_read_sector(MFS4_LBA_META, buf) != 0) return -1;
+    if (buf[0] != MFS4_MAGIC0 || buf[1] != MFS4_MAGIC1 ||
+        buf[2] != MFS4_MAGIC2 || buf[3] != MFS4_MAGIC3) return -1;
+
+    next_inode_id = (uint32_t)buf[4] | ((uint32_t)buf[5] << 8) |
+                   ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
+
+    uint8_t *raw    = (uint8_t *)inodes;
+    uint32_t total  = MFS4_INODE_BYTES;
+    uint32_t offset = 0;
+    uint32_t lba    = MFS4_LBA_DATA;
+
+    while (offset < total) {
+        if (ata_read_sector(lba, buf) != 0) return -1;
+        uint32_t n = total - offset;
+        if (n > 512u) n = 512u;
+        for (i = 0; i < (int)n; i++) raw[offset + i] = buf[i];
+        offset += 512u;
+        lba++;
+    }
+    return 0;
+}
+
+/* -----------------------------------------------------------------------
+ * F-V3: mfs4_rename — ganti nama path sebuah inode
+ * Untuk inode FILE: rename juga di MFS3 (via fs_rename).
+ * Hardlink lain yang share inode_id tetap dengan path aslinya.
+ * ----------------------------------------------------------------------- */
+int mfs4_rename(const char *old_path, const char *new_path)
+{
+    if (!old_path || !new_path) return -1;
+    MFS4Inode *nd = find_inode(old_path);
+    if (!nd) return -1;
+    if (find_inode(new_path)) return -1;  /* tujuan sudah ada */
+
+    /* Untuk FILE: rename entry di MFS3 terlebih dulu */
+    if (nd->type == MFS4_TYPE_FILE) {
+        if (fs_rename(nd->target, new_path) != 0) return -1;
+        s_copy(nd->target, new_path, MFS4_PATH_LEN);
+    }
+
+    s_copy(nd->path, new_path, MFS4_PATH_LEN);
+    nd->mtime = (uint32_t)get_ticks();
+    return 0;
+}

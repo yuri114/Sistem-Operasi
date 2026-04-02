@@ -305,6 +305,28 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - Setiap thread cetak `TLS_VA` uniknya (membuktikan halaman TLS berbeda per thread)
 - Verifikasi akhir: `counter == 4000` → **LULUS**
 
+---
+
+### Fondasi V — MFS4 Disk Persistence + Rename (3 April 2026)
+
+#### F-V1 — Layout Disk MFS4
+- **LBA 513**: metadata — magic `MFS4` (4 byte) + `next_inode_id` (4 byte)
+- **LBA 514–549**: inode table — 128 × `sizeof(MFS4Inode)` = 18432 bytes = 36 sektor
+- **`mfs4_flush()`**: tulis metadata + inode table ke disk; dipanggil otomatis dari `fs_flush()` (`sync`)
+- **`mfs4_load()`**: baca dari disk; return 0 jika magic cocok, -1 jika kosong/korup
+
+#### F-V2 — Integrasi fs_flush + mfs4_init
+- **`mfs4_init()`**: coba `mfs4_load()` terlebih dulu — jika berhasil, data persisten digunakan langsung; jika gagal (boot pertama), scan MFS3 seperti sebelumnya
+- **`fs_flush()`** di `fs.c`: setelah flush MFS3, panggil `mfs4_flush()` secara atomik
+- **Shell `sync`**: `SYS_FS_SYNC` → `fs_flush()` → simpan MFS3 + MFS4 sekaligus
+
+#### F-V3 — Rename File
+- **`mfs4_rename(old, new)`**: update `nd->path`; untuk FILE juga rename di MFS3 via `fs_rename()`
+- **`fs_rename(old, new)`** baru di `fs.c`: update `files[i].name`, set dirty, `fs_disk_save()`
+- **`SYS_MFS4_RENAME(92)`**: kernel handler — validasi pointer + panggil `mfs4_rename()`
+- **Shell `rename <lama> <baru>`**: command baru; cetak konfirmasi hijau/merah
+- **`mfs4_rename_u(old, new)`** di `lib.h`: wrapper syscall untuk user program
+
 
 - **LAPIC**: enable via IA32_APIC_BASE MSR + SVR register, baca APIC ID, kirim INIT/SIPI IPI via ICR
 - **ACPI MADT parser**: scan RSDP → RSDT → MADT untuk enumerasi CPU/APIC ID
@@ -351,6 +373,7 @@ SYS_THREAD_SET_NAME(67)
 SYS_COND_ALLOC(68) SYS_COND_FREE(69) SYS_COND_WAIT(70) SYS_COND_SIGNAL(71) SYS_COND_BROADCAST(72)
 SYS_SIGACTION(87) SYS_SIGKILL_SIG(88)
 SYS_FUTEX_WAIT(89) SYS_FUTEX_WAKE(90) SYS_GET_TLS(91)
+SYS_MFS4_RENAME(92)
 ```
 
 ### Libc Minimal (`lib.h`) — Tahap F2

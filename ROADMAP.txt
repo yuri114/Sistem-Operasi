@@ -1509,7 +1509,7 @@ RINGKASAN URUTAN & TARGET 100%
   [DONE] Fondasi S   — Shell pipeline | sejati via VFS fd
   [DONE] Fondasi T   — Signal: SIGKILL/SIGINT, Ctrl+C, exit code
   [DONE] Fondasi U   — Futex + TLS  (~93%)
-  [ TODO ] Fondasi V — MFS4 disk persistence + rename  (~94%)
+  [DONE] Fondasi V   — MFS4 disk persistence + rename  (~96%)
   [ TODO ] Fondasi W — poll/select + non-blocking fd  (~97%)
   [ TODO ] Fondasi X — TCP retransmit + DNS  (~100%)
 
