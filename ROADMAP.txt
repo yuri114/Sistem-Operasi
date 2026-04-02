@@ -1499,6 +1499,42 @@ Tujuan: TCP stack dapat menangani paket hilang / out-of-order
                  src/programs/lib.h
 
 ================================================================
+FONDASI Y — HTTP CLIENT (curl)
+================================================================
+Status: [SELESAI] ✓ Fondasi Y selesai — HTTP client curl via DNS+TCP, build 377704 bytes
+Prioritas: 7
+Prasyarat: Fondasi X (DNS + TCP stack) selesai ✓
+----------------------------------------------------------------
+Tujuan: OS dapat mengambil halaman web melalui HTTP/1.0 —
+        DNS resolve hostname → TCP connect port 80 →
+        kirim GET request → tampilkan response ke layar.
+
+  [F-Y1] URL parser sederhana
+         Rencana:
+           - parse_http_url(url, host_out, path_out):
+             terima "http://hostname/path", ekstrak hostname dan path
+           - Jika tidak ada path → gunakan "/"
+           - Tidak mendukung https (tidak ada TLS)
+           File: src/kernel/net.c
+
+  [F-Y2] http_get() — HTTP/1.0 request
+         Rencana:
+           - http_get(url): panggil parse_http_url → dns_resolve →
+             net_tcp_connect(ip, 80) → kirim request:
+             "GET /path HTTP/1.0\r\nHost: hostname\r\nConnection: close\r\n\r\n"
+           - Loop net_tcp_recv() hingga koneksi ditutup server
+           - Print response: header abu-abu, body putih
+           - Return 0 sukses, -1 error (DNS/connect/timeout)
+           File: src/kernel/net.c, src/kernel/net.h
+
+  [F-Y3] Shell: curl <url>
+         Rencana:
+           - Deteksi "curl " di shell input
+           - Panggil http_get(url) → cetak hasil ke layar
+           - Error: cetak pesan merah
+           File: src/kernel/shell.c
+
+================================================================
 RINGKASAN URUTAN & TARGET 100%
 ================================================================
 
@@ -1515,6 +1551,7 @@ RINGKASAN URUTAN & TARGET 100%
   [DONE] Fondasi U   — Futex + TLS  (~93%)
   [DONE] Fondasi V   — MFS4 disk persistence + rename  (~96%)
   [DONE] Fondasi W   — poll/select + non-blocking fd  (~97%)
-  [DONE] Fondasi X   — TCP retransmit + DNS  (~100%) ← SELESAI
+  [DONE] Fondasi X   — TCP retransmit + DNS  (~100%)
+  [DONE] Fondasi Y   — HTTP client curl  (~103%) ← SELESAI
 
 ================================================================

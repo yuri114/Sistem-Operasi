@@ -18,6 +18,7 @@
 extern void     print(const char *s);
 extern void     itoa(uint32_t n, char *buf);
 extern uint32_t get_ticks(void);
+extern void     set_color(uint32_t fg, uint32_t bg);
 
 /* ---- Konfigurasi jaringan statis ---- */
 static uint8_t my_mac[6];
@@ -936,4 +937,168 @@ void net_tcp_tick(void) {
             c->ka_next_tick = now + TCP_KEEPALIVE_INTVL;
         }
     }
+}
+
+/* ================================================================== */
+/* F-Y2: http_get(url) — HTTP/1.0 GET request                         */
+/* url format: "http://hostname/path" atau "http://hostname"           */
+/* Cetak header (abu-abu) dan body (putih) langsung ke layar.          */
+/* Return 0 sukses, -1 error.                                          */
+/* ================================================================== */
+
+/* Warna untuk header dan body HTTP */
+#define HTTP_COLOR_HEADER  0x888888u  /* abu-abu */
+#define HTTP_COLOR_BODY    0xFFFFFFu  /* putih   */
+#define HTTP_COLOR_ERROR   0xFF4444u  /* merah   */
+#define HTTP_COLOR_INFO    0x44FF44u  /* hijau   */
+#define HTTP_COLOR_BG      0x000000u  /* hitam   */
+
+/* Helper: hitung panjang string */
+static int http_strlen(const char *s) {
+    int n = 0; while (s[n]) n++; return n;
+}
+
+/* Helper: salin string, return a + panjang yang disalin */
+static char *http_append(char *dst, const char *src) {
+    while (*src) *dst++ = *src++;
+    return dst;
+}
+
+/* Helper: parse URL "http://host/path" atau "http://host"
+ * Isi host_out (max 128) dan path_out (max 256).
+ * Return 1 sukses, 0 gagal. */
+static int parse_http_url(const char *url,
+                          char host_out[128], char path_out[256]) {
+    /* Harus mulai dengan "http://" */
+    const char *p = url;
+    if (p[0]!='h'||p[1]!='t'||p[2]!='t'||p[3]!='p'||
+        p[4]!=':'||p[5]!='/'||p[6]!='/') return 0;
+    p += 7;  /* lewati "http://" */
+
+    /* Copy hostname sampai '/' atau '\0' */
+    int hi = 0;
+    while (*p && *p != '/' && hi < 127) host_out[hi++] = *p++;
+    host_out[hi] = '\0';
+    if (hi == 0) return 0;
+
+    /* Path: sisa string, default "/" */
+    if (*p == '\0') {
+        path_out[0] = '/'; path_out[1] = '\0';
+    } else {
+        int pi = 0;
+        while (*p && pi < 255) path_out[pi++] = *p++;
+        path_out[pi] = '\0';
+    }
+    return 1;
+}
+
+int http_get(const char *url) {
+    char host[128], path[256];
+    if (!parse_http_url(url, host, path)) {
+        set_color(HTTP_COLOR_ERROR, HTTP_COLOR_BG);
+        print("curl: URL tidak valid. Gunakan: http://hostname/path\n");
+        set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+        return -1;
+    }
+
+    /* Cetak info DNS resolve */
+    set_color(HTTP_COLOR_INFO, HTTP_COLOR_BG);
+    print("curl: resolving "); print(host); print("...\n");
+    set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+
+    uint8_t ip[4];
+    if (!dns_resolve(host, ip)) {
+        set_color(HTTP_COLOR_ERROR, HTTP_COLOR_BG);
+        print("curl: gagal resolve hostname '"); print(host); print("'\n");
+        set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+        return -1;
+    }
+
+    /* Cetak IP */
+    char nbuf[6];
+    set_color(HTTP_COLOR_INFO, HTTP_COLOR_BG);
+    print("curl: connecting "); 
+    itoa(ip[0],nbuf); print(nbuf); print(".");
+    itoa(ip[1],nbuf); print(nbuf); print(".");
+    itoa(ip[2],nbuf); print(nbuf); print(".");
+    itoa(ip[3],nbuf); print(nbuf); print(":80...\n");
+    set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+
+    int conn = net_tcp_connect(ip, 80);
+    if (conn < 0) {
+        set_color(HTTP_COLOR_ERROR, HTTP_COLOR_BG);
+        if (conn == -2)
+            print("curl: connection refused\n");
+        else
+            print("curl: connection timeout\n");
+        set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+        return -1;
+    }
+
+    /* Bangun HTTP request */
+    static char req[512];
+    char *w = req;
+    w = http_append(w, "GET ");
+    w = http_append(w, path);
+    w = http_append(w, " HTTP/1.0\r\nHost: ");
+    w = http_append(w, host);
+    w = http_append(w, "\r\nConnection: close\r\nUser-Agent: OriaOS/1.0\r\n\r\n");
+    *w = '\0';
+
+    net_tcp_send(conn, req, (uint16_t)http_strlen(req));
+
+    /* Baca response — cetak header abu-abu, body putih */
+    static uint8_t rbuf[1500];
+    int in_body = 0;
+    int total   = 0;
+    int n;
+
+    /* Status line + header: cari \r\n\r\n sebagai pemisah header/body */
+    /* Buffer sementara untuk deteksi \r\n\r\n lintas chunk */
+    static char hdr_scan[8];
+    int hdr_scan_len = 0;
+
+    set_color(HTTP_COLOR_HEADER, HTTP_COLOR_BG);
+
+    while ((n = net_tcp_recv(conn, rbuf, (uint16_t)sizeof(rbuf))) > 0) {
+        int i;
+        for (i = 0; i < n; i++) {
+            uint8_t ch = rbuf[i];
+            if (!in_body) {
+                /* Cari urutan \r\n\r\n */
+                if (hdr_scan_len < 4) {
+                    hdr_scan[hdr_scan_len++] = (char)ch;
+                } else {
+                    hdr_scan[0]=hdr_scan[1];
+                    hdr_scan[1]=hdr_scan[2];
+                    hdr_scan[2]=hdr_scan[3];
+                    hdr_scan[3]=(char)ch;
+                }
+                /* Print karakter header */
+                char s2[2]; s2[0]=(char)ch; s2[1]='\0';
+                print(s2);
+                /* Cek apakah sudah menemukan \r\n\r\n */
+                if (hdr_scan_len >= 4 &&
+                    hdr_scan[0]=='\r' && hdr_scan[1]=='\n' &&
+                    hdr_scan[2]=='\r' && hdr_scan[3]=='\n') {
+                    in_body = 1;
+                    set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+                }
+            } else {
+                /* Print body */
+                char s2[2]; s2[0]=(char)ch; s2[1]='\0';
+                print(s2);
+                total++;
+            }
+        }
+    }
+
+    net_tcp_close(conn);
+
+    set_color(HTTP_COLOR_INFO, HTTP_COLOR_BG);
+    print("\ncurl: selesai (");
+    itoa((uint32_t)total, nbuf); print(nbuf);
+    print(" bytes body)\n");
+    set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+    return 0;
 }

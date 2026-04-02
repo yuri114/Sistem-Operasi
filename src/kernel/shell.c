@@ -80,7 +80,7 @@ static const char *shell_commands[] = {
     "cd ", "pwd", "export ", "env",
     "sync", "mkdir ", "chmod ",
     "ifconfig", "ping ", "cpuinfo",
-    "udp_send ", "tcp_get ", "nslookup ",
+    "udp_send ", "tcp_get ", "nslookup ", "curl ",
     "open ", "fread ", "fwrite ", "fclose ",
     "mq_send ", "mq_recv", "taskstat", "meminfo", "threadtest", "futextest",
     "polltest",
@@ -361,6 +361,7 @@ static void shell_execute(){
         print("udp_send <ip> <port> <pesan> - kirim UDP datagram\n");
         print("tcp_get <ip> <port> [path]   - HTTP GET via TCP (demo koneksi internet)\n");
         print("nslookup <hostname>          - resolve DNS A record via 8.8.8.8\n");
+        print("curl <url>                   - HTTP GET, tampilkan response (http://host/path)\n");
         print("cpuinfo              - tampilkan info SMP (BSP/AP online)\n");
         print("taskstat             - tampilkan distribusi task per CPU\n");
         print("meminfo              - tampilkan statistik memori fisik & heap\n");
@@ -1035,6 +1036,16 @@ static void shell_execute(){
                     set_color(GFX_WHITE, GFX_BLACK);
                 }
             }
+        }
+    }
+    /* F-Y3: curl <url> — HTTP GET */
+    else if (str_starts_with(input_buffer, "curl ")) {
+        const char *url = input_buffer + 5;
+        while (*url == ' ') url++;
+        if (!*url) {
+            print("curl: gunakan: curl http://hostname/path\n");
+        } else {
+            http_get(url);
         }
     }
     /* F-X4: nslookup <hostname> */

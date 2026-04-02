@@ -56,4 +56,9 @@ void net_tcp_tick(void);
  * Return 1 + out_ip diisi jika sukses, 0 jika timeout/error. */
 int  dns_resolve(const char *hostname, uint8_t out_ip[4]);
 
+/* F-Y2: HTTP GET client — fetch URL via HTTP/1.0, cetak response ke layar.
+ * url format: "http://hostname/path" atau "http://hostname"
+ * Return 0 sukses, -1 error. */
+int  http_get(const char *url);
+
 #endif
