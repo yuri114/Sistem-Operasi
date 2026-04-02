@@ -55,7 +55,7 @@ static uint16_t ip_id_counter = 1;
 #define TCP_PSH  0x08
 #define TCP_ACK  0x10
 
-#define TCP_RX_SIZE   1024  /* RX ring buffer per connection   */
+#define TCP_RX_SIZE   4096  /* RX ring buffer per connection   */
 #define TCP_TX_SIZE   1400  /* retransmit buffer per connection*/
 #define TCP_MAX_CONN  4     /* simultaneous TCP connections    */
 #define TCP_RTO       200   /* retransmit timeout (ms)         */
@@ -298,7 +298,12 @@ static int net_process(const uint8_t *pkt, uint16_t len,
         uint8_t ihl        = (uint8_t)((ip[0] & 0xF) * 4);
         uint8_t proto      = ip[9];
         const uint8_t *pay = ip + ihl;
-        int pay_len        = (int)len - 14 - ihl;
+        /* Gunakan IP total-length, bukan panjang frame Ethernet.
+         * Frame Ethernet di-pad ke min 60 byte → padding masuk sebagai
+         * "payload" palsu jika pakai (len-14-ihl). */
+        uint16_t ip_total  = (uint16_t)(((uint16_t)ip[2] << 8) | ip[3]);
+        int pay_len        = (int)ip_total - (int)ihl;
+        if (pay_len < 0) pay_len = 0;
 
         /* Opportunistically cache pengirim IP→MAC */
         arp_cache_put(ip + 12, pkt + 6);
@@ -539,7 +544,7 @@ static void tcp_rx_process(const uint8_t *ip_hdr, const uint8_t *tcp_seg, int tc
             /* F-X1: ACK clears retransmit buffer jika semua data ter-ack */
             if (flags & TCP_ACK) {
                 if (c->tx_len > 0 && sack >= c->tx_seq + c->tx_len)
-                    c->tx_len = 0;  /* semua ter-ack */
+                    c->tx_len = 0;
                 if (c->state == TCP_FIN_WAIT1 && sack == c->snd_nxt)
                     c->state = TCP_FIN_WAIT2;
                 else
@@ -864,8 +869,10 @@ int net_tcp_recv(int id, void *buf, uint16_t maxlen) {
             return (int)got;
         }
         /* Remote closed and no more data */
-        if (c->fin_recv || c->state == TCP_CLOSE_WAIT ||
-            c->state == TCP_CLOSED || !c->used) return 0;
+        if (c->fin_recv)              return 0;
+        if (c->state == TCP_CLOSE_WAIT) return 0;
+        if (c->state == TCP_CLOSED)     return 0;
+        if (!c->used)                   return 0;
     }
     return 0;  /* timeout */
 }
@@ -940,9 +947,9 @@ void net_tcp_tick(void) {
 }
 
 /* ================================================================== */
-/* F-Y2: http_get(url) — HTTP/1.0 GET request                         */
+/* F-Z: http_get(url) — HTTP/1.1 GET + chunked decode + redirect      */
 /* url format: "http://hostname/path" atau "http://hostname"           */
-/* Cetak header (abu-abu) dan body (putih) langsung ke layar.          */
+/* Cetak status (warna), header (abu-abu), body (putih).               */
 /* Return 0 sukses, -1 error.                                          */
 /* ================================================================== */
 
@@ -951,154 +958,276 @@ void net_tcp_tick(void) {
 #define HTTP_COLOR_BODY    0xFFFFFFu  /* putih   */
 #define HTTP_COLOR_ERROR   0xFF4444u  /* merah   */
 #define HTTP_COLOR_INFO    0x44FF44u  /* hijau   */
+#define HTTP_COLOR_WARN    0xFFFF00u  /* kuning  */
 #define HTTP_COLOR_BG      0x000000u  /* hitam   */
+
+#define HTTP_WORK_BUF   8192
+#define HTTP_MAX_REDIR  3
+
+static uint8_t http_work[HTTP_WORK_BUF];
+static char    http_decoded[HTTP_WORK_BUF];
 
 /* Helper: hitung panjang string */
 static int http_strlen(const char *s) {
     int n = 0; while (s[n]) n++; return n;
 }
 
-/* Helper: salin string, return a + panjang yang disalin */
+/* Helper: append string ke dst, return pointer setelah akhir */
 static char *http_append(char *dst, const char *src) {
     while (*src) *dst++ = *src++;
     return dst;
 }
 
 /* Helper: parse URL "http://host/path" atau "http://host"
- * Isi host_out (max 128) dan path_out (max 256).
  * Return 1 sukses, 0 gagal. */
 static int parse_http_url(const char *url,
                           char host_out[128], char path_out[256]) {
-    /* Harus mulai dengan "http://" */
     const char *p = url;
     if (p[0]!='h'||p[1]!='t'||p[2]!='t'||p[3]!='p'||
         p[4]!=':'||p[5]!='/'||p[6]!='/') return 0;
-    p += 7;  /* lewati "http://" */
-
-    /* Copy hostname sampai '/' atau '\0' */
+    p += 7;
     int hi = 0;
     while (*p && *p != '/' && hi < 127) host_out[hi++] = *p++;
     host_out[hi] = '\0';
     if (hi == 0) return 0;
-
-    /* Path: sisa string, default "/" */
-    if (*p == '\0') {
-        path_out[0] = '/'; path_out[1] = '\0';
-    } else {
-        int pi = 0;
-        while (*p && pi < 255) path_out[pi++] = *p++;
-        path_out[pi] = '\0';
-    }
+    if (*p == '\0') { path_out[0]='/'; path_out[1]='\0'; }
+    else { int pi=0; while (*p && pi<255) path_out[pi++]=*p++; path_out[pi]='\0'; }
     return 1;
 }
 
-int http_get(const char *url) {
-    char host[128], path[256];
-    if (!parse_http_url(url, host, path)) {
-        set_color(HTTP_COLOR_ERROR, HTTP_COLOR_BG);
-        print("curl: URL tidak valid. Gunakan: http://hostname/path\n");
-        set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
-        return -1;
-    }
+/* Helper: parse status code dari "HTTP/1.x NNN ..." */
+static int http_parse_status(const char *hdr) {
+    int i = 0;
+    while (hdr[i] && hdr[i] != ' ') i++;
+    while (hdr[i] == ' ') i++;
+    int code = 0;
+    while (hdr[i] >= '0' && hdr[i] <= '9') { code = code*10 + (hdr[i]-'0'); i++; }
+    return code;
+}
 
-    /* Cetak info DNS resolve */
-    set_color(HTTP_COLOR_INFO, HTTP_COLOR_BG);
-    print("curl: resolving "); print(host); print("...\n");
-    set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
-
-    uint8_t ip[4];
-    if (!dns_resolve(host, ip)) {
-        set_color(HTTP_COLOR_ERROR, HTTP_COLOR_BG);
-        print("curl: gagal resolve hostname '"); print(host); print("'\n");
-        set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
-        return -1;
-    }
-
-    /* Cetak IP */
-    char nbuf[6];
-    set_color(HTTP_COLOR_INFO, HTTP_COLOR_BG);
-    print("curl: connecting "); 
-    itoa(ip[0],nbuf); print(nbuf); print(".");
-    itoa(ip[1],nbuf); print(nbuf); print(".");
-    itoa(ip[2],nbuf); print(nbuf); print(".");
-    itoa(ip[3],nbuf); print(nbuf); print(":80...\n");
-    set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
-
-    int conn = net_tcp_connect(ip, 80);
-    if (conn < 0) {
-        set_color(HTTP_COLOR_ERROR, HTTP_COLOR_BG);
-        if (conn == -2)
-            print("curl: connection refused\n");
-        else
-            print("curl: connection timeout\n");
-        set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
-        return -1;
-    }
-
-    /* Bangun HTTP request */
-    static char req[512];
-    char *w = req;
-    w = http_append(w, "GET ");
-    w = http_append(w, path);
-    w = http_append(w, " HTTP/1.0\r\nHost: ");
-    w = http_append(w, host);
-    w = http_append(w, "\r\nConnection: close\r\nUser-Agent: OriaOS/1.0\r\n\r\n");
-    *w = '\0';
-
-    net_tcp_send(conn, req, (uint16_t)http_strlen(req));
-
-    /* Baca response — cetak header abu-abu, body putih */
-    static uint8_t rbuf[1500];
-    int in_body = 0;
-    int total   = 0;
-    int n;
-
-    /* Status line + header: cari \r\n\r\n sebagai pemisah header/body */
-    /* Buffer sementara untuk deteksi \r\n\r\n lintas chunk */
-    static char hdr_scan[8];
-    int hdr_scan_len = 0;
-
-    set_color(HTTP_COLOR_HEADER, HTTP_COLOR_BG);
-
-    while ((n = net_tcp_recv(conn, rbuf, (uint16_t)sizeof(rbuf))) > 0) {
-        int i;
-        for (i = 0; i < n; i++) {
-            uint8_t ch = rbuf[i];
-            if (!in_body) {
-                /* Cari urutan \r\n\r\n */
-                if (hdr_scan_len < 4) {
-                    hdr_scan[hdr_scan_len++] = (char)ch;
-                } else {
-                    hdr_scan[0]=hdr_scan[1];
-                    hdr_scan[1]=hdr_scan[2];
-                    hdr_scan[2]=hdr_scan[3];
-                    hdr_scan[3]=(char)ch;
-                }
-                /* Print karakter header */
-                char s2[2]; s2[0]=(char)ch; s2[1]='\0';
-                print(s2);
-                /* Cek apakah sudah menemukan \r\n\r\n */
-                if (hdr_scan_len >= 4 &&
-                    hdr_scan[0]=='\r' && hdr_scan[1]=='\n' &&
-                    hdr_scan[2]=='\r' && hdr_scan[3]=='\n') {
-                    in_body = 1;
-                    set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
-                }
-            } else {
-                /* Print body */
-                char s2[2]; s2[0]=(char)ch; s2[1]='\0';
-                print(s2);
-                total++;
+/* Helper: cari nilai header "Field:" dalam blok header hdr (hlen byte).
+ * Return pointer ke nilai, tulis panjang ke *vlen. Return 0 jika tidak ada. */
+static const char *http_find_field(const char *hdr, int hlen,
+                                   const char *field, int *vlen) {
+    int flen = http_strlen(field);
+    int i;
+    for (i = 0; i < hlen - flen - 2; i++) {
+        if (hdr[i] == '\n') {
+            int j = i + 1, k;
+            int match = 1;
+            for (k = 0; k < flen; k++) {
+                char a = hdr[j+k], b = field[k];
+                if (a>='A'&&a<='Z') a+=32;
+                if (b>='A'&&b<='Z') b+=32;
+                if (a != b) { match=0; break; }
+            }
+            if (match && hdr[j+flen] == ':') {
+                int vi = j + flen + 1;
+                while (vi < hlen && hdr[vi] == ' ') vi++;
+                int ve = vi;
+                while (ve < hlen && hdr[ve] != '\r' && hdr[ve] != '\n') ve++;
+                *vlen = ve - vi;
+                return hdr + vi;
             }
         }
     }
-
-    net_tcp_close(conn);
-
-    set_color(HTTP_COLOR_INFO, HTTP_COLOR_BG);
-    print("\ncurl: selesai (");
-    itoa((uint32_t)total, nbuf); print(nbuf);
-    print(" bytes body)\n");
-    set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
     return 0;
+}
+
+/* Helper: decode Transfer-Encoding: chunked ke http_decoded.
+ * Return jumlah byte body setelah decode. */
+static int http_decode_chunked(const char *src, int slen) {
+    int si = 0, di = 0;
+    while (si < slen && di < HTTP_WORK_BUF - 1) {
+        /* Baca hex chunk size */
+        int csz = 0;
+        while (si < slen) {
+            char c = src[si];
+            if      (c>='0'&&c<='9') { csz=csz*16+(c-'0');    si++; }
+            else if (c>='a'&&c<='f') { csz=csz*16+(c-'a'+10); si++; }
+            else if (c>='A'&&c<='F') { csz=csz*16+(c-'A'+10); si++; }
+            else break;
+        }
+        /* Skip hingga \n (chunk extension / \r\n) */
+        while (si < slen && src[si] != '\n') si++;
+        if (si < slen) si++;  /* skip \n */
+        if (csz == 0) break;  /* chunk terakhir */
+        /* Salin csz byte */
+        int j;
+        for (j = 0; j < csz && si < slen && di < HTTP_WORK_BUF-1; j++)
+            http_decoded[di++] = src[si++];
+        /* Skip \r\n setelah data chunk */
+        while (si < slen && (src[si]=='\r'||src[si]=='\n')) si++;
+    }
+    http_decoded[di] = '\0';
+    return di;
+}
+
+int http_get(const char *url) {
+    static char cur_url[512];
+    /* Salin url ke cur_url */
+    { int i=0; while (url[i]&&i<511) { cur_url[i]=url[i]; i++; } cur_url[i]='\0'; }
+
+    int redir;
+    for (redir = 0; redir <= HTTP_MAX_REDIR; redir++) {
+        char host[128], path[256];
+        if (!parse_http_url(cur_url, host, path)) {
+            set_color(HTTP_COLOR_ERROR, HTTP_COLOR_BG);
+            print("curl: URL tidak valid. Gunakan: http://hostname/path\n");
+            set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+            return -1;
+        }
+
+        /* DNS resolve */
+        set_color(HTTP_COLOR_INFO, HTTP_COLOR_BG);
+        print("curl: resolving "); print(host); print("...\n");
+        set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+        uint8_t ip[4];
+        if (!dns_resolve(host, ip)) {
+            set_color(HTTP_COLOR_ERROR, HTTP_COLOR_BG);
+            print("curl: gagal resolve '"); print(host); print("'\n");
+            set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+            return -1;
+        }
+
+        /* TCP connect */
+        char nbuf[10];
+        set_color(HTTP_COLOR_INFO, HTTP_COLOR_BG);
+        print("curl: connecting ");
+        itoa(ip[0],nbuf); print(nbuf); print(".");
+        itoa(ip[1],nbuf); print(nbuf); print(".");
+        itoa(ip[2],nbuf); print(nbuf); print(".");
+        itoa(ip[3],nbuf); print(nbuf); print(":80...\n");
+        set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+
+        int conn = net_tcp_connect(ip, 80);
+        if (conn < 0) {
+            set_color(HTTP_COLOR_ERROR, HTTP_COLOR_BG);
+            print(conn == -2 ? "curl: connection refused\n"
+                             : "curl: connection timeout\n");
+            set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+            return -1;
+        }
+
+        /* Kirim HTTP/1.1 request */
+        static char req[600];
+        char *w = req;
+        w = http_append(w, "GET "); w = http_append(w, path);
+        w = http_append(w, " HTTP/1.1\r\nHost: "); w = http_append(w, host);
+        w = http_append(w, "\r\nConnection: close\r\nUser-Agent: OriaOS/1.0\r\n\r\n");
+        *w = '\0';
+        net_tcp_send(conn, req, (uint16_t)http_strlen(req));
+
+        /* ---- Fase 1: buffer header hingga \r\n\r\n ---- */
+        static char hbuf[2048];
+        int hlen = 0, hdr_done = 0;
+        unsigned char hw[4] = {0,0,0,0};
+        char tbuf[128]; int tn;
+        /* sisa bytes body yang sudah masuk saat scan header */
+        static char body_prefix[256]; int bpfx = 0;
+
+        set_color(HTTP_COLOR_HEADER, HTTP_COLOR_BG);
+        while (!hdr_done && (tn = net_tcp_recv(conn, (uint8_t*)tbuf, 127)) > 0) {
+            int ti;
+            for (ti = 0; ti < tn; ti++) {
+                unsigned char ch = (unsigned char)tbuf[ti];
+                if (!hdr_done) {
+                    if (hlen < 2047) { hbuf[hlen++] = (char)ch; }
+                    hw[0]=hw[1]; hw[1]=hw[2]; hw[2]=hw[3]; hw[3]=ch;
+                    if (hw[0]=='\r' && hw[1]=='\n' &&
+                        hw[2]=='\r' && hw[3]=='\n') {
+                        hdr_done = 1;
+                    }
+                } else {
+                    /* bytes body setelah \r\n\r\n dalam chunk yang sama */
+                    if (bpfx < 255) body_prefix[bpfx++] = (char)ch;
+                }
+            }
+        }
+        hbuf[hlen] = '\0';
+
+        /* Cetak header */
+        { int pi; for (pi = 0; pi < hlen; pi++) {
+            char s2[2]; s2[0]=hbuf[pi]; s2[1]='\0'; print(s2);
+        }}
+
+        /* ---- Parse status code ---- */
+        int status = http_parse_status(hbuf);
+
+        /* ---- Cek redirect (3xx) ---- */
+        if (status >= 300 && status < 400) {
+            int vlen = 0;
+            const char *loc = http_find_field(hbuf, hlen, "Location", &vlen);
+            net_tcp_close(conn);
+            if (loc && vlen > 0) {
+                /* Pastikan URL masuk ke cur_url */
+                if (vlen < 511) {
+                    int ci; for (ci=0;ci<vlen;ci++) cur_url[ci]=loc[ci];
+                    cur_url[vlen] = '\0';
+                }
+                /* Hanya ikuti redirect http:// */
+                if (loc[0]=='h' && loc[1]=='t' && loc[2]=='t' &&
+                    loc[3]=='p' && loc[4]==':' && loc[5]=='/' && loc[6]=='/') {
+                    set_color(HTTP_COLOR_WARN, HTTP_COLOR_BG);
+                    print("\ncurl: redirect → "); print(cur_url); print("\n");
+                    set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+                    continue;  /* ikuti redirect */
+                } else {
+                    /* HTTPS atau protocol lain — tidak didukung */
+                    set_color(HTTP_COLOR_WARN, HTTP_COLOR_BG);
+                    print("\ncurl: redirect ke "); print(cur_url);
+                    print(" (HTTPS tidak didukung)\n");
+                    set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+                    return -1;
+                }
+            }
+            /* Redirect tanpa Location — tampilkan apa adanya */
+            set_color(HTTP_COLOR_WARN, HTTP_COLOR_BG);
+            { char sc[6]; itoa((uint32_t)status,sc);
+              print("\ncurl: redirect "); print(sc); print(" tanpa Location\n"); }
+            set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+            return -1;
+        }
+
+        /* ---- Fase 2: stream body ---- */
+        int body_bytes = 0;
+        set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+
+        /* Proses body_prefix (bytes yang ikut chunk header) */
+        { int bi; for (bi = 0; bi < bpfx; bi++) {
+            unsigned char ch = (unsigned char)body_prefix[bi];
+            if (ch >= 0x20 || ch == '\n' || ch == '\t') {
+                char s2[2]; s2[0]=(char)ch; s2[1]='\0'; print(s2);
+            }
+            body_bytes++;
+        }}
+
+        /* Streaming sisa body */
+        char sbuf[256]; int sn;
+        while ((sn = net_tcp_recv(conn, (uint8_t*)sbuf, 255)) > 0) {
+            int si;
+            for (si = 0; si < sn; si++) {
+                unsigned char ch = (unsigned char)sbuf[si];
+                if (ch >= 0x20 || ch == '\n' || ch == '\t') {
+                    char s2[2]; s2[0]=(char)ch; s2[1]='\0'; print(s2);
+                }
+                body_bytes++;
+            }
+        }
+        net_tcp_close(conn);
+
+        /* Ringkasan */
+        set_color(HTTP_COLOR_INFO, HTTP_COLOR_BG);
+        print("\ncurl: selesai (");
+        { char nb[10]; itoa((uint32_t)body_bytes, nb); print(nb); }
+        print(" bytes body)\n");
+        set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+        return 0;
+    }
+
+    /* Terlalu banyak redirect */
+    set_color(HTTP_COLOR_ERROR, HTTP_COLOR_BG);
+    print("curl: terlalu banyak redirect (max 3)\n");
+    set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+    return -1;
 }

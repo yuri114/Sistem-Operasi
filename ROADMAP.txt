@@ -1535,6 +1535,46 @@ Tujuan: OS dapat mengambil halaman web melalui HTTP/1.0 —
            File: src/kernel/shell.c
 
 ================================================================
+FONDASI Z — HTTP CHUNKED TRANSFER + REDIRECT
+================================================================
+Status: [SELESAI] ✓ Fondasi Z selesai — chunked decode + redirect + status color, build 380232 bytes
+         [BUGFIX 2 Apr 2026] Ethernet padding bug: pay_len dihitung dari IP total-length
+         bukan panjang frame fisik. Pure-ACK frame (54 byte) di-pad ke 60 byte Ethernet
+         → 6 byte garbage dianggap TCP data → rcv_nxt advance 6 → HTTP response berikutnya
+         dianggap duplicate dan dibuang. Fix: pay_len = ip_total - ihl.
+         curl http://example.com → 540 bytes body HTML ✓ (build 379912 bytes)
+Prioritas: 8
+Prasyarat: Fondasi Y (HTTP client curl) selesai ✓
+----------------------------------------------------------------
+Tujuan: curl dapat menampilkan body halaman web yang sesungguhnya —
+        decode Transfer-Encoding: chunked, ikuti redirect otomatis,
+        dan tampilkan status code dengan warna.
+
+  [F-Z1] TCP RX buffer diperbesar 1024 → 4096
+         - TCP_RX_SIZE: 1024 → 4096 di net.c
+         - Handle response HTTP hingga ~4KB per recv() tanpa overflow
+         - TcpConn struct bertambah ~12KB total (4 conn × 3KB)
+         File: src/kernel/net.c
+
+  [F-Z2] Transfer-Encoding: chunked decoder
+         - http_decode_chunked(): parse hex chunk size + strip chunk
+           framing, output body bersih ke http_decoded[]
+         - Otomatis aktif jika header Transfer-Encoding: chunked ada
+         - http_work[8192] + http_decoded[8192] sebagai static buffer
+         File: src/kernel/net.c
+
+  [F-Z3] HTTP redirect otomatis (max 3 lompat)
+         - http_find_field(): cari nilai header case-insensitive
+         - Jika status 3xx dan Location: ada → update URL + loop ulang
+         - Relative redirect (/path) ditambah http://host otomatis
+         File: src/kernel/net.c
+
+  [F-Z4] Status code warna
+         - 2xx → hijau, 3xx → kuning, 4xx/5xx → merah
+         - Status line dicetak pertama, baru header abu-abu, lalu body
+         File: src/kernel/net.c
+
+================================================================
 RINGKASAN URUTAN & TARGET 100%
 ================================================================
 
@@ -1552,6 +1592,7 @@ RINGKASAN URUTAN & TARGET 100%
   [DONE] Fondasi V   — MFS4 disk persistence + rename  (~96%)
   [DONE] Fondasi W   — poll/select + non-blocking fd  (~97%)
   [DONE] Fondasi X   — TCP retransmit + DNS  (~100%)
-  [DONE] Fondasi Y   — HTTP client curl  (~103%) ← SELESAI
+  [DONE] Fondasi Y   — HTTP client curl  (~103%)
+  [DONE] Fondasi Z   — HTTP chunked + redirect  (~105%) ← SELESAI
 
 ================================================================
