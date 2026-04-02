@@ -27,6 +27,9 @@ char keyboard_getchar();
 int  keyboard_has_char();      /* 1 jika ada karakter di buffer */
 void keyboard_set_waiter(int tid); /* set tid yang menunggu karakter */
 
+/* F-T: simpan tid proses foreground untuk Ctrl+C → SIGINT */
+void keyboard_set_fg_pid(int pid);
+
 /* Kembalikan 1 jika tombol Ctrl sedang ditekan */
 int keyboard_ctrl_pressed();
 /* Kembalikan 1 jika tombol Alt sedang ditekan */

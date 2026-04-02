@@ -1,6 +1,7 @@
 /* keyboard.c — Driver keyboard PS/2 (IRQ1), buffer ring, tab/arrow support */
 #include <stdint.h>
 #include "keyboard.h"
+#include "task.h"
 #include "pic.h"
 
 #define KEYBOARD_DATA_PORT  0x60
@@ -69,6 +70,10 @@ static uint8_t ctrl_pressed  = 0;   /* 1 = Left/Right Ctrl sedang ditekan  */
 static uint8_t alt_pressed   = 0;   /* 1 = Left Alt sedang ditekan         */
 static uint8_t capslock_on   = 0;   /* 1 = Caps Lock aktif (toggle)        */
 
+/* F-T: tid proses foreground untuk dikirim SIGINT saat Ctrl+C */
+static int fg_task_pid = -1;
+void keyboard_set_fg_pid(int pid) { fg_task_pid = pid; }
+
 int keyboard_ctrl_pressed()    { return (int)ctrl_pressed; }
 int keyboard_alt_pressed()     { return (int)alt_pressed; }
 int keyboard_capslock_state()  { return (int)capslock_on; }
@@ -132,6 +137,14 @@ void keyboard_handler() {
         if (c && capslock_on) {
             if (c >= 'a' && c <= 'z') c = (char)(c - 32);
             else if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+        }
+        /* F-T: Ctrl+C → kirim SIGINT ke proses foreground (sebelum kode kontrol umum) */
+        if (ctrl_pressed && (sc == 0x2E)) {  /* 0x2E = scancode 'c' */
+            if (fg_task_pid >= 0) {
+                task_send_signal(fg_task_pid, 2);  /* SIGINT = 2 */
+                fg_task_pid = -1;
+            }
+            return;  /* jangan masukkan karakter ke buffer */
         }
         /* Ctrl+huruf: kode kontrol 0x01-0x1A */
         if (c && ctrl_pressed) {

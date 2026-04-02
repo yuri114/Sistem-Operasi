@@ -103,6 +103,8 @@ int pipe_read(int id, char *buf) {
         pipes[id].reader_waiter = task_get_current();
         __asm__ volatile ("sti");
         task_block();  /* tidur sampai pipe_write/detach membangunkan */
+        /* F-T: sinyal pending (mis. SIGINT dari Ctrl+C) → batalkan baca */
+        task_check_signals();  /* tidak kembali jika sinyal terminating */
     }
     Pipe *p = &pipes[id];
     int i = 0;

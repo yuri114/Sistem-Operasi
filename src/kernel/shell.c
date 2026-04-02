@@ -14,6 +14,7 @@
 #include "smp.h"
 #include "vfs.h"
 #include "mq.h"
+#include "keyboard.h"
 
 /*fungsi dari kernel.c*/
 void print(const char *str);
@@ -319,9 +320,12 @@ static void shell_execute(){
                 set_color(GFX_WHITE, GFX_BLACK);
                 return;
             }
-            /* Tunggu prog1 selesai (EOF terkirim ke prog2), lalu tunggu prog2 */
+            /* Tunggu prog1 selesai (EOF terkirim ke prog2), lalu tunggu prog2.
+             * F-T: Ctrl+C diteruskan ke prog1 (writer). */
+            keyboard_set_fg_pid(tid1);
             task_wait(tid1);
             task_wait(tid2);
+            keyboard_set_fg_pid(-1);
             return;
         }
     }
@@ -701,8 +705,11 @@ static void shell_execute(){
                     char tbuf[8]; itoa((uint32_t)tid, tbuf);
                     print("exec: ["); print(tbuf); print("] "); print(name); print(" &\n");
                 } else {
-                    /* Foreground: blok shell sampai program selesai */
+                    /* Foreground: blok shell sampai program selesai.
+                     * F-T: daftarkan tid ke keyboard agar Ctrl+C kirim SIGINT. */
+                    keyboard_set_fg_pid(tid);
                     task_wait(tid);
+                    keyboard_set_fg_pid(-1);
                 }
             }
         }

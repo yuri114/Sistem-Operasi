@@ -27,7 +27,14 @@ typedef struct {
     int       waiter;     /* tid task yang menunggu task ini selesai (-1 = none) */
     uint64_t  heap_end;   /* akhir heap user (0x400000 awal); 0 = kernel task   */
     uint64_t  tstack_frames[4]; /* frame fisik tiap halaman stack thread (0 = kosong) */
+    uint32_t  pending_signals;  /* F-T: bitmask sinyal pending (bit-N = sinyal N) */
+    int       exit_code;        /* F-T: kode exit; diset oleh task_exit_code()   */
 } Task;
+
+/* F-T: konstanta sinyal standar */
+#define SIGINT   2   /* Ctrl+C — default terminasi */
+#define SIGKILL  9   /* tidak bisa di-catch; terminasi paksa */
+#define SIGTERM  15  /* sinyal terminasi lunak */
 
 void task_init();
 int  task_create(void (*entry)());
@@ -39,6 +46,7 @@ void task_switch_ap(int cpu_idx); /* AP scheduler — dipanggil dari lapic_timer
 void task_set_has_ap(int v);       /* dipanggil smp_init setelah AP online */
 void task_set_main();
 void task_exit();
+void task_exit_code(int code); /* F-T: exit dengan kode — dipanggil SYS_EXIT */
 void task_sleep(uint32_t ms);
 void task_block();
 void task_unblock(int id);
@@ -46,6 +54,10 @@ void task_check_sleepers();
 void task_yield();
 
 void        task_wait(int tid);             /* tunggu task selesai (block) */
+/* F-T: sinyal + exit code */
+void        task_send_signal(int tid, int sig); /* kirim sinyal ke task */
+void        task_check_signals(void);       /* deliver sinyal pending current task */
+int         task_get_exit_code(int tid);    /* ambil exit code setelah task selesai */
 uint64_t    task_get_heap_end(int id);
 void        task_set_heap_end(int id, uint64_t end);
 int         task_get_max();

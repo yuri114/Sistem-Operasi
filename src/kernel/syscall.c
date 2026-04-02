@@ -29,6 +29,10 @@ static int is_user_ptr(uint64_t ptr) {
 }
 
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
+    /* F-T: Cek sinyal pending sebelum memproses syscall apapun.
+     * Jika ada SIGKILL/SIGTERM/SIGINT, terminasi task ini sekarang. */
+    task_check_signals();
+
     if (eax == SYS_PRINT){
         if (!is_user_ptr(ebx)) return (uint32_t)-1;
         const char *s = (const char*)ebx;
@@ -50,8 +54,8 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         return (uint32_t) (unsigned char)c; //kembalikan karakter sebagai uint32_t
     }
     if (eax == SYS_EXIT){
-        task_exit(); //keluar dari task saat ini
-        return 0; //tidak akan pernah sampai sini karena task_exit akan menghentikan task
+        task_exit_code((int)(int64_t)ebx); /* F-T: simpan kode exit */
+        return 0; /* tidak pernah dicapai */
     }
     if (eax == SYS_ALLOC) {
         void* ptr = malloc(ebx); //ebx berisi ukuran memori yang akan dialokasikan
@@ -490,10 +494,11 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         return cur_end;
     }
 
-    // SYS_WAITPID(63): tunggu task; ebx=tid → return 0
+    // SYS_WAITPID(63): tunggu task; ebx=tid → return exit code
     if (eax == SYS_WAITPID) {
-        task_wait((int)ebx);
-        return 0;
+        int wtid = (int)ebx;
+        task_wait(wtid);
+        return (uint64_t)(int64_t)task_get_exit_code(wtid);
     }
 
     // SYS_THREAD_CREATE(64): buat thread; ebx=entry_va, edx=arg → return tid
@@ -780,6 +785,17 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
     if (eax == SYS_MFS4_MKDIR) {
         if (!is_user_ptr(ebx)) return (uint64_t)-1;
         return (uint64_t)(int64_t)mfs4_mkdir((const char*)ebx);
+    }
+
+    // SYS_SIGACTION(87): daftarkan handler sinyal (stub — hanya terima, belum dipakai)
+    if (eax == SYS_SIGACTION) {
+        return 0;  /* stub: handler belum didelivery ke user space */
+    }
+
+    // SYS_SIGKILL_SIG(88): kirim sinyal ke task: ebx=tid, edx=sig
+    if (eax == SYS_SIGKILL_SIG) {
+        task_send_signal((int)ebx, (int)edx);
+        return 0;
     }
 
     return (uint64_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal

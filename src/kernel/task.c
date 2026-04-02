@@ -18,6 +18,9 @@ static uint8_t *stacks_base;
 static int current_task = 0;
 static int task_count   = 0;
 
+/* F-T: Kode exit per-slot; diisi saat task_exit_code, dibaca oleh SYS_WAITPID. */
+static int exit_codes[MAX_TASKS];
+
 /* Spinlock: melindungi cpu_id field saat claim/release task oleh BSP dan AP. */
 static volatile int task_lock = 0;
 
@@ -362,7 +365,9 @@ void task_switch_ap(int cpu_idx)
     tss64_set_kernel_stack_cpu(cpu_idx, kstack);
 }
 
-void task_exit() {
+/* F-T: task_exit_code(code) — versi task_exit yang menyimpan kode exit.
+ * task_exit() sekarang hanya delegate ke sini dengan code=0. */
+void task_exit_code(int code) {
     int tid = current_task;
     uint8_t   is_thr    = tasks[tid].is_thread;
     uint64_t *dir       = tasks[tid].page_dir;
@@ -371,6 +376,9 @@ void task_exit() {
     uint64_t  tstack_fs[4];
     int k;
     for (k = 0; k < 4; k++) tstack_fs[k] = tasks[tid].tstack_frames[k];
+
+    /* Simpan kode exit sebelum membersihkan slot */
+    exit_codes[tid] = code;
 
     /* Thread tidak memiliki page_dir sendiri → jangan tutup fd dan jangan free page_dir.
      * Proses biasa: tutup semua fd lalu bebaskan seluruh memori user. */
@@ -382,11 +390,12 @@ void task_exit() {
     /* Simpan waiter sebelum membersihkan slot */
     int waiter = tasks[tid].waiter;
 
-    tasks[tid].used      = 0;
-    tasks[tid].cpu_id    = (int8_t)-1;   /* kembalikan ke pool */
-    tasks[tid].page_dir  = 0;
-    tasks[tid].waiter    = -1;
-    tasks[tid].is_thread = 0;
+    tasks[tid].used             = 0;
+    tasks[tid].cpu_id           = (int8_t)-1;   /* kembalikan ke pool */
+    tasks[tid].page_dir         = 0;
+    tasks[tid].waiter           = -1;
+    tasks[tid].is_thread        = 0;
+    tasks[tid].pending_signals  = 0;
     for (k = 0; k < 4; k++) tasks[tid].tstack_frames[k] = 0;
 
     /* Kembali ke boot PML4 dulu */
@@ -437,6 +446,41 @@ void task_exit() {
 
     __asm__ volatile ("sti");
     while (1) __asm__ volatile ("hlt");
+}
+
+void task_exit() {
+    task_exit_code(0);
+}
+
+/* F-T: Kirim sinyal ke task target. Untuk sinyal terminating:
+ * setel bit pending dan bangunkan task agar segera masuk kernel, */
+void task_send_signal(int tid, int sig) {
+    if (tid <= 0 || tid >= MAX_TASKS || !tasks[tid].used) return;
+    if (sig <= 0 || sig >= 32) return;
+    tasks[tid].pending_signals |= (1u << sig);
+    /* Bangunkan jika tertidur/terblokir agar segera masuk kernel
+     * dan signal didelivery di task_check_signals(). */
+    if (tasks[tid].status != TASK_RUNNING)
+        task_unblock(tid);
+}
+
+/* F-T: Cek sinyal terminating untuk task saat ini.
+ * Dipanggil di awal syscall_handler dan setelah task_block di pipe_read. */
+void task_check_signals(void) {
+    int tid = current_task;
+    uint32_t term = (1u << SIGINT) | (1u << SIGKILL) | (1u << SIGTERM);
+    uint32_t sigs = tasks[tid].pending_signals & term;
+    if (!sigs || !tasks[tid].is_user) return;
+    /* Cari sinyal dengan bit terendah */
+    int sig = 1;
+    while (sig < 32 && !(sigs & (1u << sig))) sig++;
+    task_exit_code(128 + sig);  /* tidak pernah kembali */
+}
+
+/* F-T: Kembalikan exit code task yang sudah selesai. */
+int task_get_exit_code(int tid) {
+    if (tid < 0 || tid >= MAX_TASKS) return -1;
+    return exit_codes[tid];
 }
 
 void task_set_name(int id, const char *name) {

@@ -82,7 +82,16 @@
 
 /* Fondasi: user heap + waitpid */
 #define SYS_BRK       62  // perluas user heap: arg=new_end → return new_end aktual
-#define SYS_WAITPID   63  // tunggu task selesai: arg=tid → return 0
+#define SYS_WAITPID   63  // tunggu task selesai: arg=tid → return exit code
+
+/* F-T — Signal & Process Control */
+#define SYS_SIGACTION   87  // daftarkan handler sinyal: ebx=sig, edx=handler_va
+#define SYS_SIGKILL_SIG 88  // kirim sinyal: ebx=tid, edx=sig → 0
+
+/* Konstanta sinyal */
+#define SIGINT   2
+#define SIGKILL  9
+#define SIGTERM  15
 
 /* Tahap L — Message Queue */
 #define SYS_MQ_SEND   60  // kirim MQ: ebx=dst_pid, edx=str_ptr
@@ -197,10 +206,15 @@ static inline char getkey() {
     return (char)syscall0(SYS_GETKEY);
 }
 
-// Keluar dari program
+// Keluar dari program dengan kode exit
+static inline void exit_code(int code) {
+    syscall1(SYS_EXIT, (long)code);
+    while (1); // tidak pernah sampai sini
+}
+
+// Keluar dari program (kode 0)
 static inline void exit() {
-    syscall0(SYS_EXIT);
-    while (1); // tidak pernah sampai sini, tapi mencegah compiler warning
+    exit_code(0);
 }
 
 // ============================================================
@@ -240,6 +254,16 @@ static inline unsigned long sys_brk(unsigned long new_end) {
 
 static inline void waitpid(int tid) {
     syscall1(SYS_WAITPID, (long)tid);
+}
+
+// F-T: tunggu task dan kembalikan exit code
+static inline int waitpid_ex(int tid) {
+    return (int)syscall1(SYS_WAITPID, (long)tid);
+}
+
+// F-T: kirim sinyal ke proses (seperti POSIX kill)
+static inline int kill(int tid, int sig) {
+    return (int)syscall2(SYS_SIGKILL_SIG, (long)tid, (long)sig);
 }
 
 static _UHdr *_uheap_grow(unsigned int need) {
@@ -413,9 +437,9 @@ static inline int msg_recv(char *buf) {
     return syscall1(SYS_MSG_RECV, (long)buf);
 }
 
-// Kirim sinyal kill ke proses dengan id tertentu
+// Terminasi paksa proses (tanpa sinyal, langsung)
 // return 1 sukses, 0 gagal (id tidak valid / dilindungi)
-static inline int kill(int id) {
+static inline int task_kill(int id) {
     return syscall1(SYS_KILL, id);
 }
 

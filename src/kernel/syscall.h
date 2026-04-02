@@ -113,6 +113,10 @@
 #define SYS_MFS4_UNLINK   85  // unlink: ebx=path_ptr → 0/-1
 #define SYS_MFS4_MKDIR    86  // mkdir: ebx=path_ptr → 0/-1
 
+/* F-T — Signal & Process Control */
+#define SYS_SIGACTION     87  // daftarkan handler sinyal: ebx=sig, edx=handler_va → 0
+#define SYS_SIGKILL_SIG   88  // kirim sinyal: ebx=tid, edx=sig → 0
+
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);
 
