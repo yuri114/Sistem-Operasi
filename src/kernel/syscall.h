@@ -125,6 +125,10 @@
 /* F-V — MFS4 Disk Persistence + Rename */
 #define SYS_MFS4_RENAME   92  // rename: ebx=old_path_ptr, edx=new_path_ptr → 0/-1
 
+/* F-W — Non-blocking fd + poll() */
+#define SYS_FCNTL         93  // set fd flags: ebx=fd, edx=new_flags → 0/-1
+#define SYS_POLL          94  // poll: ebx=KPollArgs* → jumlah fd siap / 0=timeout / -1=error
+
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);
 

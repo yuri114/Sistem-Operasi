@@ -862,6 +862,43 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         return (uint64_t)(int64_t)mfs4_rename((const char*)ebx, (const char*)edx);
     }
 
+    // SYS_FCNTL(93): set fd flags; ebx=fd, edx=new_flags → 0/-1
+    if (eax == SYS_FCNTL) {
+        int fd   = (int)(int64_t)ebx;
+        uint8_t new_flags = (uint8_t)(uint64_t)edx;
+        int tid = task_get_current();
+        return (uint64_t)(int64_t)vfs_set_flags(tid, fd, new_flags);
+    }
+
+    // SYS_POLL(94): poll array fd dengan timeout
+    // ebx = pointer ke struct { KPollFd *fds; int nfds; int timeout_ms; }
+    if (eax == SYS_POLL) {
+        typedef struct { uint64_t fds_ptr; int nfds; int timeout_ms; } _PollArgs;
+        if (!is_user_ptr(ebx)) return (uint64_t)-1;
+        _PollArgs *a = (_PollArgs*)ebx;
+        if (!is_user_ptr(a->fds_ptr)) return (uint64_t)-1;
+        KPollFd *fds = (KPollFd*)a->fds_ptr;
+        int nfds       = a->nfds;
+        int timeout_ms = a->timeout_ms;
+        if (nfds <= 0 || nfds > 16) return (uint64_t)-1;
+        int tid = task_get_current();
+        uint32_t deadline = get_ticks() + (uint32_t)(timeout_ms > 0 ? timeout_ms : 0);
+
+        while (1) {
+            int ready = 0;
+            int i;
+            for (i = 0; i < nfds; i++) {
+                fds[i].revents = (short)vfs_fd_ready(tid, fds[i].fd, fds[i].events);
+                if (fds[i].revents) ready++;
+            }
+            if (ready > 0)
+                return (uint64_t)(int64_t)ready;
+            if (timeout_ms == 0 || get_ticks() >= deadline)
+                return 0;
+            task_sleep(1);  /* yield 1 ms, coba lagi */
+        }
+    }
+
     return (uint64_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal
 }
 

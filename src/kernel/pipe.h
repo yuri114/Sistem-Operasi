@@ -31,6 +31,10 @@ int  pipe_write(int id, const char *str);
 // Baca satu pesan (sampai '\0') dari pipe ke buf — return bytes dibaca (0=EOF/kosong, -1=error)
 int  pipe_read(int id, char *buf);
 
+// F-W2: Cek apakah ada data tersedia di pipe (untuk poll() POLLIN check)
+// Return 1 jika ring buffer tidak kosong, 0 jika kosong atau id tidak valid.
+int  pipe_has_data(int id);
+
 // Referensi write-end: incr saat redirect_out/vfs_pipe, decr saat close
 void pipe_writer_attach(int id);
 void pipe_writer_detach(int id);  /* set eof jika write_refs turun ke 0 */

@@ -83,6 +83,7 @@ static const char *shell_commands[] = {
     "udp_send ", "tcp_get ",
     "open ", "fread ", "fwrite ", "fclose ",
     "mq_send ", "mq_recv", "taskstat", "meminfo", "threadtest", "futextest",
+    "polltest",
     0
 };
 
@@ -364,6 +365,7 @@ static void shell_execute(){
         print("meminfo              - tampilkan statistik memori fisik & heap\n");
         print("threadtest           - demo threading: spawn 3 thread secara paralel\n");
         print("futextest            - demo futex+TLS: 4 thread increment counter 4000x\n");
+        print("polltest             - demo non-blocking fd + poll(): pipe poll dengan timeout\n");
         print("condtest             - demo condition variable: producer-consumer\n");
         print("open <file>          - buka file, cetak fd\n");
         print("fread <fd>           - baca isi file lewat fd\n");

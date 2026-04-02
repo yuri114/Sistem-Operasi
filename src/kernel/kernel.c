@@ -39,6 +39,7 @@
 #include "sigtest_elf_data.h"
 #include "futextest_elf_data.h"
 #include "mfs4test_elf_data.h"
+#include "polltest_elf_data.h"
 #include "ipc.h"
 #include "semaphore.h"
 #include "pipe.h"
@@ -261,6 +262,7 @@ void programs_init() {
     fs_write_bin("sigtest",       build_sigtest_elf,       build_sigtest_elf_len);
     fs_write_bin("futextest",     build_futextest_elf,     build_futextest_elf_len);
     fs_write_bin("mfs4test",      build_mfs4test_elf,      build_mfs4test_elf_len);
+    fs_write_bin("polltest",      build_polltest_elf,      build_polltest_elf_len);
 }
 
 /* Deklarasi handler dari isr.asm */

@@ -119,6 +119,13 @@ int pipe_read(int id, char *buf) {
     return i;
 }
 
+/* F-W2: Cek apakah ring buffer pipe tidak kosong (untuk poll() POLLIN check).
+ * Return 1 jika ada data, 0 jika kosong atau id tidak valid. */
+int pipe_has_data(int id) {
+    if (id < 0 || id >= PIPE_MAX || !pipes[id].used) return 0;
+    return pipes[id].head != pipes[id].tail ? 1 : 0;
+}
+
 /* ====== Named Pipe ====== */
 static NamedPipe named_pipes[NAMED_PIPE_MAX];
 

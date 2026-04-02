@@ -1189,6 +1189,18 @@ static inline void munmap(void *addr, int n_pages) {
 /* F-V3 */
 #define SYS_MFS4_RENAME    92  /* rename inode: ebx=old_path, edx=new_path → 0/-1 */
 
+/* F-W1: non-blocking fd + fcntl */
+#define SYS_FCNTL          93  /* set fd flags: ebx=fd, edx=new_flags → 0/-1 */
+/* F-W2: poll */
+#define SYS_POLL           94  /* poll: ebx=KPollArgs* → siap count/0/-1 */
+
+/* F-W flag dan konstanta */
+#define O_NONBLOCK  0x08   /* non-blocking I/O flag (cocok dengan VFS_O_NONBLOCK) */
+#define EAGAIN      11     /* errno: try again (vfs_read returns -EAGAIN = -11)   */
+#define POLLIN      1
+#define POLLOUT     2
+#define POLLERR     4
+
 /*
  * pipe2(fds) — buat anonymous pipe.
  * fds[0] = read-end fd, fds[1] = write-end fd.
@@ -1265,6 +1277,47 @@ static inline int mfs4_mkdir(const char *path) {
 }
 static inline int mfs4_rename_u(const char *old_path, const char *new_path) {
     return (int)syscall2(SYS_MFS4_RENAME, (long)old_path, (long)new_path);
+}
+
+/* ------------------------------------------------------------------ */
+/* F-W1 — fcntl: set fd flags                                         */
+/* ------------------------------------------------------------------ */
+
+/*
+ * fcntl_setfl(fd, flags) — set flags fd (mis. O_NONBLOCK).
+ * Return 0 sukses, -1 gagal.
+ */
+static inline int fcntl_setfl(int fd, int flags) {
+    return (int)syscall2(SYS_FCNTL, (long)fd, (long)flags);
+}
+
+/* ------------------------------------------------------------------ */
+/* F-W2 — poll: tunggu fd siap dengan timeout                         */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    int   fd;
+    short events;   /* POLLIN / POLLOUT / POLLERR */
+    short revents;  /* diisi kernel saat poll() return */
+} PollFd;
+
+/* Struct argumen poll (harus cocok dengan _PollArgs di syscall.c) */
+typedef struct {
+    PollFd *fds;
+    int     nfds;
+    int     timeout_ms;
+} _UPollArgs;
+
+/*
+ * poll(fds, nfds, timeout_ms) — tunggu hingga salah satu fd siap.
+ * Return jumlah fd siap (>0), 0 = timeout, -1 = error.
+ */
+static inline int poll(PollFd *fds, int nfds, int timeout_ms) {
+    _UPollArgs a;
+    a.fds        = fds;
+    a.nfds       = nfds;
+    a.timeout_ms = timeout_ms;
+    return (int)syscall1(SYS_POLL, (long)&a);
 }
 
 #endif

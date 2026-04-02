@@ -327,6 +327,30 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **Shell `rename <lama> <baru>`**: command baru; cetak konfirmasi hijau/merah
 - **`mfs4_rename_u(old, new)`** di `lib.h`: wrapper syscall untuk user program
 
+---
+
+### Fondasi W — Poll/Select + Non-blocking fd (3 April 2026)
+
+#### F-W1 — Non-blocking fd (VFS_O_NONBLOCK + SYS_FCNTL)
+- **`VFS_O_NONBLOCK (0x08)`**: flag baru di `vfs.h`; `VFS_EAGAIN (-11)` sebagai return code "coba lagi"
+- **`vfs_read()`**: untuk STDIN, PIPE, TTY — jika `VFS_O_NONBLOCK` aktif dan tidak ada data → return `VFS_EAGAIN` tanpa block
+- **`pipe_has_data(id)`**: helper baru di `pipe.h/.c` — cek ring buffer tidak kosong (tanpa blocking)
+- **`vfs_set_flags(tid, fd, flags)`**: fungsi baru di `vfs.c` — set `VfsFd.flags` untuk fd tertentu
+- **`SYS_FCNTL(93)`**: handler kernel — `ebx=fd`, `edx=new_flags` → panggil `vfs_set_flags()`, return 0/-1
+- **`fcntl_setfl(fd, flags)`** di `lib.h`: wrapper inline; `O_NONBLOCK=0x08`, `EAGAIN=11`
+
+#### F-W2 — poll() syscall
+- **`KPollFd { int fd; short events; short revents; }`** di `vfs.h`; `POLLIN=1`, `POLLOUT=2`, `POLLERR=4`
+- **`vfs_fd_ready(tid, fd, events)`**: cek kesiapan per-type — STDIN→`keyboard_has_char()`, PIPE→`pipe_has_data()`, FILE→selalu siap, STDOUT/NET/PIPE_W→selalu POLLOUT
+- **`SYS_POLL(94)`**: `ebx=ptr{KPollFd*,nfds,timeout_ms}` → loop cek kesiapan + `task_sleep(1)` sampai deadline; return count siap / 0 timeout / -1 error
+- **`PollFd` struct + `poll(fds, nfds, timeout_ms)`** di `lib.h`: wrapper inline
+
+#### F-W3 — Demo: polltest
+- **Uji 1**: set `O_NONBLOCK`, baca pipe kosong → `r == -EAGAIN` (verifikasi non-blocking path)
+- **Uji 2**: `poll()` pada pipe read-end, writer thread tidur 200 ms lalu tulis `"hello"` → `POLLIN` terdeteksi dalam 2000 ms timeout
+- **Uji 3**: baca data setelah POLLIN → isi = `"hello"` (verifikasi data integrity)
+- File: `src/programs/polltest.c`
+
 
 - **LAPIC**: enable via IA32_APIC_BASE MSR + SVR register, baca APIC ID, kirim INIT/SIPI IPI via ICR
 - **ACPI MADT parser**: scan RSDP → RSDT → MADT untuk enumerasi CPU/APIC ID
@@ -374,6 +398,7 @@ SYS_COND_ALLOC(68) SYS_COND_FREE(69) SYS_COND_WAIT(70) SYS_COND_SIGNAL(71) SYS_C
 SYS_SIGACTION(87) SYS_SIGKILL_SIG(88)
 SYS_FUTEX_WAIT(89) SYS_FUTEX_WAKE(90) SYS_GET_TLS(91)
 SYS_MFS4_RENAME(92)
+SYS_FCNTL(93) SYS_POLL(94)
 ```
 
 ### Libc Minimal (`lib.h`) — Tahap F2
@@ -394,6 +419,7 @@ SYS_MFS4_RENAME(92)
 | `sysinfo` | Panel info sistem — PID, uptime, tick count, arsitektur |
 | `threadtest` | Demo threading — spawn 3 thread paralel, join, verifikasi counter |
 | `futextest` | Demo Fondasi U — 4 thread × 1000 iterasi via mutex futex; verifikasi counter == 4000 |
+| `polltest` | Demo Fondasi W — non-blocking fd: uji -EAGAIN; poll() deteksi POLLIN pipe dalam 2s timeout |
 | `hello` | Hello-world demo user process |
 | `gfxtest` | Demo grafis (pixel, rect, line) |
 | `gui_demo` | Demo window manager |
@@ -464,6 +490,7 @@ SYS_MFS4_RENAME(92)
 │       ├── threadtest.c      # Demo threading: spawn 3 thread paralel
 │       ├── sigtest.c         # Demo sinyal: fork + SIGTERM + waitpid_ex → exit code 143
 │       ├── futextest.c       # Demo Fondasi U: 4 thread × 1000 iterasi via mutex futex
+│       ├── polltest.c        # Demo Fondasi W: non-blocking fd + poll() pada pipe
 │       └── ...               # Program demo lainnya (hello, gfxtest, gui_demo, sender, piper)
 └── build/
     ├── os.img                # Disk image final (2MB, sektor raw)

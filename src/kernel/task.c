@@ -228,6 +228,7 @@ int task_create_thread(uint64_t entry, uint64_t arg, int parent_tid) {
         uint32_t hi = (uint32_t)(tls_va >> 32);
         __asm__ volatile ("wrmsr" :: "c"(0xC0000100u), "a"(lo), "d"(hi));
     }
+    vfs_copy_fds(parent_tid, id);   /* thread warisi fd dari parent (pipe, net, file) */
     return id;
 }
 

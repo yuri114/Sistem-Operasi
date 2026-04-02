@@ -216,6 +216,9 @@ int vfs_read(int task_id, int fd, char *buf, int len)
 
     if (f->type == VFS_TYPE_STDIN) {
         if (len < 1) return 0;
+        /* F-W1: non-blocking — return -EAGAIN jika tidak ada data */
+        if ((f->flags & VFS_O_NONBLOCK) && !keyboard_has_char())
+            return VFS_EAGAIN;
         /* True blocking via keyboard_set_waiter */
         while (!keyboard_has_char()) {
             keyboard_set_waiter(task_get_current());
@@ -241,6 +244,9 @@ int vfs_read(int task_id, int fd, char *buf, int len)
     if (f->type == VFS_TYPE_PIPE) {
         if (f->pipe_end != 0) return -1;  /* bukan read end */
         if (len <= 0) return 0;
+        /* F-W1: non-blocking — return -EAGAIN jika pipe kosong */
+        if ((f->flags & VFS_O_NONBLOCK) && !pipe_has_data((int)f->pipe_id))
+            return VFS_EAGAIN;
         /* pipe_read baca satu pesan (sampai '\0') */
         int n = pipe_read((int)f->pipe_id, buf);
         return n < len ? n : len;
@@ -249,16 +255,66 @@ int vfs_read(int task_id, int fd, char *buf, int len)
     /* F-R2: TCP socket read */
     if (f->type == VFS_TYPE_NET) {
         if (!net_present()) return -1;
+        /* F-W1: non-blocking TCP — skip wait jika tidak ada data */
         return net_tcp_recv((int)f->net_conn, buf, (uint16_t)(len > 1400 ? 1400 : len));
     }
 
     /* F-R2: TTY read (dari pipe yang diisi sisi lain) */
     if (f->type == VFS_TYPE_TTY) {
         int pid = tty_slots[(int)f->tty_id].pipe_id;
+        /* F-W1: non-blocking TTY */
+        if ((f->flags & VFS_O_NONBLOCK) && !pipe_has_data(pid))
+            return VFS_EAGAIN;
         return pipe_read(pid, buf);
     }
 
     return -1;
+}
+
+/* F-W1: Set fd flags (seperti fcntl F_SETFL) */
+int vfs_set_flags(int task_id, int fd, uint8_t flags)
+{
+    if (task_id < 0 || task_id >= MAX_TASKS) return -1;
+    if (fd < 0 || fd >= VFS_MAX_FD)           return -1;
+    VfsFd *f = &fd_table[task_id][fd];
+    if (!f->used) return -1;
+    f->flags = flags;
+    return 0;
+}
+
+/* F-W2: Cek apakah fd siap untuk operasi I/O (untuk poll())
+ * events: bitmask POLLIN/POLLOUT
+ * Return bitmask kejadian yang siap (revents), atau 0 jika tidak siap. */
+int vfs_fd_ready(int task_id, int fd, short events)
+{
+    if (task_id < 0 || task_id >= MAX_TASKS) return 0;
+    if (fd < 0 || fd >= VFS_MAX_FD)           return 0;
+    VfsFd *f = &fd_table[task_id][fd];
+    if (!f->used) return POLLERR;
+
+    int ready = 0;
+    if (events & POLLIN) {
+        if (f->type == VFS_TYPE_STDIN && keyboard_has_char())
+            ready |= POLLIN;
+        else if (f->type == VFS_TYPE_PIPE && f->pipe_end == 0 &&
+                 pipe_has_data((int)f->pipe_id))
+            ready |= POLLIN;
+        else if (f->type == VFS_TYPE_FILE)
+            ready |= POLLIN;  /* file selalu siap */
+        else if (f->type == VFS_TYPE_TTY &&
+                 pipe_has_data(tty_slots[(int)f->tty_id].pipe_id))
+            ready |= POLLIN;
+        /* TYPE_NET: selalu coba — net_tcp_recv non-blocking check tidak ada */
+    }
+    if (events & POLLOUT) {
+        /* PIPE write-end, NET, FILE, STDOUT selalu siap tulis */
+        if (f->type == VFS_TYPE_PIPE && f->pipe_end == 1)
+            ready |= POLLOUT;
+        else if (f->type == VFS_TYPE_STDOUT || f->type == VFS_TYPE_FILE ||
+                 f->type == VFS_TYPE_NET)
+            ready |= POLLOUT;
+    }
+    return ready;
 }
 
 int vfs_write(int task_id, int fd, const char *buf, int len)

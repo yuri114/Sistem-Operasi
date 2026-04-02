@@ -1420,35 +1420,39 @@ Tujuan: Inode table MFS4 ditulis ke disk sehingga symlink, hardlink,
 ================================================================
 FONDASI W — POLL / SELECT + NON-BLOCKING FD
 ================================================================
-Status: [RENCANA]
+Status: [SELESAI] ✓ Fondasi W selesai — SYS_FCNTL(93) + SYS_POLL(94) + polltest
 Prioritas: 5
 Prasyarat: Fondasi R2 (VFS fd lengkap) selesai ✓
 ----------------------------------------------------------------
 Tujuan: Program dapat menunggu event dari beberapa fd sekaligus
         (network + stdin) tanpa membuat thread terpisah per fd.
 
-  [F-W1] Flag non-blocking fd
-         Rencana:
-           - VFS_O_NONBLOCK (0x08): flag baru di vfs_open / vfs_pipe
-           - vfs_read() tipe PIPE/NET/STDIN + nonblock: jika tidak ada
-             data → return -EAGAIN (bukan block)
-           - SYS_FCNTL(93): set/get flags fd; lib.h: fcntl(fd, F_SETFL)
-           File: src/kernel/vfs.h/c, src/kernel/syscall.h/c
+  [F-W1] Flag non-blocking fd                              [DONE]
+         - VFS_O_NONBLOCK (0x08): flag baru di vfs.h
+         - vfs_read() tipe PIPE/NET/STDIN/TTY + nonblock: jika tidak ada
+           data → return VFS_EAGAIN (-11) tanpa block
+         - pipe_has_data(id): helper cek ring buffer tidak kosong (pipe.h/.c)
+         - SYS_FCNTL(93): vfs_set_flags(tid,fd,flags); ebx=fd, edx=new_flags
+         - lib.h: fcntl_setfl(fd,flags), O_NONBLOCK=0x08, EAGAIN=11
+         File: src/kernel/vfs.h/c, src/kernel/pipe.h/c,
+               src/kernel/syscall.h/c, src/programs/lib.h
 
-  [F-W2] poll() syscall
-         Rencana:
-           - struct PollFd { int fd; short events; short revents; }
-           - SYS_POLL(94): poll(fds[], nfds, timeout_ms)
-             Jika semua fd tidak siap → task_block() dengan wake_tick;
-             setiap event (pipe write, net recv, key press) cek dan
-             unblock task yang poll-wait pada fd tersebut
-           - lib.h: poll(), POLLIN/POLLOUT constants
-           File: src/kernel/vfs.h/c, src/kernel/syscall.h/c,
-                 src/programs/lib.h
+  [F-W2] poll() syscall                                    [DONE]
+         - struct KPollFd { int fd; short events; short revents; } di vfs.h
+         - POLLIN=1, POLLOUT=2, POLLERR=4 di vfs.h
+         - vfs_fd_ready(tid,fd,events): cek kesiapan per-type
+         - SYS_POLL(94): ebx=ptr{KPollFd*,nfds,timeout_ms}
+           Loop: cek semua fd → jika ada siap return count;
+           else task_sleep(1) sampai deadline; return 0 jika timeout
+         - lib.h: PollFd struct + poll(fds,nfds,timeout_ms) inline
+         File: src/kernel/vfs.h/c, src/kernel/syscall.h/c,
+               src/programs/lib.h
 
-  [F-W3] Demo: polltest
-         - Buka pipe + stdin; poll({pipe_fd, stdin_fd}, 2, 1000)
-         - Verifikasi event terdeteksi dengan benar
+  [F-W3] Demo: polltest                                    [DONE]
+         - Uji 1: set O_NONBLOCK, baca pipe kosong → -EAGAIN
+         - Uji 2: poll() pipe read-end, writer thread menulis setelah 200ms
+                  → POLLIN terdeteksi dalam 2000ms timeout
+         - Uji 3: baca data setelah POLLIN → isi = "hello"
          File: src/programs/polltest.c
 
 ================================================================
@@ -1510,7 +1514,7 @@ RINGKASAN URUTAN & TARGET 100%
   [DONE] Fondasi T   — Signal: SIGKILL/SIGINT, Ctrl+C, exit code
   [DONE] Fondasi U   — Futex + TLS  (~93%)
   [DONE] Fondasi V   — MFS4 disk persistence + rename  (~96%)
-  [ TODO ] Fondasi W — poll/select + non-blocking fd  (~97%)
+  [DONE] Fondasi W   — poll/select + non-blocking fd  (~97%)
   [ TODO ] Fondasi X — TCP retransmit + DNS  (~100%)
 
 ================================================================

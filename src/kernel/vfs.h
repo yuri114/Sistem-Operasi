@@ -24,10 +24,25 @@
 #define VFS_TYPE_TTY    6  /* pseudo-terminal (gui_term / pipe shell) */
 
 /* Flag open */
-#define VFS_O_RDONLY  0x01
-#define VFS_O_WRONLY  0x02
-#define VFS_O_RDWR    0x03
-#define VFS_O_CREATE  0x04  /* buat file jika belum ada               */
+#define VFS_O_RDONLY    0x01
+#define VFS_O_WRONLY    0x02
+#define VFS_O_RDWR      0x03
+#define VFS_O_CREATE    0x04  /* buat file jika belum ada               */
+#define VFS_O_NONBLOCK  0x08  /* non-blocking: baca return -EAGAIN jika kosong */
+
+/* Kode error non-blocking */
+#define VFS_EAGAIN  (-11)     /* -EAGAIN: operasi akan blok, coba lagi  */
+
+/* F-W2: struct untuk poll() syscall (harus cocok dengan UPollFd di lib.h) */
+typedef struct {
+    int   fd;
+    short events;    /* POLLIN=1, POLLOUT=2, POLLERR=4               */
+    short revents;   /* filled by kernel                              */
+} KPollFd;
+
+#define POLLIN   1
+#define POLLOUT  2
+#define POLLERR  4
 
 /* Descriptor per-fd */
 typedef struct {
@@ -87,5 +102,11 @@ int  vfs_redirect_out_pipe(int task_id, int pipe_id);
 
 /* Redirect stdin ke read-end pipe */
 int  vfs_redirect_in_pipe(int task_id, int pipe_id);
+
+/* F-W1: Set flags pada fd (seperti fcntl F_SETFL) */
+int  vfs_set_flags(int task_id, int fd, uint8_t flags);
+
+/* F-W2: Cek apakah fd siap untuk operasi (untuk poll()); bitmask POLLIN/POLLOUT */
+int  vfs_fd_ready(int task_id, int fd, short events);
 
 #endif /* VFS_H */
