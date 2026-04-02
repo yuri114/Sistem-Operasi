@@ -238,6 +238,94 @@ static void shell_execute(){
     }
     (void)bg_exec; /* dipakai di exec command */
 
+    /* ---- Pipeline operator '|': prog1 | prog2 ---- */
+    {
+        int pi = -1, ic;
+        for (ic = 0; input_buffer[ic]; ic++) {
+            if (input_buffer[ic] == '|') { pi = ic; break; }
+        }
+        if (pi >= 0) {
+            char prog1[32], prog2[32];
+            int j;
+            /* Kiri: nama program sebelah kiri '|' (strip "exec " bila ada) */
+            const char *L = input_buffer;
+            while (*L == ' ') L++;
+            if (L[0]=='e'&&L[1]=='x'&&L[2]=='e'&&L[3]=='c'&&L[4]==' ') L += 5;
+            while (*L == ' ') L++;
+            j = 0;
+            while (L[j] && L[j] != ' ' && L[j] != '|' && j < 31) { prog1[j]=L[j]; j++; }
+            prog1[j] = '\0';
+            /* Kanan: nama program sebelah kanan '|' (strip "exec " bila ada) */
+            const char *R = input_buffer + pi + 1;
+            while (*R == ' ') R++;
+            if (R[0]=='e'&&R[1]=='x'&&R[2]=='e'&&R[3]=='c'&&R[4]==' ') R += 5;
+            while (*R == ' ') R++;
+            j = 0;
+            while (R[j] && R[j] != ' ' && j < 31) { prog2[j]=R[j]; j++; }
+            prog2[j] = '\0';
+
+            if (!prog1[0] || !prog2[0]) {
+                set_color(GFX_LRED, GFX_BLACK);
+                print("pipe: gunakan: prog1 | prog2\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+                return;
+            }
+            int pipe_fd = pipe_alloc();
+            if (pipe_fd < 0) {
+                set_color(GFX_LRED, GFX_BLACK);
+                print("pipe: gagal alokasi pipe\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+                return;
+            }
+            uint32_t sz1, sz2;
+            const uint8_t *d1 = fs_read_bin(prog1, &sz1);
+            const uint8_t *d2 = fs_read_bin(prog2, &sz2);
+            if (!d1 || !d2) {
+                pipe_free(pipe_fd);
+                set_color(GFX_LRED, GFX_BLACK);
+                if (!d1) { print("pipe: tidak ditemukan: "); print(prog1); print("\n"); }
+                if (!d2) { print("pipe: tidak ditemukan: "); print(prog2); print("\n"); }
+                set_color(GFX_WHITE, GFX_BLACK);
+                return;
+            }
+            /* Buat prog1 (writer): stdout → pipe write-end */
+            uint64_t *dir1 = vmm_create_page_dir();
+            uint64_t entry1 = elf_load(d1, sz1, dir1);
+            int tid1 = -1;
+            if (entry1) {
+                uint64_t sp1 = pmm_alloc_frame();
+                vmm_map_page(dir1, 0x600000, sp1, 7);
+                __asm__ volatile("cli" ::: "memory");
+                tid1 = task_create_user(entry1, dir1, 0x600000 + PAGE_SIZE, prog1);
+                vfs_redirect_out_pipe(tid1, pipe_fd);
+                __asm__ volatile("sti" ::: "memory");
+            }
+            /* Buat prog2 (reader): stdin ← pipe read-end */
+            uint64_t *dir2 = vmm_create_page_dir();
+            uint64_t entry2 = elf_load(d2, sz2, dir2);
+            int tid2 = -1;
+            if (entry2) {
+                uint64_t sp2 = pmm_alloc_frame();
+                vmm_map_page(dir2, 0x600000, sp2, 7);
+                __asm__ volatile("cli" ::: "memory");
+                tid2 = task_create_user(entry2, dir2, 0x600000 + PAGE_SIZE, prog2);
+                vfs_redirect_in_pipe(tid2, pipe_fd);
+                __asm__ volatile("sti" ::: "memory");
+            }
+            if (tid1 < 0 || tid2 < 0) {
+                pipe_free(pipe_fd);
+                set_color(GFX_LRED, GFX_BLACK);
+                print("pipe: gagal memuat ELF\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+                return;
+            }
+            /* Tunggu prog1 selesai (EOF terkirim ke prog2), lalu tunggu prog2 */
+            task_wait(tid1);
+            task_wait(tid2);
+            return;
+        }
+    }
+
     if(str_compare(input_buffer, "help")){
         set_color(GFX_YELLOW, GFX_BLACK);
         print("Perintah yang tersedia:\n");

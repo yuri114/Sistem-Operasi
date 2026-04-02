@@ -34,6 +34,8 @@
 #include "condtest_elf_data.h"
 #include "forktest_elf_data.h"
 #include "pipetest_elf_data.h"
+#include "grep_elf_data.h"
+#include "ls_elf_data.h"
 #include "mfs4test_elf_data.h"
 #include "ipc.h"
 #include "semaphore.h"
@@ -252,6 +254,8 @@ void programs_init() {
     fs_write_bin("condtest",      build_condtest_elf,      build_condtest_elf_len);
     fs_write_bin("forktest",      build_forktest_elf,      build_forktest_elf_len);
     fs_write_bin("pipetest",      build_pipetest_elf,      build_pipetest_elf_len);
+    fs_write_bin("grep",          build_grep_elf,          build_grep_elf_len);
+    fs_write_bin("ls",            build_ls_elf,            build_ls_elf_len);
     fs_write_bin("mfs4test",      build_mfs4test_elf,      build_mfs4test_elf_len);
 }
 

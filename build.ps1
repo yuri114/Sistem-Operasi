@@ -139,6 +139,14 @@ x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -
 -T src/programs/user.ld src/programs/mfs4test.c \
     -o build/mfs4test.elf
 xxd -i build/mfs4test.elf > src/kernel/mfs4test_elf_data.h
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -fno-builtin -fno-pic -no-pie \
+-T src/programs/user.ld src/programs/grep.c \
+    -o build/grep.elf
+xxd -i build/grep.elf > src/kernel/grep_elf_data.h
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -fno-builtin -fno-pic -no-pie \
+-T src/programs/user.ld src/programs/ls.c \
+    -o build/ls.elf
+xxd -i build/ls.elf > src/kernel/ls_elf_data.h
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/semaphore.c  -o build/semaphore.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/pipe.c       -o build/pipe.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/condvar.c    -o build/condvar.o

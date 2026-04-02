@@ -9,6 +9,8 @@ void pipe_init_all() {
         pipes[i].used          = 0;
         pipes[i].head          = 0;
         pipes[i].tail          = 0;
+        pipes[i].eof           = 0;
+        pipes[i].write_refs    = 0;
         pipes[i].reader_waiter = -1;
     }
 }
@@ -20,6 +22,8 @@ int pipe_alloc() {
             pipes[i].used          = 1;
             pipes[i].head          = 0;
             pipes[i].tail          = 0;
+            pipes[i].eof           = 0;
+            pipes[i].write_refs    = 0;
             pipes[i].reader_waiter = -1;
             return i;
         }
@@ -30,6 +34,28 @@ int pipe_alloc() {
 void pipe_free(int id) {
     if (id >= 0 && id < PIPE_MAX)
         pipes[id].used = 0;
+}
+
+void pipe_writer_attach(int id) {
+    if (id >= 0 && id < PIPE_MAX && pipes[id].used)
+        pipes[id].write_refs++;
+}
+
+void pipe_writer_detach(int id) {
+    int w;
+    if (id < 0 || id >= PIPE_MAX || !pipes[id].used) return;
+    __asm__ volatile ("cli");
+    if (pipes[id].write_refs > 0) pipes[id].write_refs--;
+    if (pipes[id].write_refs == 0) {
+        pipes[id].eof = 1;
+        /* Bangunkan pembaca yang sedang tunggu agar dapat EOF */
+        w = pipes[id].reader_waiter;
+        pipes[id].reader_waiter = -1;
+        __asm__ volatile ("sti");
+        if (w >= 0) task_unblock(w);
+    } else {
+        __asm__ volatile ("sti");
+    }
 }
 
 // Tulis null-terminated string ke ring buffer.
@@ -62,17 +88,21 @@ int pipe_write(int id, const char *str) {
 }
 
 // Baca satu pesan (sampai '\0') dari ring buffer ke buf.
-// Memblokir (true block) sampai data tersedia. Return bytes dibaca.
+// Memblokir (true block) sampai data tersedia atau EOF. Return bytes dibaca (0=EOF).
 int pipe_read(int id, char *buf) {
     if (id < 0 || id >= PIPE_MAX || !pipes[id].used) return -1;
     if (!buf) return -1;
-    /* Tunggu sampai ada data — true blocking (tidak busy-wait) */
+    /* Tunggu sampai ada data atau EOF */
     while (1) {
         __asm__ volatile ("cli");
         if (pipes[id].head != pipes[id].tail) break;  /* ada data */
+        if (pipes[id].eof) {                           /* EOF: tidak ada penulis */
+            __asm__ volatile ("sti");
+            return 0;
+        }
         pipes[id].reader_waiter = task_get_current();
         __asm__ volatile ("sti");
-        task_block();  /* tidur sampai pipe_write membangunkan */
+        task_block();  /* tidur sampai pipe_write/detach membangunkan */
     }
     Pipe *p = &pipes[id];
     int i = 0;

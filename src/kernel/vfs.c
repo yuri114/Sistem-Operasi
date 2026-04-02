@@ -59,7 +59,10 @@ void vfs_close_all(int task_id)
             /* Bebaskan sumber daya yang dimiliki fd */
             if (fd_table[task_id][j].type == VFS_TYPE_NET)
                 net_tcp_close((int)fd_table[task_id][j].net_conn);
-            /* Pipe tidak di-free otomatis saat close — caller bisa masih ada sisi lain */
+            /* Jika write-end pipe ditutup, turunkan refcount → kirim EOF ke reader */
+            if (fd_table[task_id][j].type == VFS_TYPE_PIPE &&
+                fd_table[task_id][j].pipe_end == 1)
+                pipe_writer_detach((int)fd_table[task_id][j].pipe_id);
             fd_table[task_id][j].used = 0;
         }
     }
@@ -124,6 +127,7 @@ int vfs_pipe(int task_id, int *fd_read_out, int *fd_write_out)
     fd_table[task_id][fd_w].flags    = VFS_O_WRONLY;
     fd_table[task_id][fd_w].pipe_id  = (int16_t)pid;
     fd_table[task_id][fd_w].pipe_end = 1;  /* write */
+    pipe_writer_attach(pid);               /* tracking write-end untuk propagasi EOF */
 
     *fd_read_out  = fd_r;
     *fd_write_out = fd_w;
@@ -356,6 +360,9 @@ int vfs_close(int task_id, int fd)
             tty_slots[slot].used = 0;
         }
     }
+    /* Jika write-end pipe ditutup, turunkan refcount → kirim EOF ke reader */
+    if (f->type == VFS_TYPE_PIPE && f->pipe_end == 1)
+        pipe_writer_detach((int)f->pipe_id);
     f->used = 0;
     return 0;
 }
@@ -371,8 +378,12 @@ int vfs_seek(int task_id, int fd, int offset)
 
 int vfs_stdout_is_file(int task_id)
 {
+    uint8_t t;
     if (task_id < 0 || task_id >= MAX_TASKS) return 0;
-    return (fd_table[task_id][1].used && fd_table[task_id][1].type == VFS_TYPE_FILE);
+    if (!fd_table[task_id][1].used) return 0;
+    t = fd_table[task_id][1].type;
+    return (t == VFS_TYPE_FILE || t == VFS_TYPE_PIPE ||
+            t == VFS_TYPE_NET  || t == VFS_TYPE_TTY);
 }
 
 int vfs_redirect_out(int task_id, const char *path)
@@ -413,7 +424,8 @@ int vfs_redirect_out_pipe(int task_id, int pipe_id)
     fd_table[task_id][1].flags    = VFS_O_WRONLY;
     fd_table[task_id][1].pipe_id  = (int16_t)pipe_id;
     fd_table[task_id][1].pipe_end = 1;
-    fd_table[task_id][2] = fd_table[task_id][1];
+    /* fd[2] (stderr) TIDAK dialihkan ke pipe — tetap ke layar */
+    pipe_writer_attach(pipe_id);  /* tracking write-end untuk propagasi EOF */
     return 0;
 }
 
