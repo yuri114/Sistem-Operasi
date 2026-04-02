@@ -1041,11 +1041,14 @@ Estimasi waktu: 2-4 minggu tergantung kompleksitas
 ================================================================
 RENCANA FONDASI BERIKUTNYA
 ================================================================
-Berikut adalah pekerjaan fondasi yang perlu diselesaikan sebelum
-melaju ke fitur besar berikutnya (fork, TCP/UDP, filesystem inode,
-dynamic linker, dll.).
+Berikut adalah pekerjaan fondasi yang perlu diselesaikan untuk
+mencapai fondasi OS 100% (educational/hobbyist OS grade).
 
-Urutan prioritas: Fondasi P ✓ → Fondasi Q ✓ → Fondasi R
+Urutan prioritas:
+  ✓ Fondasi P → ✓ Fondasi Q → ✓ Fondasi R1/R2/R3
+  → Fondasi S → Fondasi T → Fondasi U → Fondasi V → Fondasi W → Fondasi X
+
+Progress: ~78% selesai (2 April 2026)
 
 ================================================================
 RENCANA FONDASI P — THREADING LANJUTAN
@@ -1246,14 +1249,268 @@ Prasyarat: Fondasi P selesai
                  src/programs/lib.h, src/programs/mfs4test.c
 
 ================================================================
-RINGKASAN URUTAN
+FONDASI S — SHELL PIPELINE SEJATI VIA VFS
+================================================================
+Status: [RENCANA]
+Prioritas: 1 (tertinggi — langsung memanfaatkan F-R2 yang baru selesai)
+Prasyarat: Fondasi R2 (vfs_pipe, vfs_copy_fds) selesai ✓
+----------------------------------------------------------------
+Tujuan: Operator | di shell menggunakan VFS fd pipe yang benar
+        (bukan buffer ad-hoc lama), sehingga stdout prog1 mengalir
+        ke stdin prog2 secara blocking dan benar.
+
+  [F-S1] Shell parser upgrade untuk operator |
+         Masalah: parser shell saat ini hanya mendukung redirect > dan <.
+           Pipelining prog1 | prog2 ada tapi memakai buffer lama yang
+           tidak blocking dan tidak melaporkan EOF ke prog2.
+         Rencana:
+           - shell.c: deteksi token | saat parsing baris perintah
+           - Untuk prog1 | prog2:
+             1. vfs_pipe(0, &fd_r, &fd_w) — alokasikan pipe anonim di task shell
+             2. fork() + exec_replace prog1 dengan vfs_redirect_out_pipe(child, pipe_id)
+             3. fork() + exec_replace prog2 dengan vfs_redirect_in_pipe(child, pipe_id)
+             4. waitpid kedua anak
+           - Mendukung chain: prog1 | prog2 | prog3 (iteratif)
+           File: src/kernel/shell.c, src/kernel/vfs.c
+
+  [F-S2] EOF propagasi ke penerima pipe
+         Masalah: saat prog1 exit dan tutup write-end pipe, prog2
+           harus mendapat EOF (read return 0) bukan block selamanya.
+         Rencana:
+           - pipe.c: saat semua write-end ref = 0, tandai pipe EOF
+           - pipe_read(): jika EOF dan buffer kosong → return 0
+           - vfs_close() tipe PIPE write-end: decrement write_refs;
+             jika 0 → pipe_set_eof(pipe_id)
+           File: src/kernel/pipe.h/c, src/kernel/vfs.c
+
+  [F-S3] Demo: pipetest | grep
+         - Buat program minimal grep.c: baca stdin baris per baris,
+           cetak baris yang mengandung argv[1]
+         - Test: exec writer > tmp.txt; exec grep hello < tmp.txt
+         - Test pipeline: exec ls | grep elf
+         File: src/programs/grep.c
+
+================================================================
+FONDASI T — SIGNAL & PROCESS CONTROL
+================================================================
+Status: [RENCANA]
+Prioritas: 2
+Prasyarat: Fondasi Q (fork, waitpid) selesai ✓
+----------------------------------------------------------------
+Tujuan: Proses dapat diinterrupt dari luar via sinyal. Ctrl+C di
+        shell mematikan proses foreground. Kernel bisa kirim SIGKILL.
+
+  [F-T1] Infrastruktur sinyal kernel
+         Rencana:
+           - task.h: tambah field uint32_t pending_signals (bitmask)
+             dan void (*signal_handlers[32])(int) (default = SIG_DFL)
+           - Sinyal standar minimum: SIGKILL(9), SIGTERM(15), SIGINT(2),
+             SIGHUP(1), SIGCHLD(17)
+           - task_send_signal(tid, sig): set bit di pending_signals[tid]
+           - Cek pending_signals saat task_switch kembali ke ring-3:
+             jika ada sinyal pending & tidak diblock → deliver
+           File: src/kernel/task.h, src/kernel/task.c
+
+  [F-T2] Deliver sinyal ke user space
+         Rencana:
+           - SIGKILL/SIGTERM: langsung task_exit() dari kernel (tidak
+             bisa di-catch)
+           - SIGINT: default = task_exit(); bisa di-override via
+             SYS_SIGNAL handler
+           - SYS_SIGNAL(87): daftarkan handler; lib.h: signal(sig, fn)
+           - SYS_KILL(88): kirim sinyal ke pid; lib.h: kill(pid, sig)
+           File: src/kernel/task.c, src/kernel/syscall.h/c,
+                 src/programs/lib.h
+
+  [F-T3] Ctrl+C di shell → SIGINT ke foreground process
+         Masalah: Saat ini Ctrl+C tidak melakukan apa-apa.
+         Rencana:
+           - keyboard_handler: jika scancode Ctrl+C dan ada fg_pid → 
+             task_send_signal(fg_pid, SIGINT)
+           - shell.c: simpan fg_pid saat exec tanpa &
+           File: src/kernel/keyboard.c, src/kernel/shell.c
+
+  [F-T4] waitpid() dengan exit code
+         Masalah: waitpid() saat ini hanya menunggu, tidak mengembalikan
+           exit code anak.
+         Rencana:
+           - task.h: tambah field int exit_code
+           - task_exit(code) / SYS_EXIT menerima int code
+           - SYS_WAITPID: kembalikan exit code via pointer argumen
+           - lib.h: int waitpid(pid) → tidak berubah ABI; tambah
+             int waitpid_ex(pid, int *status)
+           File: src/kernel/task.h/c, src/kernel/syscall.c,
+                 src/programs/lib.h
+
+  [F-T5] Demo: sigtest
+         - fork() + anak sleep(5s); induk kirim SIGTERM ke anak
+         - Verifikasi anak mati sebelum 5s
+         File: src/programs/sigtest.c
+
+================================================================
+FONDASI U — FUTEX + THREAD-LOCAL STORAGE (TLS)
+================================================================
+Status: [RENCANA]
+Prioritas: 3
+Prasyarat: Fondasi P (threading) selesai ✓
+----------------------------------------------------------------
+Tujuan: Lengkapi model threading — mutex cepat tanpa syscall untuk
+        kasus tidak-berkontestasi, dan variabel lokal per-thread.
+
+  [F-U1] Futex (fast userspace mutex)
+         Rencana:
+           - SYS_FUTEX_WAIT(89): jika *(uint32_t*)addr == expected,
+             block task ini; atomik cek+block di kernel (tanpa race)
+           - SYS_FUTEX_WAKE(90): bangunkan hingga N waiter pada addr
+           - lib.h: mutex_lock(m) → CAS dulu; jika gagal → futex_wait
+             mutex_unlock(m) → store 0; futex_wake jika ada waiter
+           File: src/kernel/syscall.h/c, src/programs/lib.h
+
+  [F-U2] Thread-Local Storage (TLS)
+         Rencana:
+           - Alokasi 1 halaman TLS per thread: VA 0x800000 + tid*0x1000
+           - task_create_thread(): petakan halaman TLS, set FS MSR
+             (IA32_FS_BASE = 0x800000+tid*0x1000) via WRMSRL
+           - SYS_GET_TLS(91): kembalikan FS base address ke user
+           - lib.h: static inline void *tls_get() { long r; 
+             __asm__("mov %%fs:0,%0":"=r"(r)); return (void*)r; }
+           File: src/kernel/task.c, src/kernel/syscall.h/c,
+                 src/programs/lib.h
+
+  [F-U3] Demo: futextest
+         - N thread paralel increment counter via futex-mutex
+         - Verifikasi nilai final = N × iterasi
+         File: src/programs/futextest.c
+
+================================================================
+FONDASI V — MFS4 DISK PERSISTENCE
+================================================================
+Status: [RENCANA]
+Prioritas: 4
+Prasyarat: Fondasi R3 (MFS4 in-memory) selesai ✓
+----------------------------------------------------------------
+Tujuan: Inode table MFS4 ditulis ke disk sehingga symlink, hardlink,
+        dan direktori bertahan setelah reboot.
+
+  [F-V1] Layout disk MFS4
+         Rencana:
+           - Sektor 0: superblock MFS3 (tidak berubah)
+           - Sektor 513: magic "MFS4" + jumlah inode
+           - Sektor 514–641: inode table (128 × 128 byte = 16KB = 32 sektor)
+           - mfs4_flush(): tulis inode table ke sektor 514+
+           - mfs4_load(): baca sektor 514+; jika magic cocok, isi inodes[]
+           File: src/kernel/mfs4.c, src/kernel/ata.c
+
+  [F-V2] Integrasi dengan fs_flush / SYS_FS_SYNC
+         Rencana:
+           - fs_flush() di fs.c: setelah flush MFS3, panggil mfs4_flush()
+           - mfs4_init(): panggil mfs4_load() sebelum scan MFS3
+           - Shell: sync sudah memanggil SYS_FS_SYNC → otomatis persist
+           File: src/kernel/fs.c, src/kernel/mfs4.c
+
+  [F-V3] Rename file via MFS4
+         Rencana:
+           - mfs4_rename(old_path, new_path): update path di inode
+           - Jika ada hardlink → update semua inode dengan inode_id sama
+           - SYS_MFS4_RENAME(92); lib.h: mfs4_rename_u()
+           - Shell: rename <lama> <baru>
+           File: src/kernel/mfs4.h/c, src/kernel/syscall.h/c,
+                 src/kernel/shell.c, src/programs/lib.h
+
+================================================================
+FONDASI W — POLL / SELECT + NON-BLOCKING FD
+================================================================
+Status: [RENCANA]
+Prioritas: 5
+Prasyarat: Fondasi R2 (VFS fd lengkap) selesai ✓
+----------------------------------------------------------------
+Tujuan: Program dapat menunggu event dari beberapa fd sekaligus
+        (network + stdin) tanpa membuat thread terpisah per fd.
+
+  [F-W1] Flag non-blocking fd
+         Rencana:
+           - VFS_O_NONBLOCK (0x08): flag baru di vfs_open / vfs_pipe
+           - vfs_read() tipe PIPE/NET/STDIN + nonblock: jika tidak ada
+             data → return -EAGAIN (bukan block)
+           - SYS_FCNTL(93): set/get flags fd; lib.h: fcntl(fd, F_SETFL)
+           File: src/kernel/vfs.h/c, src/kernel/syscall.h/c
+
+  [F-W2] poll() syscall
+         Rencana:
+           - struct PollFd { int fd; short events; short revents; }
+           - SYS_POLL(94): poll(fds[], nfds, timeout_ms)
+             Jika semua fd tidak siap → task_block() dengan wake_tick;
+             setiap event (pipe write, net recv, key press) cek dan
+             unblock task yang poll-wait pada fd tersebut
+           - lib.h: poll(), POLLIN/POLLOUT constants
+           File: src/kernel/vfs.h/c, src/kernel/syscall.h/c,
+                 src/programs/lib.h
+
+  [F-W3] Demo: polltest
+         - Buka pipe + stdin; poll({pipe_fd, stdin_fd}, 2, 1000)
+         - Verifikasi event terdeteksi dengan benar
+         File: src/programs/polltest.c
+
+================================================================
+FONDASI X — TCP RELIABILITY
+================================================================
+Status: [RENCANA]
+Prioritas: 6
+Prasyarat: Fitur C2 (TCP stack dasar) selesai ✓
+----------------------------------------------------------------
+Tujuan: TCP stack dapat menangani paket hilang / out-of-order
+        dan koneksi jangka panjang tanpa hang.
+
+  [F-X1] TCP retransmit timer
+         Masalah: Saat ini jika paket ACK tidak datang, koneksi
+           stuck selamanya (tidak ada retransmit).
+         Rencana:
+           - TcpConn: tambah retrans_tick, retrans_count, tx_buf[]+len
+           - Timer IRQ: setiap tick cek semua conn ESTABLISHED;
+             jika get_ticks()-retrans_tick > RTO (200ms) && unacked data
+             → retransmit, retrans_count++; jika > 5 → RST
+           File: src/kernel/net.c
+
+  [F-X2] TCP receive window / out-of-order buffer
+         Rencana:
+           - Simpan seq number terakhir (rcv_nxt); jika paket masuk
+             seq != rcv_nxt → simpan di ooo_buf (1 slot) + kirim
+             duplicate ACK
+           - Setelah gap terisi: gabungkan ke rx ring buffer
+           File: src/kernel/net.c
+
+  [F-X3] TCP keepalive + timeout idle
+         Rencana:
+           - Setelah 30 detik tidak ada data → kirim keepalive probe
+           - Jika tidak ada reply setelah 3 probe → close koneksi
+           File: src/kernel/net.c
+
+  [F-X4] DNS resolver sederhana
+         Rencana:
+           - dns_resolve(hostname, out_ip): kirim UDP DNS query ke
+             8.8.8.8:53, parse response A record
+           - Shell: nslookup <hostname>
+           - lib.h: dns_resolve() wrapper
+           File: src/kernel/net.c, src/kernel/shell.c,
+                 src/programs/lib.h
+
+================================================================
+RINGKASAN URUTAN & TARGET 100%
 ================================================================
 
-  [DONE] Kernel foundation (heap, task stack, BSS fix, malloc lock)
-  [DONE] FS 32 file, magic MFS2, SYS_FS_READ copy ke userspace
-  [DONE] Tahap A  — 32bpp True Color       (selesai 24 Maret 2026)
-  [DONE] Tahap B  — Resolusi 1280×720      (selesai 26 Maret 2026)
-  [DONE] Tahap B+ — Resolusi 1920×1080     (selesai 26 Maret 2026)
-  [ C  ] 64-bit Long Mode                  ← DIKERJAKAN SEKARANG
+  [DONE] Foundation  — heap, BSS, interrupt, task, FS, GUI
+  [DONE] Tahap A–C   — 32bpp, 1920×1080, 64-bit Long Mode
+  [DONE] Tahap D–G   — Stability, FS MFS3, Userspace, Networking
+  [DONE] Tahap H–M   — SMP, Per-core scheduler, VFS, Guard, IPC
+  [DONE] Fondasi N–Q — Threading, Stabilitas, fork+COW, mmap
+  [DONE] Fondasi R1  — Blocking I/O sejati
+  [DONE] Fondasi R2  — VFS_TYPE_PIPE/NET/TTY, fd inheritance fork
+  [DONE] Fondasi R3  — MFS4 inode: symlink, hardlink, stat, mkdir
+  [ TODO ] Fondasi S — Shell pipeline | sejati via VFS fd  (~82%)
+  [ TODO ] Fondasi T — Signal: SIGKILL/SIGINT, Ctrl+C, exit code  (~87%)
+  [ TODO ] Fondasi U — Futex + TLS  (~90%)
+  [ TODO ] Fondasi V — MFS4 disk persistence + rename  (~94%)
+  [ TODO ] Fondasi W — poll/select + non-blocking fd  (~97%)
+  [ TODO ] Fondasi X — TCP retransmit + DNS  (~100%)
 
 ================================================================
