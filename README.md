@@ -191,7 +191,36 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **Syscall `SYS_MMAP (75)`, `SYS_MUNMAP (76)`**, **lib.h**: `mmap()`, `munmap()`
 - **Demo**: `forktest` — fork+waitpid, mmap write/read/munmap, fork+exec_replace(`hello`)
 
-#### F-R1 — Blocking I/O Sejati
+### Fondasi R2 — VFS Pipe/Net/TTY (2 April 2026)
+
+#### F-R2 — VFS Backend Tambahan
+- **`VFS_MAX_FD`** dinaikkan 8 → 16; `VfsFd` memakai `union` untuk semua tipe
+- **`VFS_TYPE_PIPE (4)`**: `vfs_pipe(tid, &fd_r, &fd_w)` — alokasi pipe anonim + 2 fd (read/write end); `vfs_read/write` mendelegasikan ke `pipe_read/pipe_write` (blocking)
+- **`VFS_TYPE_NET (5)`**: `vfs_net_open(tid, ip, port)` wraps `net_tcp_connect()` → fd; read/write via `net_tcp_recv/send`
+- **`VFS_TYPE_TTY (6)`**: `vfs_tty_open(tid)` — alokasi TTY slot dengan pipe sebagai backend
+- **`vfs_redirect_out_pipe / vfs_redirect_in_pipe`**: redirect fd 1/0 ke write/read-end pipe (untuk shell `|`)
+- **`vfs_copy_fds(src, dst)`**: salin seluruh fd table induk ke anak — **bug fix fork**: `task_create_fork()` semula memanggil `vfs_init_task()` (reset fd) sehingga anak tidak mewarisi pipe fd; diganti `vfs_copy_fds()` (Unix semantics)
+- **Syscall**: `SYS_PIPE2(77)`, `SYS_NET_OPEN(78)`, `SYS_TTY_OPEN(79)`, `SYS_PIPE_REDIRECT(80)`
+- **lib.h**: `pipe2()`, `net_open_fd()`, `tty_open()`, `pipe_redirect_out/in()`
+- **Demo**: `pipetest` — `pipe2()`+fork, induk tulis 17 bytes, anak baca → `anak: isi OK`
+
+### Fondasi R3 — MFS4 Inode Layer (2 April 2026)
+
+#### F-R3 — Filesystem Hierarki dengan Inode
+- **`mfs4.h / mfs4.c`**: inode table 128 entri in-memory di atas MFS3
+- **Tipe inode**: `FILE(1)`, `DIR(2)`, `SYMLINK(3)`
+- **`mfs4_init()`**: scan MFS3 via `fs_get_table()` → register semua file/dir ke inode table
+- **`mfs4_resolve(path)`**: ikuti symlink chain (max depth 8), kembalikan path asli
+- **`mfs4_symlink(link, target)`**: buat inode SYMLINK dengan field `target`
+- **`mfs4_hardlink(link, orig)`**: buat inode FILE berbagi `inode_id` dengan original
+- **`mfs4_mkdir(path)`**: panggil `fs_mkdir()` + daftarkan inode DIR
+- **`mfs4_stat(path, out)`**: resolusi symlink + `fs_read_bin` untuk size + perms
+- **`mfs4_listdir(dir, buf, sz)`**: iterasi inode, temukan semua anak langsung dari dir
+- **`mfs4_unlink(path)`**: cek refcount hardlink, `fs_delete()` hanya jika refcount = 0
+- **`fs_get_table()`**: fungsi baru di `fs.c` untuk ekspos tabel MFS3 ke MFS4
+- **Syscall**: `SYS_MFS4_SYMLINK(81)`, `SYS_MFS4_HARDLINK(82)`, `SYS_MFS4_STAT(83)`, `SYS_MFS4_LISTDIR(84)`, `SYS_MFS4_UNLINK(85)`, `SYS_MFS4_MKDIR(86)`
+- **lib.h**: `mfs4_symlink_u`, `mfs4_hardlink_u`, `mfs4_stat_u`, `mfs4_listdir_u`, `mfs4_unlink_u`, `mfs4_mkdir_u`; typedef `UMfs4Stat`
+- **Demo**: `mfs4test` — mkdir, stat, symlink+resolve, hardlink, listdir (15 entries), unlink → semua OK
 - **Keyboard non-blocking CPU**: `vfs_read(fd=0)` kini `task_block()` sampai `keyboard_handler` memanggil `task_unblock(kwaiter)` — CPU bebas untuk task lain saat menunggu input
 - **Pipe blocking sejati**: `pipe_read()` ganti `task_sleep(10)` busy-wait → `task_block()`; `pipe_write()` langsung memanggil `task_unblock(reader_waiter)` setelah menulis
 - **VFS stdin blocking**: `vfs_read(VFS_TYPE_STDIN)` loop `keyboard_set_waiter + task_block()` bukan spin
@@ -511,6 +540,8 @@ Lihat [ROADMAP.txt](ROADMAP.txt) untuk roadmap lengkap.
 | Fondasi P+R — Threading Lanjutan | 2 Apr 2026 | Condvar, condtest, ps thread display, shell redirect >, <, SYS_PRINT via VFS |
 | TCP/UDP Stack | 2 Apr 2026 | TCP 3-way handshake, UDP send, tcp_get HTTP client, terverifikasi HTTP GET 2403 bytes |
 | Fondasi Q — Proses & Memori Lanjutan | 2 Apr 2026 | fork()+COW, exec_replace(), demand-paging thread stack, mmap/munmap, vmm_map_page intermediate fix |
+| Fondasi R2 — VFS Pipe/Net/TTY | 2 Apr 2026 | VFS_TYPE_PIPE/NET/TTY, vfs_pipe/net_open/tty_open, vfs_copy_fds (fork fd inheritance fix), pipetest OK |
+| Fondasi R3 — MFS4 Inode Layer | 2 Apr 2026 | symlink, hardlink, stat, listdir, mkdir, unlink via inode table 128 entri di atas MFS3, mfs4test OK |
 
 ---
 

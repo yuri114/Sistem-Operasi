@@ -99,6 +99,20 @@
 #define SYS_MMAP          75  // alloc N halaman anonim: ebx=n_pages → VA, atau 0 gagal
 #define SYS_MUNMAP        76  // bebaskan: ebx=va, edx=n_pages
 
+/* F-R2 — VFS pipe/net/tty via fd */
+#define SYS_PIPE2         77  // buat pipe: ebx=ptr int[2] {fd_r,fd_w} → 0/-1
+#define SYS_NET_OPEN      78  // buka TCP: ebx=ptr{u8 ip[4];u16 port} → fd
+#define SYS_TTY_OPEN      79  // alokasi TTY fd → fd atau -1
+#define SYS_PIPE_REDIRECT 80  // redirect stdout/stdin ke pipe: ebx=tid,edx=pipe_id|dir<<24
+
+/* F-R3 — MFS4 inode layer */
+#define SYS_MFS4_SYMLINK  81  // buat symlink: ebx=link_ptr, edx=target_ptr → 0/-1
+#define SYS_MFS4_HARDLINK 82  // buat hardlink: ebx=link_ptr, edx=orig_ptr → 0/-1
+#define SYS_MFS4_STAT     83  // stat: ebx=path_ptr, edx=ptr MFS4Stat → 0/-1
+#define SYS_MFS4_LISTDIR  84  // list dir: ebx=dir_ptr, edx=ptr{char*,int} → count
+#define SYS_MFS4_UNLINK   85  // unlink: ebx=path_ptr → 0/-1
+#define SYS_MFS4_MKDIR    86  // mkdir: ebx=path_ptr → 0/-1
+
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);
 

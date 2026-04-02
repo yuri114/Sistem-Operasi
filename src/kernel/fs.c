@@ -446,3 +446,6 @@ uint32_t fs_get_mtime(const char *name) {
         if (files[i].used && fs_strcmp(files[i].name, name)) return files[i].mtime;
     return 0;
 }
+
+/* F-R3: Ekspos tabel file MFS3 ke mfs4.c untuk inode scan. */
+FSFile *fs_get_table(void) { return files; }

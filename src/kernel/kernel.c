@@ -33,6 +33,8 @@
 #include "threadtest_elf_data.h"
 #include "condtest_elf_data.h"
 #include "forktest_elf_data.h"
+#include "pipetest_elf_data.h"
+#include "mfs4test_elf_data.h"
 #include "ipc.h"
 #include "semaphore.h"
 #include "pipe.h"
@@ -50,6 +52,7 @@
 #include "smp.h"
 #include "acpi.h"
 #include "condvar.h"
+#include "mfs4.h"
 
 /* Bochs VBE 1280x720 @ 32bpp: font 8x8 = 160 kolom x 90 baris */
 #define VGA_COLS 160
@@ -248,6 +251,8 @@ void programs_init() {
     fs_write_bin("threadtest",    build_threadtest_elf,    build_threadtest_elf_len);
     fs_write_bin("condtest",      build_condtest_elf,      build_condtest_elf_len);
     fs_write_bin("forktest",      build_forktest_elf,      build_forktest_elf_len);
+    fs_write_bin("pipetest",      build_pipetest_elf,      build_pipetest_elf_len);
+    fs_write_bin("mfs4test",      build_mfs4test_elf,      build_mfs4test_elf_len);
 }
 
 /* Deklarasi handler dari isr.asm */
@@ -429,6 +434,7 @@ void kernel_main(){
     ata_init();
     net_init();
     fs_init();
+    mfs4_init();   /* F-R3: inode layer di atas MFS3 */
     ipc_init();
     sem_init_all();
     pipe_init_all();

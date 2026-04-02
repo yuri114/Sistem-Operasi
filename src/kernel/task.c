@@ -573,7 +573,7 @@ int task_create_fork(int parent_tid, uint64_t child_rip, uint64_t child_rsp) {
     }
 
     tasks[id].rsp = (uint64_t)stack_top;
-    vfs_init_task(id);   /* child mulai dengan fd set bersih */
+    vfs_copy_fds(parent_tid, id);   /* child warisi semua fd dari induk (fork semantics) */
     return id;
 }
 

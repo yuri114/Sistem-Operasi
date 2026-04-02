@@ -369,6 +369,8 @@ RINGKASAN URUTAN & STATUS
   [DONE] Fitur C1    — ps thread display [T:X], shell redirect > <, condtest (condvar demo)  (2 April 2026)
   [DONE] Fitur C2    — TCP/UDP stack: net_tcp_connect/send/recv/close, tcp_get HTTP client  (2 April 2026)
   [DONE] Fondasi Q   — fork()+COW, exec_replace(), demand-page thread stack, mmap/munmap  (2 April 2026)
+  [DONE] Fondasi R2  — VFS_TYPE_PIPE/NET/TTY, fd diwarisi fork (vfs_copy_fds)  (2 April 2026)
+  [DONE] Fondasi R3  — MFS4 inode layer: symlink, hardlink, stat, listdir, mkdir, unlink  (2 April 2026)
 
 ================================================================
 
@@ -1200,24 +1202,48 @@ Prasyarat: Fondasi P selesai
            File: src/kernel/keyboard.c, src/kernel/pipe.c,
                  src/kernel/vfs.c, src/kernel/task.h
 
-  [F-R2] VFS backend tambahan
-         Rencana:
-           - VFS_TYPE_PIPE (4): pipe fd terintegrasi penuh ke VFS
-             (saat ini pipe dan VFS masih terpisah)
-           - VFS_TYPE_NET (5): socket sederhana read/write via fd;
-             net_recv / net_send di-wrap ke vfs_read/vfs_write
-           - VFS_TYPE_TTY (6): pseudo-terminal untuk gui_term agar
-             dapat di-redirect dengan operator pipe
+  [F-R2] ✓ VFS backend tambahan
+  Status: [SELESAI] ✓ Selesai 2 April 2026
+           - VFS_MAX_FD: 8 → 16; VfsFd memakai union untuk semua tipe
+           - VFS_TYPE_PIPE (4): vfs_pipe() alokasi pipe_alloc() + 2 fd (read/write end)
+             vfs_read/write mendelegasikan ke pipe_read/pipe_write (blocking)
+           - VFS_TYPE_NET (5): vfs_net_open() wraps net_tcp_connect() → fd
+             vfs_read/write mendelegasikan ke net_tcp_recv/send
+           - VFS_TYPE_TTY (6): vfs_tty_open() alokasi TtySlot (pipe sebagai backend)
+           - vfs_redirect_out_pipe(tid,pipe_id): set fd[1] ke PIPE write-end
+           - vfs_redirect_in_pipe(tid,pipe_id): set fd[0] ke PIPE read-end
+           - vfs_copy_fds(src,dst): salin seluruh fd table (dipakai di fork)
+           - Bug fix: task_create_fork() semula memanggil vfs_init_task (reset fd)
+             → diganti vfs_copy_fds() agar fd diwarisi anak (Unix semantics)
+           - Syscall baru: SYS_PIPE2(77), SYS_NET_OPEN(78), SYS_TTY_OPEN(79),
+             SYS_PIPE_REDIRECT(80)
+           - lib.h: pipe2(), net_open_fd(), tty_open(), pipe_redirect_out/in()
+           - Demo: pipetest — pipe2+fork, induk tulis, anak baca → OK
+           File: src/kernel/vfs.h, src/kernel/vfs.c, src/kernel/task.c,
+                 src/kernel/syscall.h/c, src/programs/lib.h, src/programs/pipetest.c
 
-  [F-R3] Filesystem hierarki penuh (MFS4)
-         Rencana:
-           - Path resolution kedalaman bebas (saat ini hanya 1 level dir)
-           - Inode-based layout: inode table terpisah dari data block
-           - Hardlink (second directory entry ke inode yang sama)
-           - Symlink (entry tipe SYMLINK + target path string)
-           - Disk layout MFS4: superblock + inode bitmap + data bitmap +
-             inode table + data region
-           File: src/kernel/fs.h, src/kernel/fs.c (rewrite besar)
+  [F-R3] ✓ Filesystem inode layer (MFS4)
+  Status: [SELESAI] ✓ Selesai 2 April 2026
+           - mfs4.h / mfs4.c: inode table 128 entri di atas MFS3 (in-memory)
+           - Tipe inode: FILE(1), DIR(2), SYMLINK(3)
+           - mfs4_init(): scan MFS3 via fs_get_table() → register semua file/dir
+           - mfs4_resolve(): ikuti symlink chain (max depth 8)
+           - mfs4_symlink(link, target): buat inode SYMLINK
+           - mfs4_hardlink(link, orig): buat inode FILE berbagi inode_id
+           - mfs4_mkdir(path): panggil fs_mkdir() + buat inode DIR
+           - mfs4_stat(path, out): resolusi symlink + fs_read_bin untuk size
+           - mfs4_listdir(dir, buf, sz): iterasi inode, temukan anak langsung
+           - mfs4_unlink(path): cek refcount hardlink, fs_delete() jika 0 ref
+           - fs_get_table(): fungsi baru di fs.c untuk ekspos tabel MFS3
+           - Syscall baru: SYS_MFS4_SYMLINK(81), SYS_MFS4_HARDLINK(82),
+             SYS_MFS4_STAT(83), SYS_MFS4_LISTDIR(84), SYS_MFS4_UNLINK(85),
+             SYS_MFS4_MKDIR(86)
+           - lib.h: mfs4_symlink_u, mfs4_hardlink_u, mfs4_stat_u, mfs4_listdir_u,
+             mfs4_unlink_u, mfs4_mkdir_u; typedef UMfs4Stat
+           - Demo: mfs4test — mkdir, stat, symlink, hardlink, listdir, unlink → OK
+           File: src/kernel/mfs4.h, src/kernel/mfs4.c, src/kernel/fs.h/c,
+                 src/kernel/syscall.h/c, src/kernel/kernel.c, build.ps1,
+                 src/programs/lib.h, src/programs/mfs4test.c
 
 ================================================================
 RINGKASAN URUTAN

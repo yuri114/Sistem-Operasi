@@ -57,4 +57,7 @@ uint16_t fs_get_perms(const char *name);
 int      fs_set_perms(const char *name, uint16_t perms);
 uint32_t fs_get_mtime(const char *name);
 
+/* F-R3: akses langsung tabel file untuk mfs4_init() */
+FSFile  *fs_get_table(void);
+
 #endif

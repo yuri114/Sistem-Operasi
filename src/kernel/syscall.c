@@ -4,6 +4,7 @@
 #include "task.h"
 #include "memory.h"
 #include "fs.h"
+#include "mfs4.h"
 #include "ipc.h"
 #include "semaphore.h"
 #include "pipe.h"
@@ -689,6 +690,96 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
             if (phys >= 768ULL * 4096) pmm_free_frame(phys);
         }
         return 0;
+    }
+
+    // ---------------------------------------------------------------
+    // F-R2 — VFS pipe/net/tty via file descriptor
+    // ---------------------------------------------------------------
+
+    // SYS_PIPE2(77): buat pipe, kembalikan dua fd di array int[2].
+    // ebx = ptr int[2] { fd_read, fd_write }
+    if (eax == SYS_PIPE2) {
+        if (!is_user_ptr(ebx)) return (uint64_t)-1;
+        int *fds = (int *)ebx;
+        int fd_r = -1, fd_w = -1;
+        int tid = task_get_current();
+        int r = vfs_pipe(tid, &fd_r, &fd_w);
+        fds[0] = fd_r;
+        fds[1] = fd_w;
+        return (uint64_t)(int64_t)r;
+    }
+
+    // SYS_NET_OPEN(78): buka TCP socket ke ip:port, kembalikan fd.
+    // ebx = ptr struct { uint8_t ip[4]; uint16_t port; }
+    if (eax == SYS_NET_OPEN) {
+        if (!is_user_ptr(ebx)) return (uint64_t)-1;
+        typedef struct { uint8_t ip[4]; uint16_t port; } NetArgs;
+        NetArgs *a = (NetArgs *)ebx;
+        int tid = task_get_current();
+        return (uint64_t)(int64_t)vfs_net_open(tid, a->ip, a->port);
+    }
+
+    // SYS_TTY_OPEN(79): alokasi TTY fd untuk task saat ini.
+    if (eax == SYS_TTY_OPEN) {
+        int tid = task_get_current();
+        return (uint64_t)(int64_t)vfs_tty_open(tid);
+    }
+
+    // SYS_PIPE_REDIRECT(80): redirect stdout/stdin ke pipe.
+    // ebx = target_tid, edx = (dir<<24)|pipe_id
+    //   dir=0 → redirect stdin  (fd 0) ke read-end pipe
+    //   dir=1 → redirect stdout (fd 1) ke write-end pipe
+    if (eax == SYS_PIPE_REDIRECT) {
+        int target    = (int)ebx;
+        int pipe_id   = (int)(edx & 0xFFFFFF);
+        int dir       = (int)(edx >> 24);
+        if (dir == 1)
+            return (uint64_t)(int64_t)vfs_redirect_out_pipe(target, pipe_id);
+        else
+            return (uint64_t)(int64_t)vfs_redirect_in_pipe(target, pipe_id);
+    }
+
+    // ---------------------------------------------------------------
+    // F-R3 — MFS4 inode layer syscalls
+    // ---------------------------------------------------------------
+
+    // SYS_MFS4_SYMLINK(81): buat symlink; ebx=link_path_ptr, edx=target_path_ptr
+    if (eax == SYS_MFS4_SYMLINK) {
+        if (!is_user_ptr(ebx) || !is_user_ptr(edx)) return (uint64_t)-1;
+        return (uint64_t)(int64_t)mfs4_symlink((const char*)ebx, (const char*)edx);
+    }
+
+    // SYS_MFS4_HARDLINK(82): buat hardlink; ebx=link_path_ptr, edx=orig_path_ptr
+    if (eax == SYS_MFS4_HARDLINK) {
+        if (!is_user_ptr(ebx) || !is_user_ptr(edx)) return (uint64_t)-1;
+        return (uint64_t)(int64_t)mfs4_hardlink((const char*)ebx, (const char*)edx);
+    }
+
+    // SYS_MFS4_STAT(83): stat file; ebx=path_ptr, edx=ptr MFS4Stat
+    if (eax == SYS_MFS4_STAT) {
+        if (!is_user_ptr(ebx) || !is_user_ptr(edx)) return (uint64_t)-1;
+        return (uint64_t)(int64_t)mfs4_stat((const char*)ebx, (MFS4Stat*)edx);
+    }
+
+    // SYS_MFS4_LISTDIR(84): list dir; ebx=dir_ptr, edx=ptr{char*buf, int bufsz}
+    if (eax == SYS_MFS4_LISTDIR) {
+        if (!is_user_ptr(ebx) || !is_user_ptr(edx)) return (uint64_t)-1;
+        typedef struct { char *buf; int bufsz; } LDArgs;
+        LDArgs *a = (LDArgs*)edx;
+        if (!is_user_ptr((uint64_t)a->buf)) return (uint64_t)-1;
+        return (uint64_t)(int64_t)mfs4_listdir((const char*)ebx, a->buf, a->bufsz);
+    }
+
+    // SYS_MFS4_UNLINK(85): unlink; ebx=path_ptr
+    if (eax == SYS_MFS4_UNLINK) {
+        if (!is_user_ptr(ebx)) return (uint64_t)-1;
+        return (uint64_t)(int64_t)mfs4_unlink((const char*)ebx);
+    }
+
+    // SYS_MFS4_MKDIR(86): mkdir via MFS4; ebx=path_ptr
+    if (eax == SYS_MFS4_MKDIR) {
+        if (!is_user_ptr(ebx)) return (uint64_t)-1;
+        return (uint64_t)(int64_t)mfs4_mkdir((const char*)ebx);
     }
 
     return (uint64_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal

@@ -1094,4 +1094,96 @@ static inline void munmap(void *addr, int n_pages) {
     syscall2(SYS_MUNMAP, (long)addr, (long)(unsigned)n_pages);
 }
 
+/* ------------------------------------------------------------------ */
+/* F-R2 — VFS backend: pipe / net / tty                               */
+/* ------------------------------------------------------------------ */
+
+#define SYS_PIPE2          77
+#define SYS_NET_OPEN       78
+#define SYS_TTY_OPEN       79
+#define SYS_PIPE_REDIRECT  80
+
+/* F-R3 — MFS4 inode layer                                            */
+#define SYS_MFS4_SYMLINK   81
+#define SYS_MFS4_HARDLINK  82
+#define SYS_MFS4_STAT      83
+#define SYS_MFS4_LISTDIR   84
+#define SYS_MFS4_UNLINK    85
+#define SYS_MFS4_MKDIR     86
+
+/*
+ * pipe2(fds) — buat anonymous pipe.
+ * fds[0] = read-end fd, fds[1] = write-end fd.
+ * Return 0 sukses, -1 gagal.
+ */
+static inline int pipe2(int fds[2]) {
+    return (int)syscall1(SYS_PIPE2, (long)fds);
+}
+
+/*
+ * net_open_fd(ip, port) — buka TCP connection, return fd.
+ */
+typedef struct { unsigned char ip[4]; unsigned short port; } _NetOpenArgs;
+static inline int net_open_fd(unsigned char ip[4], unsigned short port) {
+    _NetOpenArgs a;
+    int i; for (i = 0; i < 4; i++) a.ip[i] = ip[i];
+    a.port = port;
+    return (int)syscall1(SYS_NET_OPEN, (long)&a);
+}
+
+/*
+ * tty_open() — buka TTY baru, return fd.
+ */
+static inline int tty_open(void) {
+    return (int)syscall0(SYS_TTY_OPEN);
+}
+
+/*
+ * pipe_redirect_out(tid, pipe_id) — redirect stdout task tid ke write-end pipe_id.
+ * pipe_redirect_in(tid, pipe_id)  — redirect stdin  task tid ke read-end  pipe_id.
+ */
+static inline int pipe_redirect_out(int tid, int pipe_id) {
+    return (int)syscall2(SYS_PIPE_REDIRECT, (long)tid,
+                         (long)((1 << 24) | (pipe_id & 0xFFFFFF)));
+}
+static inline int pipe_redirect_in(int tid, int pipe_id) {
+    return (int)syscall2(SYS_PIPE_REDIRECT, (long)tid,
+                         (long)((0 << 24) | (pipe_id & 0xFFFFFF)));
+}
+
+/* ------------------------------------------------------------------ */
+/* F-R3 — MFS4 inode layer wrappers                                   */
+/* ------------------------------------------------------------------ */
+
+/* struct stat dari MFS4 (harus cocok dengan MFS4Stat di kernel) */
+typedef struct {
+    unsigned char  type;   /* 1=file, 2=dir, 3=symlink */
+    unsigned int   size;
+    unsigned int   ctime;
+    unsigned int   mtime;
+    unsigned short perms;
+} UMfs4Stat;
+
+static inline int mfs4_symlink(const char *link, const char *target) {
+    return (int)syscall2(SYS_MFS4_SYMLINK, (long)link, (long)target);
+}
+static inline int mfs4_hardlink(const char *link, const char *original) {
+    return (int)syscall2(SYS_MFS4_HARDLINK, (long)link, (long)original);
+}
+static inline int mfs4_stat(const char *path, UMfs4Stat *out) {
+    return (int)syscall2(SYS_MFS4_STAT, (long)path, (long)out);
+}
+
+typedef struct { char *buf; int bufsz; } _MListArgs;
+static inline int mfs4_listdir(const char *dir, char *buf, int bufsz) {
+    _MListArgs a = { buf, bufsz };
+    return (int)syscall2(SYS_MFS4_LISTDIR, (long)dir, (long)&a);
+}
+static inline int mfs4_unlink(const char *path) {
+    return (int)syscall1(SYS_MFS4_UNLINK, (long)path);
+}
+static inline int mfs4_mkdir(const char *path) {
+    return (int)syscall1(SYS_MFS4_MKDIR, (long)path);
+}
+
 #endif
