@@ -54,8 +54,14 @@ static uint16_t ip_id_counter = 1;
 #define TCP_PSH  0x08
 #define TCP_ACK  0x10
 
-#define TCP_RX_SIZE  1024   /* RX ring buffer per connection   */
-#define TCP_MAX_CONN 4      /* simultaneous TCP connections    */
+#define TCP_RX_SIZE   1024  /* RX ring buffer per connection   */
+#define TCP_TX_SIZE   1400  /* retransmit buffer per connection*/
+#define TCP_MAX_CONN  4     /* simultaneous TCP connections    */
+#define TCP_RTO       200   /* retransmit timeout (ms)         */
+#define TCP_MAX_RETRANS 5   /* max retransmit attempts → RST   */
+#define TCP_KEEPALIVE_IDLE  30000  /* idle ms sebelum keepalive probe */
+#define TCP_KEEPALIVE_INTVL 5000   /* interval antar probe (ms)       */
+#define TCP_KEEPALIVE_CNT   3      /* max probe sebelum close (ms)    */
 
 typedef struct {
     uint8_t  used;
@@ -71,6 +77,20 @@ typedef struct {
     uint16_t rx_tail;
     uint8_t  fin_recv;      /* 1 = remote sent FIN             */
     uint8_t  rst_recv;      /* 1 = remote sent RST (refused)   */
+    /* F-X1: retransmit */
+    uint8_t  tx_buf[TCP_TX_SIZE]; /* last unacked data payload  */
+    uint16_t tx_len;        /* bytes in tx_buf (0=nothing unacked)     */
+    uint32_t tx_seq;        /* seq number of tx_buf[0]                 */
+    uint32_t retrans_tick;  /* get_ticks() saat tx_buf terisi          */
+    uint8_t  retrans_count; /* jumlah retransmit sudah dilakukan       */
+    /* F-X2: out-of-order slot (1 packet) */
+    uint8_t  ooo_buf[TCP_TX_SIZE]; /* 1 out-of-order segment             */
+    uint16_t ooo_len;       /* bytes in ooo_buf (0=kosong)             */
+    uint32_t ooo_seq;       /* seq number ooo_buf[0]                   */
+    /* F-X3: keepalive */
+    uint32_t last_rx_tick;  /* get_ticks() saat terakhir terima data   */
+    uint8_t  ka_probes;     /* jumlah keepalive probe terkirim         */
+    uint32_t ka_next_tick;  /* waktu probe berikutnya                  */
 } TcpConn;
 
 static TcpConn tcp_conns[TCP_MAX_CONN];
@@ -515,8 +535,10 @@ static void tcp_rx_process(const uint8_t *ip_hdr, const uint8_t *tcp_seg, int tc
             }
         } else if (c->state == TCP_ESTABLISHED || c->state == TCP_FIN_WAIT1
                                                 || c->state == TCP_FIN_WAIT2) {
-            /* Update snd_nxt on ACK */
+            /* F-X1: ACK clears retransmit buffer jika semua data ter-ack */
             if (flags & TCP_ACK) {
+                if (c->tx_len > 0 && sack >= c->tx_seq + c->tx_len)
+                    c->tx_len = 0;  /* semua ter-ack */
                 if (c->state == TCP_FIN_WAIT1 && sack == c->snd_nxt)
                     c->state = TCP_FIN_WAIT2;
                 else
@@ -524,9 +546,33 @@ static void tcp_rx_process(const uint8_t *ip_hdr, const uint8_t *tcp_seg, int tc
             }
             /* Accept incoming data */
             if (dlen > 0 && c->state == TCP_ESTABLISHED) {
-                tcp_rx_push(c, data, (uint16_t)dlen);
-                c->rcv_nxt += (uint32_t)dlen;
-                tcp_tx(c, TCP_ACK, c->snd_nxt, c->rcv_nxt, 0, 0);
+                c->last_rx_tick = get_ticks();         /* F-X3: reset keepalive idle */
+                c->ka_probes    = 0;
+                c->ka_next_tick = get_ticks() + TCP_KEEPALIVE_IDLE;
+                if (sseq == c->rcv_nxt) {
+                    /* In-order: terima langsung */
+                    tcp_rx_push(c, data, (uint16_t)dlen);
+                    c->rcv_nxt += (uint32_t)dlen;
+                    /* F-X2: cek apakah ada OOO segment yang kini bisa digabung */
+                    if (c->ooo_len > 0 && c->ooo_seq == c->rcv_nxt) {
+                        tcp_rx_push(c, c->ooo_buf, c->ooo_len);
+                        c->rcv_nxt += c->ooo_len;
+                        c->ooo_len  = 0;
+                    }
+                    tcp_tx(c, TCP_ACK, c->snd_nxt, c->rcv_nxt, 0, 0);
+                } else if (sseq > c->rcv_nxt && dlen <= (int)TCP_TX_SIZE) {
+                    /* F-X2: out-of-order — simpan satu slot, kirim duplicate ACK */
+                    if (c->ooo_len == 0) {
+                        int oi; for (oi = 0; oi < dlen; oi++) c->ooo_buf[oi] = data[oi];
+                        c->ooo_len = (uint16_t)dlen;
+                        c->ooo_seq = sseq;
+                    }
+                    /* duplicate ACK */
+                    tcp_tx(c, TCP_ACK, c->snd_nxt, c->rcv_nxt, 0, 0);
+                } else {
+                    /* dup / retrans data sudah dimiliki — ACK saja */
+                    tcp_tx(c, TCP_ACK, c->snd_nxt, c->rcv_nxt, 0, 0);
+                }
             }
             /* Remote FIN */
             if (flags & TCP_FIN) {
@@ -549,6 +595,140 @@ static void next_hop_ip(const uint8_t dst[4], uint8_t out[4]) {
         mc(out, dst, 4);
     else
         mc(out, GW_IP, 4);
+}
+
+/* ================================================================== */
+/* F-X4: DNS resolver — kirim query A record UDP ke 8.8.8.8:53       */
+/* ================================================================== */
+#define DNS_PORT      53
+#define DNS_SRC_PORT  5353  /* source port lokal untuk DNS query */
+#define DNS_MAX_PKT   512
+
+/* DNS server publik (Google) */
+static const uint8_t DNS_SERVER[4] = {8, 8, 8, 8};
+
+/* Bangun DNS query untuk hostname → A record.
+ * buf harus ukuran minimal DNS_MAX_PKT.
+ * Return panjang query. */
+static int dns_build_query(uint8_t *buf, const char *hostname, uint16_t txid) {
+    int i, j;
+    /* Header: TXID, flags(standard query), 1 question */
+    buf[0]  = (uint8_t)(txid >> 8);
+    buf[1]  = (uint8_t)(txid & 0xFF);
+    buf[2]  = 0x01; buf[3] = 0x00;  /* recursion desired */
+    buf[4]  = 0x00; buf[5] = 0x01;  /* QDCOUNT = 1 */
+    buf[6]  = 0x00; buf[7] = 0x00;  /* ANCOUNT = 0 */
+    buf[8]  = 0x00; buf[9] = 0x00;  /* NSCOUNT = 0 */
+    buf[10] = 0x00; buf[11] = 0x00; /* ARCOUNT = 0 */
+
+    /* QNAME: setiap label diawali panjangnya */
+    int pos = 12;
+    const char *p = hostname;
+    while (*p) {
+        const char *dot = p;
+        while (*dot && *dot != '.') dot++;
+        int llen = (int)(dot - p);
+        buf[pos++] = (uint8_t)llen;
+        for (j = 0; j < llen; j++) buf[pos++] = (uint8_t)p[j];
+        p = dot;
+        if (*p == '.') p++;
+    }
+    buf[pos++] = 0;          /* terminasi QNAME */
+    buf[pos++] = 0x00; buf[pos++] = 0x01;  /* QTYPE = A (1) */
+    buf[pos++] = 0x00; buf[pos++] = 0x01;  /* QCLASS = IN (1) */
+    (void)i;
+    return pos;
+}
+
+/* Parse DNS response, cari A record pertama, isi out_ip[4].
+ * Return 1 sukses, 0 gagal. */
+static int dns_parse_response(const uint8_t *buf, int len, uint16_t txid,
+                              uint8_t out_ip[4]) {
+    if (len < 12) return 0;
+    uint16_t rid = (uint16_t)(((uint16_t)buf[0] << 8) | buf[1]);
+    if (rid != txid) return 0;
+    if (!(buf[2] & 0x80)) return 0;   /* bukan response */
+    uint16_t ancount = (uint16_t)(((uint16_t)buf[6] << 8) | buf[7]);
+    if (ancount == 0) return 0;
+
+    /* Skip question section */
+    int pos = 12;
+    /* Skip QNAME */
+    while (pos < len) {
+        uint8_t llen = buf[pos++];
+        if (llen == 0) break;
+        if ((llen & 0xC0) == 0xC0) { pos++; break; }  /* pointer */
+        pos += llen;
+    }
+    pos += 4;  /* skip QTYPE + QCLASS */
+
+    /* Parse answer records */
+    int a;
+    for (a = 0; a < (int)ancount && pos < len; a++) {
+        /* Skip NAME (may be pointer) */
+        if (pos < len && (buf[pos] & 0xC0) == 0xC0) pos += 2;
+        else {
+            while (pos < len) {
+                uint8_t llen = buf[pos++];
+                if (llen == 0) break;
+                pos += llen;
+            }
+        }
+        if (pos + 10 > len) break;
+        uint16_t rtype  = (uint16_t)(((uint16_t)buf[pos] << 8) | buf[pos+1]);
+        uint16_t rdlen  = (uint16_t)(((uint16_t)buf[pos+8] << 8) | buf[pos+9]);
+        pos += 10;  /* skip TYPE(2)+CLASS(2)+TTL(4)+RDLENGTH(2) */
+        if (rtype == 1 && rdlen == 4 && pos + 4 <= len) {
+            /* A record! */
+            out_ip[0] = buf[pos];
+            out_ip[1] = buf[pos+1];
+            out_ip[2] = buf[pos+2];
+            out_ip[3] = buf[pos+3];
+            return 1;
+        }
+        pos += rdlen;
+    }
+    return 0;
+}
+
+/* dns_resolve(hostname, out_ip): kirim UDP DNS query, tunggu reply.
+ * Return 1 sukses + out_ip diisi, 0 gagal/timeout. */
+int dns_resolve(const char *hostname, uint8_t out_ip[4]) {
+    if (!rtl8139_present()) return 0;
+    uint8_t qbuf[DNS_MAX_PKT];
+    static uint16_t dns_txid = 0x4400;
+    uint16_t txid = ++dns_txid;
+    int qlen = dns_build_query(qbuf, hostname, txid);
+
+    /* Kirim 3 kali (timeout 1s per attempt) */
+    int attempt;
+    for (attempt = 0; attempt < 3; attempt++) {
+        net_udp_send(DNS_SERVER, DNS_PORT, DNS_SRC_PORT, qbuf, (uint16_t)qlen);
+
+        uint32_t deadline = get_ticks() + 1000;
+        while (get_ticks() < deadline) {
+            /* Poll NIC untuk paket masuk */
+            uint8_t pkt[1514]; uint16_t plen;
+            if (rtl8139_recv(pkt, &plen) == 0 && plen > 42) {
+                /* Cek: UDP, dari port 53, ke DNS_SRC_PORT */
+                uint8_t *ip  = pkt + 14;
+                if (ip[9] != 17) continue;   /* bukan UDP */
+                uint8_t *udp = ip + (ip[0] & 0xF) * 4;
+                uint16_t sp = (uint16_t)(((uint16_t)udp[0] << 8) | udp[1]);
+                uint16_t dp = (uint16_t)(((uint16_t)udp[2] << 8) | udp[3]);
+                if (sp != DNS_PORT || dp != DNS_SRC_PORT) {
+                    /* Bukan DNS reply: proses sebagai paket biasa */
+                    net_process(pkt, plen, 0, 0, 0);
+                    continue;
+                }
+                uint8_t *dns_payload = udp + 8;
+                int dns_len = (int)plen - 14 - (int)((ip[0] & 0xF) * 4) - 8;
+                if (dns_parse_response(dns_payload, dns_len, txid, out_ip))
+                    return 1;
+            }
+        }
+    }
+    return 0;
 }
 
 /* ================================================================== */
@@ -611,16 +791,25 @@ int net_tcp_connect(const uint8_t dst_ip[4], uint16_t dst_port) {
     if (!arp_resolve(nh, c->dst_mac)) return -1;
 
     mc(c->dst_ip, dst_ip, 4);
-    c->dst_port  = dst_port;
-    c->src_port  = tcp_port_ctr++;
+    c->dst_port      = dst_port;
+    c->src_port      = tcp_port_ctr++;
     if (tcp_port_ctr < 49152) tcp_port_ctr = 49152;
-    c->snd_nxt   = 0x12340000u + (uint32_t)(c->src_port * 131u);
-    c->rcv_nxt   = 0;
-    c->rx_head   = c->rx_tail = 0;
-    c->fin_recv  = 0;
-    c->rst_recv  = 0;
-    c->state     = TCP_SYN_SENT;
-    c->used      = 1;
+    c->snd_nxt       = 0x12340000u + (uint32_t)(c->src_port * 131u);
+    c->rcv_nxt       = 0;
+    c->rx_head       = c->rx_tail = 0;
+    c->fin_recv      = 0;
+    c->rst_recv      = 0;
+    c->tx_len        = 0;
+    c->tx_seq        = 0;
+    c->retrans_tick  = 0;
+    c->retrans_count = 0;
+    c->ooo_len       = 0;
+    c->ooo_seq       = 0;
+    c->last_rx_tick  = get_ticks();
+    c->ka_probes     = 0;
+    c->ka_next_tick  = get_ticks() + TCP_KEEPALIVE_IDLE;
+    c->state         = TCP_SYN_SENT;
+    c->used          = 1;
 
     /* Send SYN */
     tcp_tx(c, TCP_SYN, c->snd_nxt, 0, 0, 0);
@@ -642,8 +831,14 @@ int net_tcp_send(int id, const void *data, uint16_t len) {
     if (id < 0 || id >= TCP_MAX_CONN) return -1;
     TcpConn *c = &tcp_conns[id];
     if (!c->used || c->state != TCP_ESTABLISHED) return -1;
-    uint16_t chunk = len > 1400 ? 1400 : len;
+    uint16_t chunk = len > TCP_TX_SIZE ? (uint16_t)TCP_TX_SIZE : len;
     tcp_tx(c, TCP_PSH | TCP_ACK, c->snd_nxt, c->rcv_nxt, (const uint8_t*)data, chunk);
+    /* F-X1: simpan ke tx_buf untuk retransmit jika ACK tidak datang */
+    c->tx_seq = c->snd_nxt;
+    c->tx_len = chunk;
+    int j; for (j = 0; j < (int)chunk; j++) c->tx_buf[j] = ((const uint8_t*)data)[j];
+    c->retrans_tick  = get_ticks();
+    c->retrans_count = 0;
     c->snd_nxt += chunk;
     return (int)chunk;
 }
@@ -697,3 +892,48 @@ int net_tcp_state(int id) {
 }
 
 void net_poll(void) { net_poll_once(); }
+
+/* ================================================================== */
+/* F-X1/X3: Periodic TCP timer — dipanggil dari timer IRQ setiap ~10ms */
+/* Periksa retransmit timeout dan keepalive untuk semua koneksi aktif.  */
+/* ================================================================== */
+void net_tcp_tick(void) {
+    if (!rtl8139_present()) return;
+    uint32_t now = get_ticks();
+    int i;
+    for (i = 0; i < TCP_MAX_CONN; i++) {
+        TcpConn *c = &tcp_conns[i];
+        if (!c->used || c->state != TCP_ESTABLISHED) continue;
+
+        /* F-X1: Retransmit — ada data belum di-ACK dan RTO terlewat */
+        if (c->tx_len > 0 && (now - c->retrans_tick) >= TCP_RTO) {
+            if (c->retrans_count >= TCP_MAX_RETRANS) {
+                /* Gagal total: kirim RST, tutup koneksi */
+                tcp_tx(c, TCP_RST | TCP_ACK, c->snd_nxt, c->rcv_nxt, 0, 0);
+                c->used = 0;
+                c->state = TCP_CLOSED;
+                continue;
+            }
+            /* Retransmit paket terakhir */
+            tcp_tx(c, TCP_PSH | TCP_ACK, c->tx_seq, c->rcv_nxt,
+                   c->tx_buf, c->tx_len);
+            c->retrans_tick = now;
+            c->retrans_count++;
+        }
+
+        /* F-X3: Keepalive — kirim probe jika idle terlalu lama */
+        if ((now - c->last_rx_tick) >= TCP_KEEPALIVE_IDLE && now >= c->ka_next_tick) {
+            if (c->ka_probes >= TCP_KEEPALIVE_CNT) {
+                /* Tidak ada respons: tutup koneksi */
+                tcp_tx(c, TCP_RST | TCP_ACK, c->snd_nxt, c->rcv_nxt, 0, 0);
+                c->used  = 0;
+                c->state = TCP_CLOSED;
+                continue;
+            }
+            /* Kirim keepalive probe: ACK dengan snd_nxt-1 (satu byte fiktif) */
+            tcp_tx(c, TCP_ACK, c->snd_nxt - 1, c->rcv_nxt, 0, 0);
+            c->ka_probes++;
+            c->ka_next_tick = now + TCP_KEEPALIVE_INTVL;
+        }
+    }
+}

@@ -1458,7 +1458,7 @@ Tujuan: Program dapat menunggu event dari beberapa fd sekaligus
 ================================================================
 FONDASI X — TCP RELIABILITY
 ================================================================
-Status: [RENCANA]
+Status: [SELESAI] ✓ Fondasi X selesai — TCP retransmit+OOO+keepalive+DNS
 Prioritas: 6
 Prasyarat: Fitur C2 (TCP stack dasar) selesai ✓
 ----------------------------------------------------------------
@@ -1515,6 +1515,6 @@ RINGKASAN URUTAN & TARGET 100%
   [DONE] Fondasi U   — Futex + TLS  (~93%)
   [DONE] Fondasi V   — MFS4 disk persistence + rename  (~96%)
   [DONE] Fondasi W   — poll/select + non-blocking fd  (~97%)
-  [ TODO ] Fondasi X — TCP retransmit + DNS  (~100%)
+  [DONE] Fondasi X   — TCP retransmit + DNS  (~100%) ← SELESAI
 
 ================================================================

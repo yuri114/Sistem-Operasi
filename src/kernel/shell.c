@@ -80,7 +80,7 @@ static const char *shell_commands[] = {
     "cd ", "pwd", "export ", "env",
     "sync", "mkdir ", "chmod ",
     "ifconfig", "ping ", "cpuinfo",
-    "udp_send ", "tcp_get ",
+    "udp_send ", "tcp_get ", "nslookup ",
     "open ", "fread ", "fwrite ", "fclose ",
     "mq_send ", "mq_recv", "taskstat", "meminfo", "threadtest", "futextest",
     "polltest",
@@ -360,6 +360,7 @@ static void shell_execute(){
         print("ping <ip>            - kirim 4 ICMP echo request ke IP\n");
         print("udp_send <ip> <port> <pesan> - kirim UDP datagram\n");
         print("tcp_get <ip> <port> [path]   - HTTP GET via TCP (demo koneksi internet)\n");
+        print("nslookup <hostname>          - resolve DNS A record via 8.8.8.8\n");
         print("cpuinfo              - tampilkan info SMP (BSP/AP online)\n");
         print("taskstat             - tampilkan distribusi task per CPU\n");
         print("meminfo              - tampilkan statistik memori fisik & heap\n");
@@ -1036,8 +1037,34 @@ static void shell_execute(){
             }
         }
     }
-    else if (str_compare(input_buffer, "cpuinfo")) {
-        char nbuf[16];
+    /* F-X4: nslookup <hostname> */
+    else if (str_starts_with(input_buffer, "nslookup ")) {
+        const char *host = input_buffer + 9;
+        while (*host == ' ') host++;
+        if (!*host) {
+            print("nslookup: gunakan: nslookup <hostname>\n");
+        } else {
+            print("nslookup: resolving '");
+            print(host); print("'...\n");
+            uint8_t ip[4];
+            if (dns_resolve(host, ip)) {
+                set_color(GFX_LGREEN, GFX_BLACK);
+                print("nslookup: ");
+                print(host); print(" -> ");
+                char buf[6];
+                itoa(ip[0], buf); print(buf); print(".");
+                itoa(ip[1], buf); print(buf); print(".");
+                itoa(ip[2], buf); print(buf); print(".");
+                itoa(ip[3], buf); print(buf); print("\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+            } else {
+                set_color(GFX_LRED, GFX_BLACK);
+                print("nslookup: gagal resolve '"); print(host); print("'\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+            }
+        }
+    }
+    else if (str_compare(input_buffer, "cpuinfo")) {        char nbuf[16];
         int i;
 
         print("cpu total: ");

@@ -49,4 +49,11 @@ int  net_tcp_state(int id);
 /* Proses satu paket masuk dari NIC (panggil dari polling loop). */
 void net_poll(void);
 
+/* F-X1/X3: Periodic TCP timer — dipanggil dari timer IRQ tiap ~10ms. */
+void net_tcp_tick(void);
+
+/* F-X4: DNS resolver — resolve hostname ke IPv4 via UDP ke 8.8.8.8:53.
+ * Return 1 + out_ip diisi jika sukses, 0 jika timeout/error. */
+int  dns_resolve(const char *hostname, uint8_t out_ip[4]);
+
 #endif

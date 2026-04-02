@@ -1,6 +1,7 @@
 /* timer.c — Programmable Interval Timer (PIT 8253/8254) @ 1000Hz (1ms/tick) */
 #include "timer.h"
 #include "task.h"
+#include "net.h"
 
 #define PIT_CHANNEL0    0x40    /* port data channel 0 */
 #define PIT_COMMAND     0x43    /* port command */
@@ -20,6 +21,9 @@ static inline void outb(uint16_t port, uint8_t value) {
 void timer_handler() {
     tick++;
     task_check_sleepers();
+    /* F-X1/X3: TCP retransmit + keepalive timer setiap 10 ms */
+    if (tick % 10 == 0)
+        net_tcp_tick();
 }
 
 /*

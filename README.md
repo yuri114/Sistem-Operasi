@@ -352,6 +352,31 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - File: `src/programs/polltest.c`
 
 
+### Fondasi X — TCP Reliability + DNS (3 April 2026)
+
+#### F-X1 — TCP Retransmit Timer
+- **TcpConn**: tambah `tx_buf[1400]`, `tx_seq`, `retrans_tick`, `retrans_count`
+- **`net_tcp_send()`**: simpan data ke `tx_buf` sebelum kirim; set `retrans_tick = get_ticks()`
+- **`tcp_rx_process()`**: saat terima ACK penuh → hapus `tx_buf` (clear `tx_len = 0`)
+- **`net_tcp_tick()`**: dipanggil dari `timer_handler()` setiap 10 ms — jika data unacked + RTO (200 ms) terlewat → retransmit; jika `retrans_count > 5` → kirim RST + close
+
+#### F-X2 — Out-of-order Buffer (1 slot)
+- **TcpConn**: tambah `ooo_buf[1400]`, `ooo_seq`, `ooo_len`
+- Segmen OOO (seq ≠ `rcv_nxt`): simpan ke satu slot OOO + kirim duplicate ACK
+- Setelah gap terisi (segmen berikutnya sesuai `rcv_nxt`): gabungkan OOO ke rx ring buffer
+
+#### F-X3 — TCP Keepalive + Idle Timeout
+- **TcpConn**: tambah `last_rx_tick`, `ka_probes`, `ka_next_tick`
+- Idle 30 detik tanpa data masuk → kirim ACK probe (`snd_nxt - 1`)
+- 3 probe tanpa reply → kirim RST + close koneksi (`TCP_KEEPALIVE_IDLE=30000 ms`, `TCP_KEEPALIVE_INTVL=5000 ms`, `TCP_KEEPALIVE_CNT=3`)
+
+#### F-X4 — DNS Resolver
+- **`dns_build_query()`**: bangun paket DNS query RFC 1035 untuk hostname arbitrary
+- **`dns_parse_response()`**: parse UDP DNS response, ekstrak A record (IPv4)
+- **`dns_resolve(hostname, out_ip)`**: kirim UDP query ke 8.8.8.8:53; 3 attempt × 1 s timeout; return 1 + isi `out_ip[4]`, atau 0 jika gagal
+- **Shell**: `nslookup <hostname>` → cetak IP hijau atau pesan error merah
+- File: `src/kernel/net.c`, `src/kernel/net.h`, `src/kernel/shell.c`
+
 - **LAPIC**: enable via IA32_APIC_BASE MSR + SVR register, baca APIC ID, kirim INIT/SIPI IPI via ICR
 - **ACPI MADT parser**: scan RSDP → RSDT → MADT untuk enumerasi CPU/APIC ID
 - **AP trampoline** di 0x7000: real mode → 32-bit protected → 64-bit long mode
@@ -401,6 +426,9 @@ SYS_MFS4_RENAME(92)
 SYS_FCNTL(93) SYS_POLL(94)
 ```
 
+> **F-X4 helper** (tidak pakai syscall tersendiri — DNS via `net_udp_send/recv` kernel-internal):
+> `dns_resolve(hostname, out_ip)` tersedia di kernel; user space: `nslookup` shell command
+
 ### Libc Minimal (`lib.h`) — Tahap F2
 - **Variadic**: `va_list`, `va_start`, `va_arg`, `va_end` (GCC builtins)
 - **Format**: `vsprintf`, `sprintf`, `printf` — mendukung `%d %i %u %x %X %s %c %p %%`, flags `-` `0` width, modifier `l`
@@ -420,6 +448,9 @@ SYS_FCNTL(93) SYS_POLL(94)
 | `threadtest` | Demo threading — spawn 3 thread paralel, join, verifikasi counter |
 | `futextest` | Demo Fondasi U — 4 thread × 1000 iterasi via mutex futex; verifikasi counter == 4000 |
 | `polltest` | Demo Fondasi W — non-blocking fd: uji -EAGAIN; poll() deteksi POLLIN pipe dalam 2s timeout |
+
+**Shell built-in tambahan (Fondasi X):**
+- `nslookup <hostname>` — resolve DNS A record via 8.8.8.8:53, tampilkan IP atau error
 | `hello` | Hello-world demo user process |
 | `gfxtest` | Demo grafis (pixel, rect, line) |
 | `gui_demo` | Demo window manager |
