@@ -16,6 +16,7 @@
  */
 #include "apic.h"
 #include "timer.h"
+#include "idt.h"
 #include <stdint.h>
 
 /* ------------------------------------------------------------------ */
@@ -81,6 +82,13 @@ void apic_enable(void)
 
     /* Clear Task Priority → terima semua interrupt */
     lapic_write(LAPIC_TPR, 0);
+
+    /* Pasang handler untuk spurious interrupt (vektor 0xFF) sebelum SVR ditulis.
+     * IDT default (entry=0) menyebabkan triple fault jika spurious INT terpicu. */
+    {
+        extern void lapic_spurious_isr(void);
+        idt_set_gate(0xFF, (uint64_t)lapic_spurious_isr);
+    }
 
     /* Tulis SVR: aktifkan LAPIC software, set spurious vektor 0xFF */
     lapic_write(LAPIC_SVR, SVR_ENABLE);

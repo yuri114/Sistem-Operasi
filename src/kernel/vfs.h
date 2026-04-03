@@ -22,6 +22,7 @@
 #define VFS_TYPE_PIPE   4  /* pipe — anonymous atau named             */
 #define VFS_TYPE_NET    5  /* TCP socket via net_tcp_*                */
 #define VFS_TYPE_TTY    6  /* pseudo-terminal (gui_term / pipe shell) */
+#define VFS_TYPE_PROC   7  /* Fondasi AH: virtual /proc file         */
 
 /* Flag open */
 #define VFS_O_RDONLY    0x01

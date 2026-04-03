@@ -1,0 +1,2 @@
+[BOOT] kernel_main() entered
+[D1] SYSCALL/SYSRET MSR configured

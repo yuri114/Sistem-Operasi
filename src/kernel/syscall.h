@@ -129,6 +129,9 @@
 #define SYS_FCNTL         93  // set fd flags: ebx=fd, edx=new_flags → 0/-1
 #define SYS_POLL          94  // poll: ebx=KPollArgs* → jumlah fd siap / 0=timeout / -1=error
 
+/* Fondasi AA — argv retrieval */
+#define SYS_GETARGV       95  // get argv: rdi=buf_ptr, rsi=argv_ptr_array → return argc
+
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);
 

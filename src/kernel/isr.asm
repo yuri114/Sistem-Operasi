@@ -20,6 +20,7 @@ global int80_handler
 global syscall_entry
 global syscall_kstack
 global lapic_timer_isr
+global lapic_spurious_isr
 
 extern keyboard_handler
 extern timer_handler
@@ -322,4 +323,11 @@ lapic_timer_isr:
     mov  dword [rcx], 0
 
     RESTORE_REGS
+    iretq
+
+; ------------------------------------------------------------------
+; LAPIC Spurious Interrupt ISR (INT 0xFF)
+; Spurious interrupts do NOT require EOI — just iretq.
+; ------------------------------------------------------------------
+lapic_spurious_isr:
     iretq

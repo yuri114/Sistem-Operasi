@@ -40,6 +40,12 @@
 #include "futextest_elf_data.h"
 #include "mfs4test_elf_data.h"
 #include "polltest_elf_data.h"
+#include "cat_elf_data.h"
+#include "wc_elf_data.h"
+#include "head_elf_data.h"
+#include "cp_elf_data.h"
+#include "mv_elf_data.h"
+#include "edit_elf_data.h"
 #include "ipc.h"
 #include "semaphore.h"
 #include "pipe.h"
@@ -84,15 +90,132 @@ void set_color(uint32_t fg, uint32_t bg) {
     bg_color = bg;
 }
 
+/* Forward declaration for ANSI parser */
+void clear_screen(void);
+
+/* ---------------------------------------------------------------
+ * Fondasi AG — ANSI escape code parser
+ * Mendukung: ESC[<n>m (SGR), ESC[2J (clear), ESC[row;colH (cursor),
+ *            ESC[nA/B/C/D (cursor move), ESC[K (clear to EOL)
+ * --------------------------------------------------------------- */
+static int   ansi_state = 0;         /* 0=normal 1=ESC 2=bracket */
+static char  ansi_buf[24];
+static int   ansi_len  = 0;
+
+/* Tabel 8 warna standar ANSI (0..7) — dark + bright */
+static const uint32_t ansi_dark[8] = {
+    0x00000000u, 0x00AA0000u, 0x0000AA00u, 0x00AA5500u,
+    0x000000AAu, 0x00AA00AAu, 0x0000AAAAu, 0x00AAAAAAu,
+};
+static const uint32_t ansi_bright[8] = {
+    0x00555555u, 0x00FF5555u, 0x0055FF55u, 0x00FFFF55u,
+    0x005555FFu, 0x00FF55FFu, 0x0055FFFFu, 0x00FFFFFFu,
+};
+
+/* Helper: parse semicolon-sep numbers dari ansi_buf → params[], return count */
+static int ansi_parse_params(int *params, int maxp) {
+    int np = 0, i = 0, v = 0, has = 0;
+    while (ansi_buf[i] || has) {
+        char ch = ansi_buf[i];
+        if (ch >= '0' && ch <= '9') { v = v*10 + (ch-'0'); has = 1; i++; }
+        else { if (np < maxp) params[np++] = v; v = 0; has = 0;
+               if (ch == ';') i++; else break; }
+    }
+    return np;
+}
+
+static void ansi_dispatch(char term) {
+    int params[8]; int np = ansi_parse_params(params, 8);
+    int n0 = (np > 0) ? params[0] : 0;
+    int n1 = (np > 1) ? params[1] : 0;
+
+    if (term == 'm') {  /* SGR — color/attribute */
+        if (np == 0) { fg_color = 0x00FFFFFFu; bg_color = 0x00000000u; return; }
+        int p;
+        for (p = 0; p < np; p++) {
+            int n = params[p];
+            if (n == 0) { fg_color = 0x00FFFFFFu; bg_color = 0x00000000u; }
+            else if (n == 1) {
+                int ci;
+                for (ci = 0; ci < 8; ci++)
+                    if (fg_color == ansi_dark[ci]) { fg_color = ansi_bright[ci]; break; }
+            }
+            else if (n >= 30 && n <= 37) fg_color = ansi_dark [n-30];
+            else if (n == 39)            fg_color = 0x00FFFFFFu;
+            else if (n >= 40 && n <= 47) bg_color = ansi_dark [n-40];
+            else if (n == 49)            bg_color = 0x00000000u;
+            else if (n >= 90 && n <= 97) fg_color = ansi_bright[n-90];
+            else if (n >= 100&& n <=107) bg_color = ansi_bright[n-100];
+        }
+    } else if (term == 'H' || term == 'f') {  /* cursor position ESC[row;colH */
+        int r = (n0 > 0) ? n0 - 1 : 0;
+        int c = (n1 > 0) ? n1 - 1 : 0;
+        if (r < 0) r = 0; if (r >= VGA_ROWS) r = VGA_ROWS - 1;
+        if (c < 0) c = 0; if (c >= VGA_COLS) c = VGA_COLS - 1;
+        cursor_row = r; cursor_col = c;
+        update_cursor();
+    } else if (term == 'A') {  /* cursor up */
+        int n = (n0 > 0) ? n0 : 1;
+        cursor_row -= n; if (cursor_row < 0) cursor_row = 0;
+        update_cursor();
+    } else if (term == 'B') {  /* cursor down */
+        int n = (n0 > 0) ? n0 : 1;
+        cursor_row += n; if (cursor_row >= VGA_ROWS) cursor_row = VGA_ROWS-1;
+        update_cursor();
+    } else if (term == 'C') {  /* cursor right */
+        int n = (n0 > 0) ? n0 : 1;
+        cursor_col += n; if (cursor_col >= VGA_COLS) cursor_col = VGA_COLS-1;
+        update_cursor();
+    } else if (term == 'D') {  /* cursor left */
+        int n = (n0 > 0) ? n0 : 1;
+        cursor_col -= n; if (cursor_col < 0) cursor_col = 0;
+        update_cursor();
+    } else if (term == 'J') {  /* clear screen / part of screen */
+        if (n0 == 2) { clear_screen(); }  /* ESC[2J = clear all */
+        /* ESC[0J or ESC[J = clear from cursor to end — simplified: just clear screen */
+    } else if (term == 'K') {  /* erase line */
+        int col;
+        if (n0 == 0) {  /* clear cursor to end of line */
+            for (col = cursor_col; col < VGA_COLS; col++)
+                draw_char_gfx(col*8, cursor_row*8, ' ', fg_color, bg_color);
+        } else if (n0 == 1) {  /* clear start of line to cursor */
+            for (col = 0; col <= cursor_col; col++)
+                draw_char_gfx(col*8, cursor_row*8, ' ', fg_color, bg_color);
+        } else if (n0 == 2) {  /* clear whole line */
+            for (col = 0; col < VGA_COLS; col++)
+                draw_char_gfx(col*8, cursor_row*8, ' ', fg_color, bg_color);
+        }
+    }
+}
+
 /*fungsi: hapus seluruh layar*/
 void clear_screen() {
-    fill_screen(bg_color);   /* isi framebuffer Mode 13h dengan warna background */
+    fill_screen(bg_color);
     cursor_col = 0;
     cursor_row = 0;
 }
 
 /*fungsi: cetak suatu karakter ke layar*/
 void print_char(char c) {
+    /* --- ANSI state machine --- */
+    if (ansi_state == 1) {
+        if (c == '[') { ansi_state = 2; ansi_len = 0; return; }
+        ansi_state = 0;   /* fallthrough untuk cetak karakter biasa */
+    }
+    if (ansi_state == 2) {
+        /* Terminal characters for ANSI sequences */
+        if (c == 'm' || c == 'J' || c == 'H' || c == 'f' ||
+            c == 'A' || c == 'B' || c == 'C' || c == 'D' || c == 'K') {
+            ansi_buf[ansi_len] = '\0';
+            ansi_dispatch(c);
+            ansi_state = 0;
+        } else if (ansi_len < 23) {
+            ansi_buf[ansi_len++] = c;
+        }
+        return;
+    }
+    if (c == '\033') { ansi_state = 1; return; }
+    /* --- end ANSI --- */
     if (c == '\n') {
         cursor_col = 0;
         cursor_row++;
@@ -263,6 +386,13 @@ void programs_init() {
     fs_write_bin("futextest",     build_futextest_elf,     build_futextest_elf_len);
     fs_write_bin("mfs4test",      build_mfs4test_elf,      build_mfs4test_elf_len);
     fs_write_bin("polltest",      build_polltest_elf,      build_polltest_elf_len);
+    /* Fondasi AB — tools */
+    fs_write_bin("cat",           build_cat_elf,           build_cat_elf_len);
+    fs_write_bin("wc",            build_wc_elf,            build_wc_elf_len);
+    fs_write_bin("head",          build_head_elf,          build_head_elf_len);
+    fs_write_bin("cp",            build_cp_elf,            build_cp_elf_len);
+    fs_write_bin("mv",            build_mv_elf,            build_mv_elf_len);
+    fs_write_bin("edit",          build_edit_elf,          build_edit_elf_len);
 }
 
 /* Deklarasi handler dari isr.asm */
@@ -408,28 +538,21 @@ void kernel_main(){
     serial_init();
     serial_print("[BOOT] kernel_main() entered\n");
 
-    /* Diagnostik: tulis ke VGA text buffer (0xB8000) sebelum VBE aktif.
-     * Jika huruf 'K' muncul di pojok kiri atas, berarti kernel C sudah dicapai.
-     * Ini menggunakan physical address 0xB8000 yang selalu ter-identity-map (< 4MB). */
+    /* Diagnostik: tulis ke VGA text buffer (0xB8000) sebelum VBE aktif. */
     volatile uint16_t *vga_dbg = (volatile uint16_t *)0xB8000;
-    vga_dbg[0] = 0x0F4B; /* 'K' putih di atas hitam */
-    vga_dbg[1] = 0x0F43; /* 'C' */
-    vga_dbg[2] = 0x0F20; /* ' ' */
+    vga_dbg[0] = 0x0F4B; vga_dbg[1] = 0x0F43; vga_dbg[2] = 0x0F20;
 
-    /* 1. Paging harus aktif lebih dulu agar bisa akses VBE LFB */
+    /* 1. Paging */
     paging_init();
-    vga_dbg[3] = 0x0F50; /* 'P' = paging OK */
+    vga_dbg[3] = 0x0F50;
 
-    /* 2. Temukan alamat BAR0 (VRAM/LFB) VBE stdvga via PCI config space.
-     *    BAR0 (offset 0x10) = VRAM / Linear Framebuffer.
-     *    BAR2 (offset 0x18) = MMIO registers (4KB) — menulis framebuffer ke sana
-     *    menyebabkan machine check → triple fault → reboot loop. */
+    /* 2. VBE LFB */
     uint32_t lfb_addr = vbe_find_lfb();
-    vga_dbg[4] = 0x0F46; /* 'F' = find_lfb OK */
+    vga_dbg[4] = 0x0F46;
     paging_map_vbe(lfb_addr);
-    vga_dbg[5] = 0x0F4D; /* 'M' = map OK */
+    vga_dbg[5] = 0x0F4D;
 
-    /* 3. Set mode grafis 1920x1080, update pointer framebuffer, inisialisasi */
+    /* 3. Set mode grafis */
     vbe_set_mode(1920, 1080, 32);
     graphics_set_fb(lfb_addr);
     graphics_init();
@@ -444,18 +567,19 @@ void kernel_main(){
     ata_init();
     net_init();
     fs_init();
-    mfs4_init();   /* F-R3: inode layer di atas MFS3 */
+    mfs4_init();
     ipc_init();
     sem_init_all();
     pipe_init_all();
     cv_init_all();
     shm_init();
+
     // Daftarkan dan inisialisasi device driver
     dev_register(DEV_VGA, &drv_vga);
     dev_register(DEV_KBD, &drv_kbd);
     dev_init_all();
     programs_init();
-    timer_init(TIMER_HZ);   /* 1000 Hz = 1ms per tick */
+    timer_init(TIMER_HZ);
     pic_init();
     idt_init();
     idt_set_gate(32, (uint64_t)irq0);
@@ -532,9 +656,6 @@ void kernel_main(){
     idt_set_gate(44, (uint64_t)irq12);
     wm_init();
     mouse_init();
-    /* Tidak membuat background task — task_count=1, task_switch selalu early return.
-     * Background task menyebabkan task switch aktif, yang mengubah CR3 dan ESP
-     * secara tidak terduga saat shell berada di tengah drawing loop → crash. */
 
     __asm__ volatile ("sti");
 

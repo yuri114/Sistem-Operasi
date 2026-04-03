@@ -107,7 +107,8 @@ int task_create(void (*entry)()) {
     return id;
 }
 
-int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, const char *name) {
+int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, const char *name,
+                     int argc, const char *const argv[]) {
     int id = -1, i;
     for (i = 1; i < MAX_TASKS; i++) {
         if (!tasks[i].used) { id = i; break; }
@@ -122,25 +123,52 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
     tasks[id].priority  = 2;
     tasks[id].ticks     = 2;
     tasks[id].pipe_id   = -1;
-    tasks[id].cpu_id    = -1;  /* ring-3 user task: dimulai bebas, BSP akan klaim */
+    tasks[id].cpu_id    = -1;
     tasks[id].waiter    = -1;
-    tasks[id].heap_end  = 0x400000ULL; /* user heap mulai di 0x400000 */
+    tasks[id].heap_end  = 0x400000ULL;
     tasks[id].is_user   = 1;
     tasks[id].is_thread = 0;
     tasks[id].parent_tid = -1;
     str_copy_n(tasks[id].name, name ? name : "?", 32);
 
-    /* Susun stack awal:
-     *   [tinggi] SS, RSP_user, RFLAGS, CS_user, RIP  (iretq frame ring-0->ring-3, 5 qword)
-     *   [rendah] 15 x 0                              (GPR slots) */
+    /* Simpan argv di task struct (diambil user via SYS_GETARGV syscall).
+     * Format arg_buf: "arg0\0arg1\0arg2\0" (null-terminated strings berurutan). */
+    tasks[id].arg_argc = 0;
+    tasks[id].arg_buf[0] = '\0';
+    {
+        int pos = 0;
+        int k;
+        int ac = (argc > 8) ? 8 : argc;
+        for (k = 0; k < ac && pos < 510; k++) {
+            const char *s = (argv && argv[k]) ? argv[k] : "";
+            int si = 0;
+            while (s[si] && pos < 510) tasks[id].arg_buf[pos++] = s[si++];
+            tasks[id].arg_buf[pos++] = '\0';
+        }
+        tasks[id].arg_buf[pos] = '\0';  /* extra null terminator */
+        tasks[id].arg_argc = ac;
+    }
+
+    /* Susun kernel stack awal:
+     *   [tinggi] SS, RSP_user, RFLAGS, CS_user, RIP  (iretq frame, 5 qword)
+     *   [rendah] 15 x 0                              (GPR slots: r15..rax)
+     *
+     * GPR slot layout (stack_top pointer ke elemen terendah setelah loop):
+     *   [0]=r15 [1]=r14 [2]=r13 [3]=r12 [4]=r11 [5]=r10 [6]=r9  [7]=r8
+     *   [8]=rbp [9]=rdi [10]=rsi [11]=rdx [12]=rcx [13]=rbx [14]=rax
+     * (urutan sesuai RESTORE_REGS di isr.asm: pop r15,r14,...,rbp,rdi,rsi,...,rax) */
     uint64_t *stack_top = (uint64_t *)(stacks_base + (uint64_t)id * STACK_SIZE + STACK_SIZE);
-    *(--stack_top) = 0x23;              /* SS: user data selector */
-    *(--stack_top) = user_rsp;          /* RSP: user mode stack */
-    *(--stack_top) = 0x202;             /* RFLAGS: IF=1 */
-    *(--stack_top) = 0x2B;              /* CS: user code selector (GDT 0x28 | RPL=3) */
-    *(--stack_top) = entry;             /* RIP: entry point ELF */
-    int k;
-    for (k = 0; k < 15; k++) *(--stack_top) = 0;
+    *(--stack_top) = 0x23;        /* SS: user data selector */
+    *(--stack_top) = user_rsp;    /* RSP: user mode stack */
+    *(--stack_top) = 0x202;       /* RFLAGS: IF=1 */
+    *(--stack_top) = 0x2B;        /* CS: user code selector */
+    *(--stack_top) = entry;       /* RIP: entry point */
+    {
+        int k;
+        for (k = 0; k < 15; k++) *(--stack_top) = 0;
+        /* rdi (slot 9) = argc — convenience agar program bisa baca tanpa syscall */
+        stack_top[9] = (uint64_t)(unsigned int)tasks[id].arg_argc;
+    }
 
     tasks[id].rsp = (uint64_t)stack_top;
     vfs_init_task(id);
@@ -582,6 +610,16 @@ uint64_t task_get_rsp0(int id) {
 uint64_t *task_get_page_dir(int id) {
     if (id < 0 || id >= MAX_TASKS || !tasks[id].used) return 0;
     return tasks[id].page_dir;
+}
+
+/* Fondasi AA — argv accessors */
+int tasks_getargc(int id) {
+    if (id < 0 || id >= MAX_TASKS || !tasks[id].used) return 0;
+    return tasks[id].arg_argc;
+}
+const char *tasks_getargbuf(int id) {
+    if (id < 0 || id >= MAX_TASKS || !tasks[id].used) return "";
+    return tasks[id].arg_buf;
 }
 
 void task_set_page_dir(int id, uint64_t *dir) {

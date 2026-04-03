@@ -1596,3 +1596,195 @@ RINGKASAN URUTAN & TARGET 100%
   [DONE] Fondasi Z   — HTTP chunked + redirect  (~105%) ← SELESAI
 
 ================================================================
+ROADMAP DAILY DRIVER (Fondasi AA – AH)
+================================================================
+Target: OS dapat dipakai sebagai daily driver — shell produktif,
+        program dengan argumen, tools standar Unix, scripting,
+        editor teks, dan tampilan terminal yang nyaman.
+
+Urutan pengerjaan (berdasarkan dampak/kepentingan):
+  [x] Fondasi AA — argv/argc + exec dengan argumen          (~108%)
+  [x] Fondasi AB — Built-in tools: cat, cp, mv, wc, head, tail, find (~110%)
+  [x] Fondasi AC — Shell scripting: if/while/for + file .sh (~113%)
+  [x] Fondasi AD — RTC driver + perintah date/time          (~115%)
+  [x] Fondasi AE — Text editor (edit <file>, nano-like)      (~118%)
+  [x] Fondasi AF — Command history (↑↓) + TAB completion ++  (~120%)
+  [x] Fondasi AG — ANSI/VT100 escape codes di output        (~122%)
+  [x] Fondasi AH — procfs /proc (ps/mem/net via file)        (~125%)
+
+================================================================
+FONDASI AA — ARGV/ARGC: ARGUMEN PROGRAM
+================================================================
+Status: [RENCANA]
+Prasyarat: Fondasi Z selesai ✓
+----------------------------------------------------------------
+Tujuan: Program user dapat menerima argumen dari shell.
+        Saat ini exec prog menjalankan program tanpa argumen —
+        grep, sort, dan semua program interaktif tidak bisa
+        menerima parameter. Ini fondasi paling kritis.
+
+  [AA1] Kernel: task_create_user() terima argv[]
+        - task.h: typedef struct ExecArgs { int argc; char argv[8][128]; }
+        - task_create_user(name, argc, argv[]):
+          build argv di user stack sebelum entry:
+            RSP -= sizeof(argv strings) + sizeof(char* array) + sizeof(int)
+            layout di stack: argc | argv[0] ptr | argv[1] ptr | NULL | strings
+        - shell.c: parse "exec prog arg1 arg2" → isi ExecArgs, teruskan
+
+  [AA2] lib.h: _start membaca argc/argv dari stack
+        - _start: rdi=argc, rsi=argv (ABI System V AMD64)
+        - Teruskan ke main(int argc, char **argv)
+        - Semua program yang butuh argumen: update signature _start→main
+
+  [AA3] Update program yang perlu argumen
+        - grep.c: argv[1] = pola string (ganti hardcode "test")
+        - ls.c: argv[1] = direktori (opsional)
+        - Program lain: terima argv sesuai kebutuhan
+
+  [AA4] Shell: exec dengan argumen
+        - shell.c exec parser: tokenize argumen setelah nama program
+        - Teruskan argc/argv ke task_create_user
+        - Contoh: exec grep elf → filter baris yang mengandung "elf"
+
+================================================================
+FONDASI AB — BUILT-IN TOOLS UNIX DASAR
+================================================================
+Status: [RENCANA]
+Prasyarat: Fondasi AA selesai ✓
+----------------------------------------------------------------
+Tujuan: Perintah-perintah Unix paling sering dipakai tersedia
+        langsung di shell (bukan program ELF terpisah) untuk kecepatan.
+
+  [AB1] cat <file> [file2...]    — cetak isi file ke stdout
+  [AB2] cp <src> <dst>           — salin file
+  [AB3] mv <src> <dst>           — pindahkan/rename file
+  [AB4] wc <file>               — hitung baris/kata/byte
+  [AB5] head [-n N] <file>       — cetak N baris pertama (default 10)
+  [AB6] tail [-n N] <file>       — cetak N baris terakhir (default 10)
+  [AB7] find <dir> <pattern>     — cari file berdasar nama
+  [AB8] stat <file>              — tampilkan metadata file (size, perms, mtime)
+  [AB9] touch <file>             — buat file kosong / update mtime
+  [AB10] tee <file>              — salin stdin ke stdout DAN file
+
+================================================================
+FONDASI AC — SHELL SCRIPTING
+================================================================
+Status: [RENCANA]
+Prasyarat: Fondasi AA selesai ✓
+----------------------------------------------------------------
+Tujuan: Shell dapat menjalankan file .sh berisi perintah-perintah
+        dengan kontrol alur dasar.
+
+  [AC1] File .sh execution: sh <script.sh>
+        - Baca file, eksekusi baris per baris
+        - Komentar # diabaikan, baris kosong dilewati
+
+  [AC2] Variabel lokal: VAR=nilai, $VAR expansion
+        - Guna: VAR=hello; echo $VAR
+        - Distingi env global (export) vs variabel lokal script
+
+  [AC3] if / else / fi
+        - if [ kondisi ]; then ... fi
+        - Kondisi: -f file, -eq, -ne, string compare
+
+  [AC4] while / do / done
+        - while [ kondisi ]; do ... done
+
+  [AC5] for / in / do / done
+        - for VAR in a b c; do ... done
+
+  [AC6] $1..$9 — argumen script
+        - sh myscript.sh arg1 arg2 → $1=arg1, $2=arg2
+
+================================================================
+FONDASI AD — RTC DRIVER + DATE/TIME
+================================================================
+Status: [RENCANA]
+Prasyarat: Fondasi Z selesai ✓
+----------------------------------------------------------------
+  [AD1] RTC driver (CMOS I/O port 0x70/0x71)
+        - rtc_read_time(): struct RtcTime { sec, min, hour, day, mon, year }
+        - Konversi BCD → binary
+        - File: src/kernel/rtc.h, src/kernel/rtc.c
+
+  [AD2] Shell: date — tampilkan tanggal dan waktu real
+        - "Jum, 3 Apr 2026 14:30:25"
+
+  [AD3] fs_get_mtime, fs_set_mtime update ke RTC
+        - File yang dibuat/dimodifikasi pakai timestamp RTC
+        - ls -l tampilkan timestamp yang benar
+
+================================================================
+FONDASI AE — TEXT EDITOR (edit command)
+================================================================
+Status: [RENCANA]
+Prasyarat: Fondasi AA, AB selesai ✓
+----------------------------------------------------------------
+Tujuan: edit <file> membuka editor teks di terminal —
+        baca file, tampilkan di layar, support navigasi dan edit.
+
+  [AE1] Mode layar penuh: bersihkan layar, tampilkan baris
+        - Header: nama file + status (modified/saved)
+        - Body: baris teks dengan nomor baris
+        - Footer: status bar + shortcut
+
+  [AE2] Navigasi: ↑↓←→, Home/End, PgUp/PgDn
+  [AE3] Edit: ketik karakter, Backspace, Delete, Enter
+  [AE4] Simpan: Ctrl+S → fs_write
+  [AE5] Keluar: Ctrl+Q (prompt simpan jika ada perubahan)
+  [AE6] Spesial: Ctrl+G goto line, Ctrl+F find string
+
+================================================================
+FONDASI AF — COMMAND HISTORY + TAB COMPLETION LANJUT
+================================================================
+Status: [RENCANA]
+Prasyarat: Fondasi Z selesai ✓
+----------------------------------------------------------------
+  [AF1] Command history (50 entri)
+        - Tombol ↑ → perintah sebelumnya, ↓ → perintah berikutnya
+        - history command: tampilkan semua riwayat
+
+  [AF2] Tab completion untuk perintah + file
+        - Tab pada awal baris: complete command/exec name
+        - Tab setelah path: complete filename
+
+================================================================
+FONDASI AG — ANSI/VT100 ESCAPE CODES
+================================================================
+Status: [RENCANA]
+Prasyarat: Fondasi AA selesai ✓
+----------------------------------------------------------------
+Tujuan: print() mengerti escape sequence \033[...m sehingga
+        program user dapat mencetak teks berwarna dan mengontrol
+        cursor tanpa syscall khusus.
+
+  [AG1] Parser \033[<n>m (SGR codes)
+        - 0=reset, 1=bold, 30-37=fg color, 40-47=bg color
+        - 90-97=bright fg, 100-107=bright bg
+        - Map ke palette warna OS (GFX_*)
+
+  [AG2] Cursor control
+        - \033[H = home, \033[A/B/C/D = up/down/right/left
+        - \033[2J = clear screen
+
+  [AG3] Update echo/print syscall untuk parse ANSI in-kernel
+        - SYS_PRINT handler: scan untuk \033, proses SGR/cursor mv
+
+================================================================
+FONDASI AH — PROCFS /PROC
+================================================================
+Status: [RENCANA]
+Prasyarat: Fondasi AA, AB selesai ✓
+----------------------------------------------------------------
+Tujuan: Direktori virtual /proc menyediakan info sistem sebagai
+        file teks — standar Unix yang memudahkan scripting.
+
+  [AH1] VFS mount point /proc (VFS_TYPE_PROC)
+        - vfs_read pada /proc/... menghasilkan teks generated on-the-fly
+
+  [AH2] /proc/ps        — daftar proses (seperti perintah ps)
+  [AH3] /proc/meminfo   — statistik memori (seperti perintah meminfo)
+  [AH4] /proc/net       — statistik jaringan (IP, MAC, koneksi aktif)
+  [AH5] /proc/uptime    — uptime dalam detik
+
+================================================================

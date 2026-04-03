@@ -200,6 +200,11 @@ uint64_t *vmm_create_page_dir() {
      * Diperlukan agar kernel heap (0x100000-0x2FFFFF) tetap accessible
      * saat CR3 user process aktif.  Juga mencakup range 0x300000-0x3FFFFF. */
     pd_low[1] = 0x0000000000200087ULL;   /* base=0x200000, P+RW+User+PS */
+    /* pd_low[32] = 2MB large page: identity map 64-66MB, kernel-only.
+     * WAJIB: BSS kernel berada di 0x4000000-0x41FFFFF. Tanpa entry ini,
+     * setiap akses ke global kernel (tasks[], frame_bitmap, dll.) saat
+     * CR3 user process aktif akan menyebabkan #PF → crash. */
+    pd_low[32] = 0x0000000004000083ULL;  /* base=0x4000000, P+RW, kernel-only, PS */
 
     return pml4;
 }

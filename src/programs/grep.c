@@ -1,9 +1,9 @@
 #include "lib.h"
 
-/* grep.c — Fondasi S: filter stdin ke stdout.
- * Membaca baris dari stdin (fd 0) sampai EOF, mencetak setiap baris
- * yang mengandung string "elf" (demo pipeline ls | grep).
- * Ketika argv didukung, pola pencarian akan diteruskan lewat argumen. */
+/* grep.c — Fondasi AA: filter stdin ke stdout dengan pola dari argv[1].
+ * Penggunaan: exec grep <pola>
+ *         atau pipeline: ls | grep elf
+ * Menampilkan semua baris yang mengandung pola. */
 
 /* Cari apakah haystack mengandung needle. Return 1 jika ya, 0 jika tidak. */
 static int contains(const char *haystack, const char *needle) {
@@ -22,12 +22,13 @@ static int contains(const char *haystack, const char *needle) {
     return 0;
 }
 
+static char _argbuf[512];
+static char *_argv[9];
+
 void _start() {
+    int argc = getargv(_argbuf, _argv);
+    const char *pattern = (argc >= 2 && _argv[1] && _argv[1][0]) ? _argv[1] : "";
     char line[256];
-    /* Pola hardcode "test" untuk demo 'exec ls | grep' — menampilkan
-     * file yang namanya mengandung "test" (pipetest, mfs4test, dll).
-     * Ganti dengan argv saat dukungan argumen tersedia. */
-    const char *pattern = "test";
     int n;
 
     while (1) {

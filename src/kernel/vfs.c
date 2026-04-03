@@ -6,9 +6,95 @@
 #include "net.h"
 #include "keyboard.h"
 #include "memory.h"
+#include "vmm.h"
+#include "timer.h"
 #include <stdint.h>
 
 extern void print(const char *s);
+
+/* ------------------------------------------------------------------ */
+/* Fondasi AH — /proc virtual filesystem generator                     */
+/* ------------------------------------------------------------------ */
+/* Static buffer for generated /proc content (shared — only one proc fd at a time) */
+#define PROC_BUF_SIZE 2048
+static char proc_buf[PROC_BUF_SIZE];
+static int  proc_buf_len = 0;
+
+/* Simple append helpers for proc content generation */
+static char *proc_wp;
+static int   proc_rem;
+
+static void proc_puts(const char *s) {
+    while (*s && proc_rem > 0) { *proc_wp++ = *s++; proc_rem--; }
+}
+static void proc_putn(uint32_t n) {
+    char buf[12]; int i = 0, j;
+    if (n == 0) { proc_puts("0"); return; }
+    while (n) { buf[i++] = (char)('0' + n % 10); n /= 10; }
+    /* buf is in reverse order — print forwards */
+    for (j = i - 1; j >= 0; j--) { if (proc_rem > 0) { *proc_wp++ = buf[j]; proc_rem--; } }
+}
+
+static void proc_generate(const char *path) {
+    proc_wp  = proc_buf;
+    proc_rem = PROC_BUF_SIZE - 1;
+    proc_buf_len = 0;
+
+    /* /proc/ps */
+    if (path[0]=='p'&&path[1]=='s'&&path[2]=='\0') {
+        int i;
+        proc_puts("TID  STATUS    NAME\n");
+        proc_puts("---- --------- --------------------------------\n");
+        for (i = 0; i < task_get_max(); i++) {
+            if (!task_is_used(i)) continue;
+            /* TID (right-padded to 4) */
+            proc_putn((uint32_t)i);
+            if (i < 10) proc_puts("   ");
+            else if (i < 100) proc_puts("  ");
+            else proc_puts(" ");
+            proc_puts(" ");
+            /* STATUS */
+            if (i == task_get_current()) proc_puts("running   ");
+            else proc_puts("blocked   ");
+            /* NAME */
+            const char *nm = task_get_name(i);
+            if (nm) proc_puts(nm);
+            proc_puts("\n");
+        }
+    }
+    /* /proc/meminfo */
+    else if (path[0]=='m'&&path[1]=='e'&&path[2]=='m') {
+        uint32_t free_frames  = pmm_free_count();
+        uint32_t total_frames = 16384 - 768;  /* frames 768..16383 = 15616 @ 4KB */
+        uint32_t used_frames  = total_frames > free_frames ? total_frames - free_frames : 0;
+        proc_puts("MemTotal:  "); proc_putn(total_frames * 4); proc_puts(" kB\n");
+        proc_puts("MemFree:   "); proc_putn(free_frames  * 4); proc_puts(" kB\n");
+        proc_puts("MemUsed:   "); proc_putn(used_frames  * 4); proc_puts(" kB\n");
+        proc_puts("PageSize:  4 kB\n");
+    }
+    /* /proc/uptime */
+    else if (path[0]=='u') {
+        uint32_t secs = get_ticks() / 100;
+        proc_putn(secs); proc_puts(" seconds\n");
+    }
+    /* /proc/cpuinfo */
+    else if (path[0]=='c'&&path[1]=='p') {
+        proc_puts("arch: x86_64\ncores: 2\nvendor: Oria OS\n");
+    }
+    /* /proc (directory listing) */
+    else if (path[0]=='\0' || (path[0]=='.'&&path[1]=='\0')) {
+        proc_puts("ps\nmeminfo\nuptime\ncpuinfo\n");
+    }
+    else {
+        proc_puts("proc: unknown entry /proc/");
+        proc_puts(path);
+        proc_puts("\n");
+    }
+    proc_buf_len = (int)(proc_wp - proc_buf);
+    proc_buf[proc_buf_len] = '\0';
+}
+
+/* ------------------------------------------------------------------ */
 
 /* Tabel fd global: fd_table[task_id][fd_index] */
 static VfsFd fd_table[MAX_TASKS][VFS_MAX_FD];
@@ -73,6 +159,25 @@ int vfs_open(int task_id, const char *path, int flags)
 {
     int j, k;
     if (task_id < 0 || task_id >= MAX_TASKS || !path) return -1;
+
+    /* Fondasi AH: /proc virtual filesystem */
+    if (path[0]=='/' && path[1]=='p' && path[2]=='r' && path[3]=='o' &&
+        path[4]=='c' && path[5]=='/') {
+        const char *entry = path + 6;  /* "ps", "meminfo", "uptime", "cpuinfo" */
+        for (j = 3; j < VFS_MAX_FD; j++) {
+            if (!fd_table[task_id][j].used) {
+                fd_table[task_id][j].used   = 1;
+                fd_table[task_id][j].type   = VFS_TYPE_PROC;
+                fd_table[task_id][j].flags  = VFS_O_RDONLY;
+                fd_table[task_id][j].offset = 0;
+                for (k = 0; k < 27 && entry[k]; k++) fd_table[task_id][j].name[k] = entry[k];
+                fd_table[task_id][j].name[k] = '\0';
+                return j;
+            }
+        }
+        return -1;
+    }
+
     for (j = 3; j < VFS_MAX_FD; j++) {
         if (!fd_table[task_id][j].used) {
             /* Jika CREATE: buat file kosong jika belum ada */
@@ -236,6 +341,20 @@ int vfs_read(int task_id, int fd, char *buf, int len)
         if (remaining <= 0) return 0;
         if (len > remaining) len = remaining;
         for (k = 0; k < len; k++) buf[k] = (char)data[f->offset + k];
+        f->offset += (uint32_t)len;
+        return len;
+    }
+
+    /* Fondasi AH: /proc virtual filesystem read */
+    if (f->type == VFS_TYPE_PROC) {
+        if (f->offset == 0) {
+            /* (Re-)generate proc content when reading from start */
+            proc_generate(f->name);
+        }
+        remaining = proc_buf_len - (int)f->offset;
+        if (remaining <= 0) return 0;
+        if (len > remaining) len = remaining;
+        for (k = 0; k < len; k++) buf[k] = proc_buf[f->offset + k];
         f->offset += (uint32_t)len;
         return len;
     }

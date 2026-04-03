@@ -162,8 +162,10 @@ long_mode_entry:
     mov  gs, ax
     mov  ss, ax
 
-    ; Stack kernel awal di bawah 640KB (aman sebelum heap diinisialisasi)
-    mov  rsp, 0x90000
+    ; Stack kernel awal — BSS dipindah ke 0x4000000 (64MB, di luar jangkauan PMM).
+    ; Conventional RAM setelah .data end (0x76148) sampai 0x9FBFF aman dipakai stack.
+    ; 0x9F000: tepat di bawah EBDA (0x9FC00), gives ~163KB stack space. ✓
+    mov  rsp, 0x9F000
 
     ; Tulis 'LM' ke VGA text buffer (diagnostik)
     mov  word [0xB8000], 0x0F4C

@@ -159,6 +159,30 @@ x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -
 -T src/programs/user.ld src/programs/polltest.c \
     -o build/polltest.elf
 xxd -i build/polltest.elf > src/kernel/polltest_elf_data.h
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -fno-builtin -fno-pic -no-pie \
+-T src/programs/user.ld src/programs/cat.c \
+    -o build/cat.elf
+xxd -i build/cat.elf > src/kernel/cat_elf_data.h
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -fno-builtin -fno-pic -no-pie \
+-T src/programs/user.ld src/programs/wc.c \
+    -o build/wc.elf
+xxd -i build/wc.elf > src/kernel/wc_elf_data.h
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -fno-builtin -fno-pic -no-pie \
+-T src/programs/user.ld src/programs/head.c \
+    -o build/head.elf
+xxd -i build/head.elf > src/kernel/head_elf_data.h
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -fno-builtin -fno-pic -no-pie \
+-T src/programs/user.ld src/programs/cp.c \
+    -o build/cp.elf
+xxd -i build/cp.elf > src/kernel/cp_elf_data.h
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -fno-builtin -fno-pic -no-pie \
+-T src/programs/user.ld src/programs/mv.c \
+    -o build/mv.elf
+xxd -i build/mv.elf > src/kernel/mv_elf_data.h
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -fno-builtin -fno-pic -no-pie \
+-T src/programs/user.ld src/programs/edit.c \
+    -o build/edit.elf
+xxd -i build/edit.elf > src/kernel/edit_elf_data.h
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/semaphore.c  -o build/semaphore.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/pipe.c       -o build/pipe.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/condvar.c    -o build/condvar.o
@@ -196,11 +220,21 @@ x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-built
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/mouse.c      -o build/mouse.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/window.c     -o build/window.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/taskbar.c    -o build/taskbar.o
-x86_64-linux-gnu-ld -m elf_x86_64 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o build/condvar.o build/shm.o build/vfs.o build/mfs4.o build/mq.o build/rtl8139.o build/net.o build/apic.o build/acpi.o build/smp.o build/device.o build/drv_vga.o build/drv_kbd.o build/vbe.o build/graphics.o build/ata.o build/serial.o build/mouse.o build/window.o build/taskbar.o -o build/kernel.elf
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/rtc.c          -o build/rtc.o
+x86_64-linux-gnu-ld -m elf_x86_64 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o build/condvar.o build/shm.o build/vfs.o build/mfs4.o build/mq.o build/rtl8139.o build/net.o build/apic.o build/acpi.o build/smp.o build/device.o build/drv_vga.o build/drv_kbd.o build/vbe.o build/graphics.o build/ata.o build/serial.o build/mouse.o build/window.o build/taskbar.o build/rtc.o -o build/kernel.elf
 x86_64-linux-gnu-objcopy -O binary build/kernel.elf build/kernel.bin
 echo done
 "@
-    $result = wsl -e bash -c ($wslScript -replace "`r`n", "`n") 2>&1
+    # Hapus header lama dari src/kernel/ agar tidak terkunci VS Code Language Server.
+    # File baru ditulis ke build/ (NTFS watch-free), kernel dikompilasi dengan -Ibuild.
+    Get-ChildItem "$SRC\kernel" -Filter "*_elf_data.h" -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    Remove-Item "$SRC\kernel\smp_trampoline_bin_data.h" -Force -ErrorAction SilentlyContinue
+
+    $wslReady = $wslScript -replace "`r`n", "`n" `
+        -replace '> src/kernel/([a-z0-9_]+_(elf|bin)_data\.h)', '> build/$1' `
+        -replace '(-mno-mmx) (-c src/kernel/)', '$1 -Ibuild $2'
+    $result = wsl -e bash -c $wslReady 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[ERROR] Kernel build gagal!" -ForegroundColor Red
         Write-Host $result

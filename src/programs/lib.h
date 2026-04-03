@@ -93,6 +93,35 @@
 #define SYS_FUTEX_WAKE  90  // futex wake: ebx=addr, edx=n_wake → jumlah yang dibangunkan
 #define SYS_GET_TLS     91  // get TLS base VA task ini
 
+/* Fondasi AA — argv */
+#define SYS_GETARGV     95  // getargv: rdi=buf, rsi=argv_out_arr → return argc
+
+/* Fondasi AG — ANSI color escape codes */
+#define ANSI_RESET       "\033[0m"
+#define ANSI_BOLD        "\033[1m"
+#define ANSI_BLACK       "\033[30m"
+#define ANSI_RED         "\033[31m"
+#define ANSI_GREEN       "\033[32m"
+#define ANSI_YELLOW      "\033[33m"
+#define ANSI_BLUE        "\033[34m"
+#define ANSI_MAGENTA     "\033[35m"
+#define ANSI_CYAN        "\033[36m"
+#define ANSI_WHITE       "\033[37m"
+#define ANSI_BBLACK      "\033[90m"
+#define ANSI_BRED        "\033[91m"
+#define ANSI_BGREEN      "\033[92m"
+#define ANSI_BYELLOW     "\033[93m"
+#define ANSI_BBLUE       "\033[94m"
+#define ANSI_BMAGENTA    "\033[95m"
+#define ANSI_BCYAN       "\033[96m"
+#define ANSI_BWHITE      "\033[97m"
+/* Cursor control */
+#define ANSI_HOME        "\033[H"
+#define ANSI_CLEAR       "\033[2J"
+#define ANSI_CLEARLINE   "\033[2K"
+#define ANSI_CLEAR_EOL   "\033[0K"
+/* ansi_gotoxy() defined after print() below */
+
 /* Konstanta sinyal */
 #define SIGINT   2
 #define SIGKILL  9
@@ -206,6 +235,21 @@ static inline void print(const char *msg) {
     syscall1(SYS_PRINT, (long)msg);
 }
 
+/* Fondasi AG — Move cursor to row r, col c (1-based) */
+static inline void ansi_gotoxy(int r, int c) {
+    char buf[24]; int i = 0;
+    buf[i++] = '\033'; buf[i++] = '[';
+    if (r >= 100) buf[i++] = (char)('0' + r/100);
+    if (r >= 10)  buf[i++] = (char)('0' + (r/10)%10);
+    buf[i++] = (char)('0' + r%10);
+    buf[i++] = ';';
+    if (c >= 100) buf[i++] = (char)('0' + c/100);
+    if (c >= 10)  buf[i++] = (char)('0' + (c/10)%10);
+    buf[i++] = (char)('0' + c%10);
+    buf[i++] = 'H'; buf[i] = '\0';
+    print(buf);
+}
+
 // Tunggu input keyboard, kembalikan karakter yang ditekan
 static inline char getkey() {
     return (char)syscall0(SYS_GETKEY);
@@ -316,6 +360,22 @@ static inline void *tls_get_base(void) {
 /* get_tls: kembalikan VA dasar TLS dari kernel (lebih portabel). */
 static inline void *get_tls(void) {
     return (void *)syscall0(SYS_GET_TLS);
+}
+
+/* -----------------------------------------------------------------------
+ * Fondasi AA — getargv: ambil argc/argv dari kernel task struct.
+ * Isi buf dengan null-terminated strings "arg0\0arg1\0..."
+ * Isi argv[k] dengan pointer ke masing-masing string di buf.
+ * Return: argc.
+ *
+ * Contoh penggunaan di _start():
+ *   static char _argbuf[512];
+ *   static char *_argv[9];
+ *   int argc = getargv(_argbuf, _argv);
+ *   main(argc, _argv);
+ * ----------------------------------------------------------------------- */
+static inline int getargv(char *buf, char **argv_out) {
+    return (int)syscall2(SYS_GETARGV, (long)buf, (long)argv_out);
 }
 
 static _UHdr *_uheap_grow(unsigned int need) {

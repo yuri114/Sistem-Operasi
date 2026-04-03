@@ -1,0 +1,1 @@
+C:\Program Files\qemu\qemu-system-x86_64.exe: Operasi\build\os.img,index=0,if=ide: drive with bus=0, unit=0 (index=0) exists

@@ -16,6 +16,7 @@
 #include "mq.h"
 #include "keyboard.h"
 #include "mfs4.h"
+#include "rtc.h"
 
 /*fungsi dari kernel.c*/
 void print(const char *str);
@@ -30,7 +31,7 @@ static char input_buffer[256];
 static int input_len = 0;
 
 /* History ring buffer */
-#define HISTORY_SIZE 8
+#define HISTORY_SIZE 32
 static char history[HISTORY_SIZE][256];
 static int hist_head  = 0;  // slot berikutnya untuk ditulis
 static int hist_count = 0;  // jumlah entri tersimpan (maks HISTORY_SIZE)
@@ -74,7 +75,7 @@ static int str_find_space(const char *str) {
 
 // Daftar semua perintah untuk tab-completion
 static const char *shell_commands[] = {
-    "help", "clear", "about", "memtest", "uptime",
+    "help", "clear", "about", "memtest", "uptime", "date",
     "time", "reboot", "ls", "paging", "ps",
     "echo ", "exec ", "read ", "write ", "del ", "rename ", "kill ",
     "cd ", "pwd", "export ", "env",
@@ -84,6 +85,8 @@ static const char *shell_commands[] = {
     "open ", "fread ", "fwrite ", "fclose ",
     "mq_send ", "mq_recv", "taskstat", "meminfo", "threadtest", "futextest",
     "polltest",
+    "cat ", "wc ", "head ", "cp ", "mv ", "edit ", "grep ",
+    "sh ", "history", "ps", "uptime",
     0
 };
 
@@ -222,8 +225,338 @@ void outb(uint16_t port, uint8_t val) {
     __asm__ volatile ("outb %0, %1" :: "a"(val), "Nd"(port));
 }
 
+/* ================================================================
+ * Fondasi AC — Shell Scripting Engine
+ * Mendukung: #komentar, VAR=value, if/then/else/fi, for/do/done
+ * ================================================================ */
+static void shell_execute(void);  /* forward declaration */
+#define SC_MAX_LINES   128
+#define SC_LINE_LEN    200
+static char  sc_lines[SC_MAX_LINES][SC_LINE_LEN];
+static int   sc_nlines = 0;
+static int   sc_argc   = 0;
+static char  sc_arg_buf[512];
+static char *sc_argv[10];
+
+/* Helper: set shell env variable */
+static void sc_setvar(const char *key, const char *val) {
+    int i;
+    for (i = 0; i < env_count; i++) {
+        if (str_compare(env_keys[i], key)) {
+            int j = 0;
+            while (val[j] && j < 63) env_vals[i][j] = val[j], j++;
+            env_vals[i][j] = '\0';
+            return;
+        }
+    }
+    if (env_count < ENV_MAX) {
+        int j = 0;
+        while (key[j] && j < 23) env_keys[env_count][j] = key[j], j++;
+        env_keys[env_count][j] = '\0';
+        j = 0;
+        while (val[j] && j < 63) env_vals[env_count][j] = val[j], j++;
+        env_vals[env_count][j] = '\0';
+        env_count++;
+    }
+}
+
+/* Helper: get env variable value, return "" if not found */
+static const char *sc_getvar(const char *key) {
+    int i;
+    for (i = 0; i < env_count; i++)
+        if (str_compare(env_keys[i], key)) return env_vals[i];
+    return "";
+}
+
+/* Evaluate test expression:  -f FILE | -z VAR | A = B | A != B  */
+static int sc_eval_test(const char *expr) {
+    const char *p = expr;
+    while (*p == ' ') p++;
+    if (p[0] == '-' && p[1] == 'f' && (p[2]==' '||p[2]=='\0')) {
+        /* -f FILE: file exists? */
+        const char *fn = p + 2; while (*fn == ' ') fn++;
+        uint32_t sz; return (fs_read_bin(fn, &sz) != 0) ? 1 : 0;
+    }
+    if (p[0] == '-' && p[1] == 'z') {
+        /* -z VAR: empty? */
+        const char *vn = p + 2; while (*vn == ' ') vn++;
+        const char *v = (*vn=='$') ? sc_getvar(vn+1) : vn;
+        return (v[0] == '\0') ? 1 : 0;
+    }
+    if (p[0] == '-' && p[1] == 'n') {
+        /* -n VAR: non-empty? */
+        const char *vn = p + 2; while (*vn == ' ') vn++;
+        const char *v = (*vn=='$') ? sc_getvar(vn+1) : vn;
+        return (v[0] != '\0') ? 1 : 0;
+    }
+    /* A = B or A != B or A == B */
+    char lhs[64]; int li = 0;
+    while (*p && *p != ' ' && li < 63) lhs[li++] = *p++;
+    lhs[li] = '\0';
+    while (*p == ' ') p++;
+    char op[4]; int oi = 0;
+    while (*p && *p != ' ' && oi < 3) op[oi++] = *p++;
+    op[oi] = '\0';
+    while (*p == ' ') p++;
+    char rhs[64]; int ri = 0;
+    /* strip quotes */
+    if (*p == '"' || *p == '\'') p++;
+    while (*p && *p != '"' && *p != '\'' && ri < 63) rhs[ri++] = *p++;
+    rhs[ri] = '\0';
+    /* expand $VAR */
+    const char *lv = (lhs[0]=='$') ? sc_getvar(lhs+1) : lhs;
+    const char *rv = (rhs[0]=='$') ? sc_getvar(rhs+1) : rhs;
+    int eq = str_compare(lv, rv);
+    if (op[0]=='=' || (op[0]=='='&&op[1]=='=')) return eq;
+    if (op[0]=='!'&&op[1]=='=')                 return !eq;
+    return 0;
+}
+
+/* Evaluate condition line: "[ EXPR ]" → 1=true, 0=false */
+static int sc_eval_cond(const char *line) {
+    const char *p = line;
+    while (*p == ' ') p++;
+    if (*p == '[') {
+        p++;
+        while (*p == ' ') p++;
+        /* find closing ] */
+        char expr[128]; int ei = 0;
+        while (*p && *p != ']' && ei < 127) { expr[ei++] = *p++; }
+        /* strip trailing space */
+        while (ei > 0 && expr[ei-1] == ' ') ei--;
+        expr[ei] = '\0';
+        return sc_eval_test(expr);
+    }
+    return 0;
+}
+
+/* Execute one script line (sets input_buffer, calls shell_execute)
+ * Returns 1 if line was a VAR=value assignment, 0 otherwise */
+static int sc_exec_line(const char *line);  /* forward decl */
+
+/* Find matching done/fi in sc_lines starting from `from`, return index or -1 */
+static int sc_find_end(int from, const char *end_kw) {
+    int depth = 0, i;
+    for (i = from; i < sc_nlines; i++) {
+        const char *l = sc_lines[i];
+        while (*l == ' ') l++;
+        if (str_starts_with(l, "if ") || str_starts_with(l, "while ") || str_starts_with(l, "for "))
+            depth++;
+        if (str_compare(l, end_kw)) {
+            if (depth == 0) return i;
+            depth--;
+        }
+    }
+    return -1;
+}
+
+/* Execute script lines [from..to), return index of next line to execute  */
+static int sc_exec_block(int from, int to);
+
+static int sc_exec_block(int from, int to) {
+    int i = from;
+    while (i < to) {
+        const char *raw = sc_lines[i];
+        const char *line = raw;
+        while (*line == ' ') line++;
+        /* skip empty and comments */
+        if (!*line || *line == '#') { i++; continue; }
+
+        /* if COND; then / if COND */
+        if (str_starts_with(line, "if ")) {
+            /* extract condition (strip "; then" or "then" if present) */
+            const char *cond = line + 3;
+            while (*cond == ' ') cond++;
+            char cbuf[128]; int ci2 = 0;
+            while (cond[ci2] && cond[ci2] != ';' && ci2 < 127) cbuf[ci2] = cond[ci2], ci2++;
+            /* strip " then" from end */
+            while (ci2>0 && cbuf[ci2-1]==' ') ci2--;
+            while (ci2>5 && cbuf[ci2-4]==' '&&cbuf[ci2-3]=='t'&&cbuf[ci2-2]=='h'&&cbuf[ci2-1]=='e'&&cbuf[ci2]=='n') ci2-=5;
+            cbuf[ci2] = '\0';
+            int cond_result = sc_eval_cond(cbuf);
+            /* find then / else / fi */
+            int then_start = i + 1;
+            /* skip "then" line if it's separate */
+            if (then_start < to) {
+                const char *tl = sc_lines[then_start];
+                while (*tl == ' ') tl++;
+                if (str_compare(tl, "then")) then_start++;
+            }
+            int else_line = -1, fi_line = -1;
+            {
+                int depth2 = 0, j2;
+                for (j2 = then_start; j2 < to; j2++) {
+                    const char *l2 = sc_lines[j2]; while (*l2==' ') l2++;
+                    if (str_starts_with(l2,"if ")||str_starts_with(l2,"while ")||str_starts_with(l2,"for ")) depth2++;
+                    if (depth2==0 && str_compare(l2,"else")) { else_line = j2; }
+                    if (str_compare(l2,"fi")) { if (depth2==0){fi_line=j2; break;} depth2--; }
+                }
+            }
+            if (fi_line < 0) fi_line = to;
+            if (cond_result) {
+                int block_end = (else_line >= 0) ? else_line : fi_line;
+                i = sc_exec_block(then_start, block_end);
+            } else if (else_line >= 0) {
+                i = sc_exec_block(else_line + 1, fi_line);
+            }
+            i = fi_line + 1;
+            continue;
+        }
+
+        /* for VAR in WORD...; do */
+        if (str_starts_with(line, "for ")) {
+            char fbuf[128]; int fi2 = 0;
+            const char *fp = line + 4;
+            while (fp[fi2] && fp[fi2] != ';' && fi2 < 127) fbuf[fi2] = fp[fi2], fi2++;
+            fbuf[fi2] = '\0';
+            /* fbuf = "VAR in W1 W2 W3" */
+            char *fvar = fbuf; while (*fvar == ' ') fvar++;
+            char *fin = fvar; while (*fin && *fin != ' ') fin++;
+            *fin++ = '\0'; while (*fin == ' ') fin++;
+            /* skip "in " */
+            if (fin[0]=='i'&&fin[1]=='n'&&fin[2]==' ') fin += 3;
+            /* find "done" */
+            int done_line = sc_find_end(i+1, "done");
+            /* skip "do" line if present */
+            int do_start = i + 1;
+            {
+                const char *dl = sc_lines[do_start]; while (*dl==' ') dl++;
+                if (str_compare(dl,"do")) do_start++;
+            }
+            if (done_line < 0) done_line = to;
+            /* iterate over words */
+            char wbuf[96]; int wi = 0;
+            while (*fin) {
+                if (*fin == ' ' || *fin == '\0' || fin[0]=='\0') {
+                    if (wi > 0) {
+                        wbuf[wi] = '\0';
+                        sc_setvar(fvar, wbuf);
+                        sc_exec_block(do_start, done_line);
+                        wi = 0;
+                    }
+                    if (!*fin) break;
+                } else {
+                    if (wi < 95) wbuf[wi++] = *fin;
+                }
+                fin++;
+            }
+            if (wi > 0) { wbuf[wi]='\0'; sc_setvar(fvar, wbuf); sc_exec_block(do_start, done_line); }
+            i = done_line + 1;
+            continue;
+        }
+
+        /* while COND; do */
+        if (str_starts_with(line, "while ")) {
+            const char *wp = line + 6;
+            char wcond[128]; int wci = 0;
+            while (wp[wci] && wp[wci] != ';' && wci < 127) wcond[wci] = wp[wci], wci++;
+            wcond[wci] = '\0';
+            int wdone = sc_find_end(i+1,"done");
+            int wdo = i + 1;
+            { const char *wl=sc_lines[wdo]; while(*wl==' ')wl++; if(str_compare(wl,"do"))wdo++; }
+            if (wdone < 0) wdone = to;
+            int max_iter = 1000;
+            while (max_iter-- > 0 && sc_eval_cond(wcond))
+                sc_exec_block(wdo, wdone);
+            i = wdone + 1;
+            continue;
+        }
+
+        /* skip "then"/"else"/"fi"/"do"/"done" standalone lines */
+        if (str_compare(line,"then")||str_compare(line,"else")||str_compare(line,"fi")||
+            str_compare(line,"do")  ||str_compare(line,"done")) { i++; continue; }
+
+        /* VAR=value (no spaces, = not first char) */
+        {
+            int eq = -1, ai2;
+            for (ai2 = 0; line[ai2] && line[ai2] != ' '; ai2++) {
+                if (line[ai2] == '=') { eq = ai2; break; }
+            }
+            if (eq > 0 && line[0] != '=') {
+                char kbuf[32]; int ki = 0;
+                while (ki < eq && ki < 31) kbuf[ki] = line[ki], ki++;
+                kbuf[ki] = '\0';
+                const char *val = line + eq + 1;
+                /* strip quotes */
+                if (*val=='"'||*val=='\'') { val++; }
+                char vbuf[64]; int vi = 0;
+                while (val[vi] && val[vi]!='"' && val[vi]!= '\'' && vi<63) { vbuf[vi]=val[vi]; vi++; }
+                vbuf[vi] = '\0';
+                sc_setvar(kbuf, vbuf);
+                i++; continue;
+            }
+        }
+
+        /* normal command: copy to input_buffer and execute */
+        sc_exec_line(line);
+        i++;
+    }
+    return i;
+}
+
+static int sc_exec_line(const char *line) {
+    int k = 0;
+    while (line[k] && k < 255) { input_buffer[k] = line[k]; k++; }
+    input_buffer[k] = '\0';
+    input_len = k;
+    shell_execute();
+    input_buffer[0] = '\0';
+    input_len = 0;
+    return 0;
+}
+
+/* Public: run a .sh script file */
+static void shell_run_script(const char *fname) {
+    uint32_t sz;
+    const uint8_t *data = fs_read_bin(fname, &sz);
+    if (!data || sz == 0) {
+        set_color(GFX_LRED, GFX_BLACK);
+        print("sh: file tidak ditemukan: "); print(fname); print("\n");
+        set_color(GFX_WHITE, GFX_BLACK);
+        return;
+    }
+    /* Split into lines */
+    sc_nlines = 0;
+    int di = 0, li = 0;
+    while (di < (int)sz && sc_nlines < SC_MAX_LINES) {
+        char c = (char)data[di++];
+        if (c == '\r') continue;
+        if (c == '\n') {
+            sc_lines[sc_nlines][li] = '\0';
+            if (li > 0) sc_nlines++;
+            li = 0;
+        } else if (li < SC_LINE_LEN - 1) {
+            sc_lines[sc_nlines][li++] = c;
+        }
+    }
+    if (li > 0) { sc_lines[sc_nlines][li] = '\0'; sc_nlines++; }
+    /* Execute */
+    sc_exec_block(0, sc_nlines);
+}
+
 static void shell_execute(){
     print("\n");
+
+    /* Fondasi AC: VAR=value assignment (before $VAR expansion) */
+    {
+        int eq = -1, ai;
+        /* Only assign if first non-space token has '=' and no spaces before '=' */
+        for (ai = 0; input_buffer[ai] && input_buffer[ai] != ' '; ai++) {
+            if (input_buffer[ai] == '=') { eq = ai; break; }
+        }
+        if (eq > 0 && input_buffer[0] != '=') {
+            char kbuf[32]; int ki = 0;
+            while (ki < eq && ki < 31) kbuf[ki] = input_buffer[ki], ki++;
+            kbuf[ki] = '\0';
+            const char *val = input_buffer + eq + 1;
+            if (*val == '"' || *val == '\'') val++;
+            char vbuf[64]; int vi = 0;
+            while (val[vi] && val[vi] != '"' && val[vi] != '\'' && vi < 63) vbuf[vi++] = val[vi];
+            vbuf[vi] = '\0';
+            sc_setvar(kbuf, vbuf);
+            return;  /* assignment done, no further processing */
+        }
+    }
 
     /* F1: ekspansi $VAR */
     shell_expand_vars();
@@ -249,23 +582,48 @@ static void shell_execute(){
         }
         if (pi >= 0) {
             char prog1[32], prog2[32];
+            char tok1[128], tok2[128];   /* backing storage untuk tokenisasi argv */
+            const char *av1[9], *av2[9]; /* argv arrays */
+            int ac1 = 0, ac2 = 0;
             int j;
-            /* Kiri: nama program sebelah kiri '|' (strip "exec " bila ada) */
+            /* Kiri: semua token sebelah kiri '|' (strip "exec " bila ada) */
             const char *L = input_buffer;
             while (*L == ' ') L++;
             if (L[0]=='e'&&L[1]=='x'&&L[2]=='e'&&L[3]=='c'&&L[4]==' ') L += 5;
             while (*L == ' ') L++;
+            /* Salin ke tok1 sampai '|' */
             j = 0;
-            while (L[j] && L[j] != ' ' && L[j] != '|' && j < 31) { prog1[j]=L[j]; j++; }
-            prog1[j] = '\0';
-            /* Kanan: nama program sebelah kanan '|' (strip "exec " bila ada) */
+            while (L[j] && L[j] != '|' && j < 127) { tok1[j] = L[j]; j++; }
+            while (j > 0 && tok1[j-1] == ' ') j--;  /* trim trailing space */
+            tok1[j] = '\0';
+            /* Tokenize tok1 */
+            { char *p = tok1; while (*p == ' ') p++;
+              while (*p && ac1 < 8) {
+                  av1[ac1++] = p;
+                  while (*p && *p != ' ') p++;
+                  if (*p) { *p = '\0'; p++; while (*p == ' ') p++; }
+              } av1[ac1] = 0; }
+            if (ac1 > 0) { j = 0; const char *s = av1[0]; while (s[j] && j < 31) { prog1[j]=s[j]; j++; } prog1[j]='\0'; }
+            else prog1[0] = '\0';
+
+            /* Kanan: semua token sebelah kanan '|' (strip "exec " bila ada) */
             const char *R = input_buffer + pi + 1;
             while (*R == ' ') R++;
             if (R[0]=='e'&&R[1]=='x'&&R[2]=='e'&&R[3]=='c'&&R[4]==' ') R += 5;
             while (*R == ' ') R++;
             j = 0;
-            while (R[j] && R[j] != ' ' && j < 31) { prog2[j]=R[j]; j++; }
-            prog2[j] = '\0';
+            while (R[j] && j < 127) { tok2[j] = R[j]; j++; }
+            while (j > 0 && tok2[j-1] == ' ') j--;
+            tok2[j] = '\0';
+            /* Tokenize tok2 */
+            { char *p = tok2; while (*p == ' ') p++;
+              while (*p && ac2 < 8) {
+                  av2[ac2++] = p;
+                  while (*p && *p != ' ') p++;
+                  if (*p) { *p = '\0'; p++; while (*p == ' ') p++; }
+              } av2[ac2] = 0; }
+            if (ac2 > 0) { j = 0; const char *s = av2[0]; while (s[j] && j < 31) { prog2[j]=s[j]; j++; } prog2[j]='\0'; }
+            else prog2[0] = '\0';
 
             if (!prog1[0] || !prog2[0]) {
                 set_color(GFX_LRED, GFX_BLACK);
@@ -299,7 +657,7 @@ static void shell_execute(){
                 uint64_t sp1 = pmm_alloc_frame();
                 vmm_map_page(dir1, 0x600000, sp1, 7);
                 __asm__ volatile("cli" ::: "memory");
-                tid1 = task_create_user(entry1, dir1, 0x600000 + PAGE_SIZE, prog1);
+                tid1 = task_create_user(entry1, dir1, 0x600000 + PAGE_SIZE, prog1, ac1, av1);
                 vfs_redirect_out_pipe(tid1, pipe_fd);
                 __asm__ volatile("sti" ::: "memory");
             }
@@ -311,7 +669,7 @@ static void shell_execute(){
                 uint64_t sp2 = pmm_alloc_frame();
                 vmm_map_page(dir2, 0x600000, sp2, 7);
                 __asm__ volatile("cli" ::: "memory");
-                tid2 = task_create_user(entry2, dir2, 0x600000 + PAGE_SIZE, prog2);
+                tid2 = task_create_user(entry2, dir2, 0x600000 + PAGE_SIZE, prog2, ac2, av2);
                 vfs_redirect_in_pipe(tid2, pipe_fd);
                 __asm__ volatile("sti" ::: "memory");
             }
@@ -341,6 +699,7 @@ static void shell_execute(){
         print("about                - informasi tentang Oria OS\n");
         print("memtest              - test alokasi memory\n");
         print("uptime               - tampilkan waktu berjalan OS\n");
+        print("date                 - tampilkan tanggal dan jam (RTC)\n");
         print("echo <text>          - tampilkan text\n");
         print("time                 - tampilkan ticks sejak boot\n");
         print("reboot               - reboot sistem\n");
@@ -386,6 +745,66 @@ static void shell_execute(){
     else if(str_compare(input_buffer, "clear")){
         clear_screen();
     }
+    else if(str_compare(input_buffer, "ps")){
+        /* Fondasi AH — list proses dari /proc/ps */
+        int tid = task_get_current();
+        int fd = vfs_open(tid, "/proc/ps", VFS_O_RDONLY);
+        if (fd < 0) { print("ps: /proc/ps tidak tersedia\n"); }
+        else {
+            char pbuf[128]; int n;
+            while ((n = vfs_read(tid, fd, pbuf, 127)) > 0) {
+                pbuf[n] = '\0'; print(pbuf);
+            }
+            vfs_close(tid, fd);
+        }
+    }
+    else if(str_compare(input_buffer, "uptime")){
+        /* Fondasi AH — tampilkan uptime dari /proc/uptime */
+        int tid = task_get_current();
+        int fd = vfs_open(tid, "/proc/uptime", VFS_O_RDONLY);
+        if (fd < 0) { print("uptime: tidak tersedia\n"); }
+        else {
+            char pbuf[64]; int n;
+            while ((n = vfs_read(tid, fd, pbuf, 63)) > 0) {
+                pbuf[n] = '\0'; print(pbuf);
+            }
+            vfs_close(tid, fd);
+        }
+    }
+    else if(str_compare(input_buffer, "history")){
+        if (hist_count == 0) {
+            print("(history kosong)\n");
+        } else {
+            int i;
+            for (i = hist_count - 1; i >= 0; i--) {
+                int idx = (hist_head - 1 - i + HISTORY_SIZE * 8) % HISTORY_SIZE;
+                char nb[8]; itoa((uint32_t)(hist_count - i), nb);
+                set_color(GFX_CYAN, GFX_BLACK);
+                print(nb); print("\t");
+                set_color(GFX_WHITE, GFX_BLACK);
+                print(history[idx]); print("\n");
+            }
+        }
+    }
+    else if(str_starts_with(input_buffer, "sh ") || str_compare(input_buffer, "sh")){
+        /* Fondasi AC — jalankan script .sh */
+        if (str_compare(input_buffer, "sh")) {
+            print("Penggunaan: sh <file.sh>\n");
+        } else {
+            const char *fn = input_buffer + 3;
+            while (*fn == ' ') fn++;
+            char sc_path[64]; int pi = 0;
+            /* make_path() equivalent */
+            if (current_dir[0]) {
+                while (current_dir[pi] && pi < 61) sc_path[pi] = current_dir[pi], pi++;
+                sc_path[pi++] = '/';
+            }
+            int fi2 = 0;
+            while (fn[fi2] && pi < 63) sc_path[pi++] = fn[fi2++];
+            sc_path[pi] = '\0';
+            shell_run_script(sc_path);
+        }
+    }
     else if(str_compare(input_buffer, "about")){
         print("Oria OS versi 0.1.0\n");
         print("Sistem operasi sederhana untuk belajar\n");
@@ -405,6 +824,32 @@ static void shell_execute(){
         print("uptime: ");
         print(buf);
         print(" detik\n");
+    }
+    else if(str_compare(input_buffer, "date")){
+        /* Baca RTC dan tampilkan tanggal + jam */
+        RtcTime rt;
+        rtc_read(&rt);
+        char buf[6];
+        /* Format: YYYY-MM-DD HH:MM:SS */
+        /* tahun */
+        char ybuf[8];
+        itoa((uint32_t)rt.year, ybuf);
+        print(ybuf); print("-");
+        /* bulan */
+        if (rt.month < 10) print("0");
+        itoa(rt.month,  buf); print(buf); print("-");
+        /* hari */
+        if (rt.day < 10) print("0");
+        itoa(rt.day,    buf); print(buf); print(" ");
+        /* jam */
+        if (rt.hour < 10) print("0");
+        itoa(rt.hour,   buf); print(buf); print(":");
+        /* menit */
+        if (rt.minute < 10) print("0");
+        itoa(rt.minute, buf); print(buf); print(":");
+        /* detik */
+        if (rt.second < 10) print("0");
+        itoa(rt.second, buf); print(buf); print("\n");
     }
     else if(str_compare(input_buffer, "echo")){
         print("Gunakan: echo <text>\n");
@@ -681,24 +1126,43 @@ static void shell_execute(){
         set_color(GFX_WHITE, GFX_BLACK);
     }
     else if(str_starts_with(input_buffer, "exec ")) {
-        /* Parse: exec <prog> [< infile] [> outfile] [&]
-         * bg_exec sudah di-handle di atas. Kita perlu scan operator redirect. */
+        /* Parse: exec <prog> [arg1 arg2 ...] [< infile] [> outfile] [&] */
         char exec_name[64];
         char rout_file[32];
         char rin_file[32];
+        char cmd_buf[128];         /* backing store untuk tokenisasi argumen */
+        const char *exec_argv[9];  /* argv[0..7] + NULL sentinel */
+        int  exec_argc = 0;
         {
             const char *src = input_buffer + 5;
-            int si = 0, ei = 0;
+            int si = 0, ci = 0;
             rout_file[0] = '\0';
             rin_file[0]  = '\0';
-            /* copy sampai '>' atau '<', pisahkan nama program */
-            while (src[si] && src[si] != '>' && src[si] != '<' && ei < 63)
-                exec_name[ei++] = src[si++];
-            exec_name[ei] = '\0';
-            /* trim trailing space dari exec_name */
-            ei--;
-            while (ei >= 0 && exec_name[ei] == ' ') exec_name[ei--] = '\0';
-            /* parse sisa operator: bisa ada > dan/atau < dalam urutan apapun */
+            /* Ekstrak bagian sebelum '>'/'<' ke cmd_buf (berisi prog + semua arg) */
+            while (src[si] && src[si] != '>' && src[si] != '<' && ci < 127)
+                cmd_buf[ci++] = src[si++];
+            while (ci > 0 && cmd_buf[ci-1] == ' ') ci--;  /* trim trailing space */
+            cmd_buf[ci] = '\0';
+            /* Tokenize cmd_buf → exec_argv[0]=prog exec_argv[1]=arg1 ... */
+            {
+                char *p = cmd_buf;
+                while (*p == ' ') p++;
+                while (*p && exec_argc < 8) {
+                    exec_argv[exec_argc++] = p;
+                    while (*p && *p != ' ') p++;
+                    if (*p) { *p = '\0'; p++; while (*p == ' ') p++; }
+                }
+                exec_argv[exec_argc] = 0;
+            }
+            /* Nama program = token pertama */
+            exec_name[0] = '\0';
+            if (exec_argc > 0) {
+                int ni = 0;
+                const char *s0 = exec_argv[0];
+                while (s0[ni] && ni < 63) exec_name[ni] = s0[ni], ni++;
+                exec_name[ni] = '\0';
+            }
+            /* Parse redirect operators (sisa setelah bagian program+args) */
             while (src[si]) {
                 char op = src[si++];        /* '>' atau '<' */
                 int fi = 0;
@@ -731,7 +1195,8 @@ static void shell_execute(){
                 uint64_t user_esp = 0x600000 + PAGE_SIZE;
                 /* Matikan interrupt agar redirect diterapkan sebelum task sempat dijadwal */
                 __asm__ volatile("cli" ::: "memory");
-                int tid = task_create_user(entry, proc_dir, user_esp, name);
+                int tid = task_create_user(entry, proc_dir, user_esp, name,
+                                           exec_argc, exec_argv);
                 /* Terapkan redirect I/O sebelum task mulai berjalan */
                 if (rout_file[0]) vfs_redirect_out(tid, rout_file);
                 if (rin_file[0])  vfs_redirect_in(tid, rin_file);
@@ -883,7 +1348,8 @@ static void shell_execute(){
                 if (entry1) {
                     uint64_t sp1 = pmm_alloc_frame();
                     vmm_map_page(dir1, 0x600000, sp1, 7);
-                    int tid1 = task_create_user(entry1, dir1, 0x600000 + PAGE_SIZE, prog1);
+                    const char *av1p[2] = { prog1, 0 };
+                    int tid1 = task_create_user(entry1, dir1, 0x600000 + PAGE_SIZE, prog1, 1, av1p);
                     task_set_pipe(tid1, pipe_fd);
                 }
 
@@ -893,7 +1359,8 @@ static void shell_execute(){
                 if (entry2) {
                     uint64_t sp2 = pmm_alloc_frame();
                     vmm_map_page(dir2, 0x600000, sp2, 7);
-                    int tid2 = task_create_user(entry2, dir2, 0x600000 + PAGE_SIZE, prog2);
+                    const char *av2p[2] = { prog2, 0 };
+                    int tid2 = task_create_user(entry2, dir2, 0x600000 + PAGE_SIZE, prog2, 1, av2p);
                     task_set_pipe(tid2, pipe_fd);
                 }
 
@@ -1227,14 +1694,31 @@ static void shell_execute(){
         }
 
         if (pipe_pos > 0) {
-            /* Sintaks: prog1 | prog2 */
+            /* Sintaks: prog1 [args] | prog2 [args] */
             char prog1[32], prog2[32];
+            char tok1b[128], tok2b[128];
+            const char *avL[9], *avR[9];
+            int acL = 0, acR = 0;
             int j;
-            for (j = 0; j < pipe_pos && j < 31; j++) prog1[j] = input_buffer[j];
-            prog1[j] = '\0';
+            /* Kiri: input_buffer[0..pipe_pos-1] (sebelum ' | ') */
+            j = 0; while (j < pipe_pos && j < 127) { tok1b[j] = input_buffer[j]; j++; }
+            while (j > 0 && tok1b[j-1] == ' ') j--;
+            tok1b[j] = '\0';
+            { char *p = tok1b; while (*p == ' ') p++;
+              while (*p && acL < 8) { avL[acL++] = p; while (*p && *p != ' ') p++;
+                  if (*p) { *p = '\0'; p++; while (*p == ' ') p++; } } avL[acL] = 0; }
+            if (acL > 0) { j = 0; const char *s = avL[0]; while (s[j] && j < 31) { prog1[j]=s[j]; j++; } prog1[j]='\0'; }
+            else prog1[0] = '\0';
+            /* Kanan: setelah ' | ' (pipe_pos + 3) */
             const char *r2 = input_buffer + pipe_pos + 3;
-            for (j = 0; r2[j] && j < 31; j++) prog2[j] = r2[j];
-            prog2[j] = '\0';
+            j = 0; while (r2[j] && j < 127) { tok2b[j] = r2[j]; j++; }
+            while (j > 0 && tok2b[j-1] == ' ') j--;
+            tok2b[j] = '\0';
+            { char *p = tok2b; while (*p == ' ') p++;
+              while (*p && acR < 8) { avR[acR++] = p; while (*p && *p != ' ') p++;
+                  if (*p) { *p = '\0'; p++; while (*p == ' ') p++; } } avR[acR] = 0; }
+            if (acR > 0) { j = 0; const char *s = avR[0]; while (s[j] && j < 31) { prog2[j]=s[j]; j++; } prog2[j]='\0'; }
+            else prog2[0] = '\0';
 
             int pipe_fd = pipe_alloc();
             if (pipe_fd < 0) {
@@ -1257,7 +1741,7 @@ static void shell_execute(){
                     if (entry1) {
                         uint64_t sp1 = pmm_alloc_frame();
                         vmm_map_page(dir1, 0x600000, sp1, 7);
-                        int tid1 = task_create_user(entry1, dir1, 0x600000 + PAGE_SIZE, prog1);
+                        int tid1 = task_create_user(entry1, dir1, 0x600000 + PAGE_SIZE, prog1, acL, avL);
                         task_set_pipe(tid1, pipe_fd);
                     }
                     uint64_t *dir2 = vmm_create_page_dir();
@@ -1265,7 +1749,7 @@ static void shell_execute(){
                     if (entry2) {
                         uint64_t sp2 = pmm_alloc_frame();
                         vmm_map_page(dir2, 0x600000, sp2, 7);
-                        int tid2 = task_create_user(entry2, dir2, 0x600000 + PAGE_SIZE, prog2);
+                        int tid2 = task_create_user(entry2, dir2, 0x600000 + PAGE_SIZE, prog2, acR, avR);
                         task_set_pipe(tid2, pipe_fd);
                     }
                     if (entry1 && entry2) {
@@ -1279,9 +1763,57 @@ static void shell_execute(){
                 }
             }
         } else {
-            print(input_buffer);
-            print("\n");
-            set_color(GFX_WHITE, GFX_BLACK);
+            /* Auto-exec: coba jalankan input_buffer sebagai program.
+             * Format: progname [arg1 arg2 ...]
+             * Jika program ditemukan di filesystem, run langsung tanpa 'exec ' prefix. */
+            char ae_buf[128];
+            const char *ae_argv[9];
+            int ae_argc = 0;
+            int ae_i = 0;
+            /* Salin input ke ae_buf */
+            while (input_buffer[ae_i] && ae_i < 127) { ae_buf[ae_i] = input_buffer[ae_i]; ae_i++; }
+            ae_buf[ae_i] = '\0';
+            /* Tokenize */
+            { char *p = ae_buf; while (*p == ' ') p++;
+              while (*p && ae_argc < 8) {
+                  ae_argv[ae_argc++] = p; while (*p && *p != ' ') p++;
+                  if (*p) { *p = '\0'; p++; while (*p == ' ') p++; }
+              } ae_argv[ae_argc] = 0; }
+            /* Cari program di filesystem */
+            if (ae_argc > 0) {
+                char ae_name[64];
+                int ni = 0;
+                const char *s0 = ae_argv[0];
+                while (s0[ni] && ni < 63) ae_name[ni] = s0[ni], ni++;
+                ae_name[ni] = '\0';
+                uint32_t ae_size;
+                const uint8_t *ae_data = fs_read_bin(ae_name, &ae_size);
+                if (ae_data) {
+                    uint64_t *ae_dir = vmm_create_page_dir();
+                    uint64_t ae_entry = elf_load(ae_data, ae_size, ae_dir);
+                    if (ae_entry) {
+                        uint64_t ae_sp = pmm_alloc_frame();
+                        vmm_map_page(ae_dir, 0x600000, ae_sp, 7);
+                        __asm__ volatile("cli" ::: "memory");
+                        int ae_tid = task_create_user(ae_entry, ae_dir, 0x600000 + PAGE_SIZE,
+                                                      ae_name, ae_argc, ae_argv);
+                        __asm__ volatile("sti" ::: "memory");
+                        keyboard_set_fg_pid(ae_tid);
+                        task_wait(ae_tid);
+                        keyboard_set_fg_pid(-1);
+                    } else {
+                        set_color(GFX_LRED, GFX_BLACK);
+                        print("Perintah tidak dikenal: ");
+                        print(input_buffer); print("\n");
+                        set_color(GFX_WHITE, GFX_BLACK);
+                    }
+                } else {
+                    set_color(GFX_LRED, GFX_BLACK);
+                    print("Perintah tidak dikenal: ");
+                    print(input_buffer); print("\n");
+                    set_color(GFX_WHITE, GFX_BLACK);
+                }
+            }
         }
     }
 }

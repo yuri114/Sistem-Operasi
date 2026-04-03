@@ -30,6 +30,9 @@ typedef struct {
     uint32_t  pending_signals;  /* F-T: bitmask sinyal pending (bit-N = sinyal N) */
     int       exit_code;        /* F-T: kode exit; diset oleh task_exit_code()   */
     uint64_t  tls_frame;        /* F-U: frame fisik halaman TLS (0 = belum dialokasi) */
+    /* Fondasi AA — argv: serialized null-terminated strings "arg0\0arg1\0..." */
+    int       arg_argc;
+    char      arg_buf[512];
 } Task;
 
 /* F-T: konstanta sinyal standar */
@@ -39,7 +42,8 @@ typedef struct {
 
 void task_init();
 int  task_create(void (*entry)());
-int  task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, const char *name);
+int  task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, const char *name,
+                      int argc, const char *const argv[]);
 int  task_create_thread(uint64_t entry, uint64_t arg, int parent_tid);
 void task_set_name(int id, const char *name); /* ubah nama task */
 void task_switch();           /* BSP (CPU 0) scheduler — dipanggil dari irq0   */
@@ -77,6 +81,9 @@ int         task_get_current_pipe();
 uint64_t    task_get_rsp0(int id);
 int         task_get_status(int id);
 uint64_t   *task_get_page_dir(int id);
+/* Fondasi AA — argv */
+int         tasks_getargc(int id);
+const char *tasks_getargbuf(int id);
 void        task_set_page_dir(int id, uint64_t *dir);  /* F-Q: ganti page_dir */
 
 /* F-Q: buat task anak untuk fork(); RIP/RSP sudah di-set sesuai resume point user */

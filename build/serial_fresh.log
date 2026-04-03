@@ -1,0 +1,15 @@
+[BOOT] kernel_main() entered
+[BOOT] paging_init OK
+[BOOT] vbe_find_lfb OK
+[BOOT] paging_map_vbe OK
+[BOOT] vbe_set_mode OK
+[BOOT] graphics_init OK
+[BOOT] clear_screen OK
+[BOOT] welcome print OK
+[BOOT] shell_init OK
+[BOOT] mem+pmm OK
+[BOOT] subsystems OK
+[BOOT] programs_init OK
+[BOOT] task_init OK
+[BOOT] vfs_init OK
+[D1] SYSCALL/SYSRET MSR configured

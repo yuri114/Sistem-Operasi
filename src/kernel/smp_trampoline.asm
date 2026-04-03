@@ -98,9 +98,11 @@ lmode_entry:
     mov fs, ax
     mov gs, ax
 
-    ; Stack per-AP unik berdasarkan LAPIC ID (8KB per AP, di bawah 640KB)
-    ; LAPIC_ID register berada di MMIO 0xFEE00020 (bits [31:24])
-    ; 0xFEE00000 berada di range PD[3-4GB] → identity-mapped ✓
+    ; Stack per-AP unik berdasarkan LAPIC ID (8KB per AP)
+    ; BSS sudah di 0x700000 — conventional RAM 0x76148-0x9FBFF aman.
+    ; Formula: 0x9F000 - apic_id * 8192
+    ;   AP1 (id=1): 0x9D000-0x9F000, AP2 (id=2): 0x9B000-0x9D000
+    ; Semua di atas .data end (0x76148) dan di bawah EBDA (0x9FC00) ✓
     ;
     ; PENTING: jangan tulis [0xFEE00020] langsung — NASM di BITS 64 menghasilkan
     ; SIB+disp32 yang di-sign-extend ke 0xFFFFFFFFFEE00020 (tidak di-map!).

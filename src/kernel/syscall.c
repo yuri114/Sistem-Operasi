@@ -427,7 +427,7 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         if (!entry) return (uint64_t)-1;
         uint64_t stack_phys = pmm_alloc_frame();
         vmm_map_page(proc_dir, 0x600000, stack_phys, 7);
-        int tid = task_create_user(entry, proc_dir, 0x600000 + 0x1000, name);
+        int tid = task_create_user(entry, proc_dir, 0x600000 + 0x1000, name, 0, 0);
         return (uint64_t)tid;
     }
 
@@ -899,6 +899,36 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         }
     }
 
+    /* Fondasi AA — SYS_GETARGV(95): kembalikan argc, isi buf + argv[] pointers.
+     * rdi = char *buf       (user buffer, menerima null-terminated strings "arg0\0arg1\0...")
+     * rsi = char **argv_out (user pointer array, akan diisi &buf[offset_k] per arg)
+     * return = argc */
+    if (eax == SYS_GETARGV) {
+        char *ubuf     = (char *)(uintptr_t)ebx;
+        char **uargv   = (char **)(uintptr_t)edx;
+        if (!is_user_ptr(ebx) || !is_user_ptr(edx)) return 0;
+        int tid = task_get_current();
+        int ac  = tasks_getargc(tid);
+        const char *src = tasks_getargbuf(tid);  /* pointer ke kernel arg_buf */
+        /* Salin arg_buf ke user buffer (max 512 byte) */
+        int i;
+        for (i = 0; i < 512; i++) {
+            ubuf[i] = src[i];
+            /* Dua null berturut = akhir serial */
+            if (i > 0 && src[i-1] == '\0' && src[i] == '\0') { i++; break; }
+        }
+        ubuf[511] = '\0';
+        /* Bangun pointer array — arahkan ke substring di ubuf */
+        char *p = ubuf;
+        for (i = 0; i < ac; i++) {
+            uargv[i] = p;
+            while (*p) p++;
+            p++;  /* lewati null */
+        }
+        if (ac <= 8) uargv[ac] = 0;  /* null sentinel */
+        return (uint64_t)(unsigned int)ac;
+    }
+
     return (uint64_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal
 }
 
@@ -912,5 +942,5 @@ int kernel_exec(const char *name) {
     if (!entry) return -1;
     uint64_t stack_phys = pmm_alloc_frame();
     vmm_map_page(proc_dir, 0x600000, stack_phys, 7);
-    return task_create_user(entry, proc_dir, 0x600000 + 0x1000, name);
+    return task_create_user(entry, proc_dir, 0x600000 + 0x1000, name, 0, 0);
 }
