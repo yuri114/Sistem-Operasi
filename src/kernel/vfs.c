@@ -616,3 +616,22 @@ int vfs_redirect_in_pipe(int task_id, int pipe_id)
     return 0;
 }
 
+/* Redirect stdout (fd 1) ke file dalam mode append (>>) */
+int vfs_redirect_out_append(int task_id, const char *path)
+{
+    int k;
+    uint32_t file_len = 0;
+    if (task_id < 0 || task_id >= MAX_TASKS || !path || !path[0]) return -1;
+    /* Set offset ke akhir file saat ini agar tulisan menyambung */
+    fs_read_bin(path, &file_len);           /* jika file belum ada, file_len=0 */
+    if (file_len == 0) fs_write(path, "");  /* buat file kosong supaya write valid */
+    fd_table[task_id][1].used   = 1;
+    fd_table[task_id][1].type   = VFS_TYPE_FILE;
+    fd_table[task_id][1].flags  = VFS_O_WRONLY;
+    fd_table[task_id][1].offset = file_len;
+    for (k = 0; k < 27 && path[k]; k++) fd_table[task_id][1].name[k] = path[k];
+    fd_table[task_id][1].name[k] = '\0';
+    fd_table[task_id][2] = fd_table[task_id][1];
+    return 0;
+}
+

@@ -104,6 +104,9 @@ int  vfs_redirect_out_pipe(int task_id, int pipe_id);
 /* Redirect stdin ke read-end pipe */
 int  vfs_redirect_in_pipe(int task_id, int pipe_id);
 
+/* Redirect stdout ke file dalam mode append (>>) */
+int  vfs_redirect_out_append(int task_id, const char *path);
+
 /* F-W1: Set flags pada fd (seperti fcntl F_SETFL) */
 int  vfs_set_flags(int task_id, int fd, uint8_t flags);
 

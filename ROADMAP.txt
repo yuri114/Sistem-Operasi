@@ -1,6 +1,6 @@
 ================================================================
   Oria OS — ROADMAP PENGEMBANGAN SISTEM
-  Dibuat: 24 Maret 2026 | Diperbarui: 1 April 2026
+  Dibuat: 24 Maret 2026 | Diperbarui: 29 April 2026
 ================================================================
 
 KONDISI SAAT INI (setelah Tahap C)
@@ -9,10 +9,12 @@ KONDISI SAAT INI (setelah Tahap C)
 - Resolusi    : 1920×1080 @ 32bpp (VBE linear framebuffer ~8.3MB)
 - Memori      : 4-level paging, identity-mapped 4GB, heap 2MB (0x100000–0x2FFFFF)
 - Multitasking: round-robin, MAX_TASKS=16, context-switch 64-bit
-- Filesystem  : MFS2 — 32 file, 16KB/file
+- Filesystem  : MFS4 — inode layer, symlink, hardlink, stat; persistence disk
 - GUI         : Window Manager (16 window), taskbar, 5 built-in apps
-- User space  : Ring-3 isolasi penuh, ELF64 loader, user stack @0x600000
-- Kernel size : ~178KB
+- User space  : Ring-3 isolasi penuh, ELF64 loader, fork/COW, mmap, threading
+- Shell       : Multi-stage pipeline (6 stage) | >> && || auto-exec operators
+- Networking  : RTL8139, ARP, IPv4, ICMP, UDP, TCP, DNS, HTTP curl
+- Kernel size : ~441KB
 - Platform    : QEMU qemu-system-x86_64, build via WSL cross-compiler (x86_64-linux-gnu)
 
 ================================================================
@@ -371,6 +373,7 @@ RINGKASAN URUTAN & STATUS
   [DONE] Fondasi Q   — fork()+COW, exec_replace(), demand-page thread stack, mmap/munmap  (2 April 2026)
   [DONE] Fondasi R2  — VFS_TYPE_PIPE/NET/TTY, fd diwarisi fork (vfs_copy_fds)  (2 April 2026)
   [DONE] Fondasi R3  — MFS4 inode layer: symlink, hardlink, stat, listdir, mkdir, unlink  (2 April 2026)
+  [DONE] Fondasi AI  — Shell operators lanjutan: multi-pipe (6 stage), >>, &&/||, auto-exec  (29 April 2026)
 
 ================================================================
 
@@ -1593,7 +1596,9 @@ RINGKASAN URUTAN & TARGET 100%
   [DONE] Fondasi W   — poll/select + non-blocking fd  (~97%)
   [DONE] Fondasi X   — TCP retransmit + DNS  (~100%)
   [DONE] Fondasi Y   — HTTP client curl  (~103%)
-  [DONE] Fondasi Z   — HTTP chunked + redirect  (~105%) ← SELESAI
+  [DONE] Fondasi Z   — HTTP chunked + redirect  (~105%)
+  [DONE] Fondasi AA–AH — Daily Driver: argv, tools, scripting, RTC, editor, history, ANSI, procfs
+  [DONE] Fondasi AI  — Shell operators lanjutan: multi-pipe, >>, &&/||, auto-exec  (~128%) ← SELESAI
 
 ================================================================
 ROADMAP DAILY DRIVER (Fondasi AA – AH)
@@ -1611,6 +1616,7 @@ Urutan pengerjaan (berdasarkan dampak/kepentingan):
   [x] Fondasi AF — Command history (↑↓) + TAB completion ++  (~120%)
   [x] Fondasi AG — ANSI/VT100 escape codes di output        (~122%)
   [x] Fondasi AH — procfs /proc (ps/mem/net via file)        (~125%)
+  [x] Fondasi AI — Shell operators: multi-pipe |, >>, &&/||, auto-exec  (~128%)
 
 ================================================================
 FONDASI AA — ARGV/ARGC: ARGUMEN PROGRAM
@@ -1786,5 +1792,73 @@ Tujuan: Direktori virtual /proc menyediakan info sistem sebagai
   [AH3] /proc/meminfo   — statistik memori (seperti perintah meminfo)
   [AH4] /proc/net       — statistik jaringan (IP, MAC, koneksi aktif)
   [AH5] /proc/uptime    — uptime dalam detik
+
+================================================================
+FONDASI AI — SHELL OPERATORS LANJUTAN
+================================================================
+Status: [SELESAI] ✓ Selesai 29 April 2026 — build 441KB, test QEMU OK
+Prioritas: 9
+Prasyarat: Fondasi S (shell pipeline dasar) selesai ✓
+----------------------------------------------------------------
+Tujuan: Lengkapi kemampuan shell dengan operator standar Unix —
+        multi-stage pipeline (lebih dari 2 program), append redirect,
+        conditional chaining &&/||, dan semua operator tersedia
+        langsung tanpa prefix 'exec'.
+
+  [AI1] ✓ Multi-stage pipeline: prog1 | prog2 | ... | progN (maks 6)
+        - Lama: hanya 2-stage, hardcoded parse manual 2 token
+        - Baru: ShCmd struct + shcmd_parse() + shcmd_run_nowait() helpers
+        - Loop split input pada '|', alokasi N-1 pipe, start semua stage
+        - task_wait semua stage, last_exit_code dari stage terakhir
+        - Contoh: ls | grep elf | wc
+        File: src/kernel/shell.c
+
+  [AI2] ✓ Append redirect >>
+        - vfs_redirect_out_append(tid, path): set fd[1] offset ke EOF file
+          (truncate tidak terjadi; data ditambahkan di akhir)
+        - shcmd_parse(): deteksi ">>" sebelum ">", set ShCmd.append=1
+        - shcmd_run_nowait(): jika append → vfs_redirect_out_append
+        - Contoh: echo hello >> log.txt
+        File: src/kernel/vfs.h, src/kernel/vfs.c, src/kernel/shell.c
+
+  [AI3] ✓ Conditional operators && / ||
+        - Pre-pass di shell_execute() sebelum pipeline/exec
+        - Scan input_buffer untuk token '&&' (cond_op='A') atau '||' ('O')
+        - Split ke lbuf + rbuf, eksekusi kiri via rekursi shell_execute()
+        - last_exit_code dari kiri menentukan apakah kanan dieksekusi:
+            && → jalankan kanan hanya jika exit code == 0
+            || → jalankan kanan hanya jika exit code != 0
+        - bg_exec detection diperbaiki: '&' tunggal di akhir ≠ bagian '&&'
+        - Contoh: make && exec hello || echo "build gagal"
+        File: src/kernel/shell.c
+
+  [AI4] ✓ Auto-exec mendukung semua operator
+        - Lama: auto-exec (program tanpa 'exec' prefix) hanya parse nama + argv
+          tidak mendukung >, >>, <, &
+        - Baru: auto-exec gunakan shcmd_parse + shcmd_run_nowait
+          → semua redirect dan background tersedia untuk semua program
+        - last_exit_code diset: 0 sukses, 127 jika program tidak ditemukan
+        - Contoh: ls > daftar.txt   (tanpa 'exec')
+        File: src/kernel/shell.c
+
+  [AI5] ✓ exec command disederhanakan
+        - exec handler lama: ~60 baris parsing manual
+        - Baru: shcmd_parse(input+5, &ec) + shcmd_run_nowait(&ec, -1, -1)
+        - last_exit_code diset setelah task_wait (foreground exec)
+        - bg_exec flag diteruskan ke ec.bg sebelum run
+        File: src/kernel/shell.c
+
+  [AI6] ✓ Help text diperbarui
+        - Entri baru: prog > file, prog >> file, prog < file, prog &
+        - Entri baru: prog1 | prog2 | prog3 (pipeline multi-stage)
+        - Entri baru: cmd1 && cmd2, cmd1 || cmd2
+        File: src/kernel/shell.c
+
+  ShCmd API:
+    struct ShCmd { prog[64], arg_buf[128], argv[9], argc,
+                   rout[32], rin[32], append, bg }
+    shcmd_parse(src, c)              — parse satu perintah lengkap
+    shcmd_run_nowait(c, in_fd, out_fd) — spawn task, return tid (non-blocking)
+    vfs_redirect_out_append(tid, path)  — set stdout ke append mode
 
 ================================================================

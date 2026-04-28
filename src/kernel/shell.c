@@ -30,6 +30,9 @@ void set_color(uint32_t fg, uint32_t bg);
 static char input_buffer[256];
 static int input_len = 0;
 
+/* Exit code dari perintah terakhir — digunakan oleh operator && / || */
+static int last_exit_code = 0;
+
 /* History ring buffer */
 #define HISTORY_SIZE 32
 static char history[HISTORY_SIZE][256];
@@ -534,7 +537,125 @@ static void shell_run_script(const char *fname) {
     sc_exec_block(0, sc_nlines);
 }
 
-static void shell_execute(){
+/* =======================================================================
+ * Unified external-program runner helpers
+ * ======================================================================= */
+#define MAX_PIPE_STAGES 6
+
+/* Parsed single command segment: prog + args + I/O redirect info */
+typedef struct {
+    char       prog[64];
+    char       arg_buf[128];
+    const char *argv[9];
+    int        argc;
+    char       rout[32];  /* stdout redirect file; "" = none */
+    char       rin[32];   /* stdin redirect file;  "" = none */
+    int        append;    /* 1 = >> (append), 0 = > (truncate) */
+    int        bg;        /* 1 = background & */
+} ShCmd;
+
+/* Parse one command token (no '|', no '&&'/'||') into ShCmd.
+ * Strips leading spaces and optional "exec " prefix. */
+static void shcmd_parse(const char *src, ShCmd *c) {
+    int i, fi;
+    for (i = 0; i < 64;  i++) c->prog[i]    = 0;
+    for (i = 0; i < 128; i++) c->arg_buf[i] = 0;
+    for (i = 0; i < 32;  i++) c->rout[i]    = 0;
+    for (i = 0; i < 32;  i++) c->rin[i]     = 0;
+    for (i = 0; i < 9;   i++) c->argv[i]    = 0;
+    c->argc = c->append = c->bg = 0;
+
+    while (*src == ' ') src++;
+    if (src[0]=='e'&&src[1]=='x'&&src[2]=='e'&&src[3]=='c'&&src[4]==' ') src += 5;
+    while (*src == ' ') src++;
+
+    /* Copy prog+args (before '>' or '<') into arg_buf */
+    int si = 0, ci = 0;
+    while (src[si] && src[si] != '>' && src[si] != '<' && ci < 127)
+        c->arg_buf[ci++] = src[si++];
+    while (ci > 0 && c->arg_buf[ci-1] == ' ') ci--;
+    if (ci > 0 && c->arg_buf[ci-1] == '&') {
+        c->bg = 1; ci--;
+        while (ci > 0 && c->arg_buf[ci-1] == ' ') ci--;
+    }
+    c->arg_buf[ci] = '\0';
+
+    /* Tokenize arg_buf → argv */
+    char *p = c->arg_buf;
+    while (*p == ' ') p++;
+    while (*p && c->argc < 8) {
+        c->argv[c->argc++] = p;
+        while (*p && *p != ' ') p++;
+        if (*p) { *p = '\0'; p++; while (*p == ' ') p++; }
+    }
+    c->argv[c->argc] = 0;
+    if (c->argc > 0) {
+        int ni = 0; const char *s0 = c->argv[0];
+        while (s0[ni] && ni < 63) c->prog[ni] = s0[ni], ni++;
+        c->prog[ni] = '\0';
+    }
+
+    /* Parse redirect operators from src[si..] */
+    while (src[si]) {
+        if (src[si] == '>') {
+            si++;
+            if (src[si] == '>') { c->append = 1; si++; }
+            while (src[si] == ' ') si++;
+            fi = 0;
+            while (src[si] && src[si] != ' ' && src[si] != '>' &&
+                   src[si] != '<' && fi < 31)
+                c->rout[fi++] = src[si++];
+            c->rout[fi] = '\0';
+        } else if (src[si] == '<') {
+            si++;
+            while (src[si] == ' ') si++;
+            fi = 0;
+            while (src[si] && src[si] != ' ' && src[si] != '>' &&
+                   src[si] != '<' && fi < 31)
+                c->rin[fi++] = src[si++];
+            c->rin[fi] = '\0';
+        } else if (src[si] == '&') {
+            c->bg = 1; si++;
+        } else {
+            si++;
+        }
+    }
+}
+
+/* Load and start one external program.
+ * pipe_in_fd / pipe_out_fd: kernel pipe id or -1 (not used).
+ * Returns tid on success, -1 on error (message already printed).
+ * Returns -2 if program not found on filesystem (caller handles message). */
+static int shcmd_run_nowait(ShCmd *c, int pipe_in_fd, int pipe_out_fd) {
+    uint32_t sz;
+    const uint8_t *data = fs_read_bin(c->prog, &sz);
+    if (!data) return -2;
+    uint64_t *dir = vmm_create_page_dir();
+    uint64_t entry = elf_load(data, sz, dir);
+    if (!entry) {
+        set_color(GFX_LRED, GFX_BLACK);
+        print(c->prog); print(": gagal load ELF\n");
+        set_color(GFX_WHITE, GFX_BLACK);
+        return -1;
+    }
+    uint64_t sp = pmm_alloc_frame();
+    vmm_map_page(dir, 0x600000, sp, 7);
+    __asm__ volatile("cli" ::: "memory");
+    int tid = task_create_user(entry, dir, 0x600000 + PAGE_SIZE,
+                               c->prog, c->argc, c->argv);
+    if (pipe_out_fd >= 0)  vfs_redirect_out_pipe(tid, pipe_out_fd);
+    else if (c->rout[0]) {
+        if (c->append) vfs_redirect_out_append(tid, c->rout);
+        else           vfs_redirect_out(tid, c->rout);
+    }
+    if (pipe_in_fd >= 0)   vfs_redirect_in_pipe(tid, pipe_in_fd);
+    else if (c->rin[0])    vfs_redirect_in(tid, c->rin);
+    __asm__ volatile("sti" ::: "memory");
+    return tid;
+}
+
+static void shell_execute() {
+    last_exit_code = 0;  /* built-in commands default to success */
     print("\n");
 
     /* Fondasi AC: VAR=value assignment (before $VAR expansion) */
@@ -561,131 +682,143 @@ static void shell_execute(){
     /* F1: ekspansi $VAR */
     shell_expand_vars();
 
-    /* F1: strip trailing '&' → background exec flag */
+    /* F1: strip trailing '&' → background exec flag.
+     * Hati-hati: jangan strip jika '&' adalah bagian dari '&&' operator. */
     int bg_exec = 0;
     {
         int t = 0; while (input_buffer[t]) t++; t--;
         while (t >= 0 && input_buffer[t] == ' ') t--;
         if (t >= 0 && input_buffer[t] == '&') {
-            bg_exec = 1;
-            input_buffer[t] = '\0';
-            while (t > 0 && input_buffer[t-1] == ' ') { t--; input_buffer[t] = '\0'; }
+            /* Pastikan bukan bagian dari '&&' */
+            if (t == 0 || input_buffer[t-1] != '&') {
+                bg_exec = 1;
+                input_buffer[t] = '\0';
+                while (t > 0 && input_buffer[t-1] == ' ') { t--; input_buffer[t] = '\0'; }
+            }
         }
     }
     (void)bg_exec; /* dipakai di exec command */
 
-    /* ---- Pipeline operator '|': prog1 | prog2 ---- */
+    /* ---- Conditional operators: cmd1 && cmd2 / cmd1 || cmd2 ----
+     * Bind looser dari '|', jadi di-split duluan sebelum pipeline check. */
     {
-        int pi = -1, ic;
-        for (ic = 0; input_buffer[ic]; ic++) {
-            if (input_buffer[ic] == '|') { pi = ic; break; }
+        int ci2 = 0; char cond_op = 0; int cond_pos = -1;
+        while (input_buffer[ci2] && input_buffer[ci2+1]) {
+            if (input_buffer[ci2] == '&' && input_buffer[ci2+1] == '&') {
+                cond_op = 'A'; cond_pos = ci2; break;
+            }
+            if (input_buffer[ci2] == '|' && input_buffer[ci2+1] == '|') {
+                cond_op = 'O'; cond_pos = ci2; break;
+            }
+            ci2++;
         }
-        if (pi >= 0) {
-            char prog1[32], prog2[32];
-            char tok1[128], tok2[128];   /* backing storage untuk tokenisasi argv */
-            const char *av1[9], *av2[9]; /* argv arrays */
-            int ac1 = 0, ac2 = 0;
-            int j;
-            /* Kiri: semua token sebelah kiri '|' (strip "exec " bila ada) */
-            const char *L = input_buffer;
-            while (*L == ' ') L++;
-            if (L[0]=='e'&&L[1]=='x'&&L[2]=='e'&&L[3]=='c'&&L[4]==' ') L += 5;
-            while (*L == ' ') L++;
-            /* Salin ke tok1 sampai '|' */
-            j = 0;
-            while (L[j] && L[j] != '|' && j < 127) { tok1[j] = L[j]; j++; }
-            while (j > 0 && tok1[j-1] == ' ') j--;  /* trim trailing space */
-            tok1[j] = '\0';
-            /* Tokenize tok1 */
-            { char *p = tok1; while (*p == ' ') p++;
-              while (*p && ac1 < 8) {
-                  av1[ac1++] = p;
-                  while (*p && *p != ' ') p++;
-                  if (*p) { *p = '\0'; p++; while (*p == ' ') p++; }
-              } av1[ac1] = 0; }
-            if (ac1 > 0) { j = 0; const char *s = av1[0]; while (s[j] && j < 31) { prog1[j]=s[j]; j++; } prog1[j]='\0'; }
-            else prog1[0] = '\0';
+        if (cond_pos >= 0) {
+            /* Ekstrak perintah kiri */
+            char lbuf[256]; int li2 = 0;
+            while (li2 < cond_pos && li2 < 255) lbuf[li2] = input_buffer[li2], li2++;
+            while (li2 > 0 && lbuf[li2-1] == ' ') li2--;
+            lbuf[li2] = '\0';
+            /* Ekstrak perintah kanan */
+            const char *rp = input_buffer + cond_pos + 2;
+            while (*rp == ' ') rp++;
+            char rbuf[256]; int ri2 = 0;
+            while (*rp && ri2 < 255) rbuf[ri2++] = *rp++;
+            rbuf[ri2] = '\0';
+            /* Simpan input_buffer, eksekusi kiri, cek exit code, eksekusi kanan */
+            char sv[256]; int sv_len = input_len; int bi2;
+            for (bi2 = 0; bi2 <= input_len; bi2++) sv[bi2] = input_buffer[bi2];
+            /* Jalankan kiri */
+            for (bi2 = 0; lbuf[bi2]; bi2++) input_buffer[bi2] = lbuf[bi2];
+            input_buffer[bi2] = '\0'; input_len = bi2;
+            shell_execute();
+            int lec = last_exit_code;
+            /* Jalankan kanan jika kondisi terpenuhi */
+            int run_right = (cond_op == 'A') ? (lec == 0) : (lec != 0);
+            if (run_right && rbuf[0]) {
+                for (bi2 = 0; rbuf[bi2]; bi2++) input_buffer[bi2] = rbuf[bi2];
+                input_buffer[bi2] = '\0'; input_len = bi2;
+                shell_execute();
+            }
+            /* Pulihkan */
+            for (bi2 = 0; bi2 <= sv_len; bi2++) input_buffer[bi2] = sv[bi2];
+            input_len = sv_len;
+            return;
+        }
+    }
 
-            /* Kanan: semua token sebelah kanan '|' (strip "exec " bila ada) */
-            const char *R = input_buffer + pi + 1;
-            while (*R == ' ') R++;
-            if (R[0]=='e'&&R[1]=='x'&&R[2]=='e'&&R[3]=='c'&&R[4]==' ') R += 5;
-            while (*R == ' ') R++;
-            j = 0;
-            while (R[j] && j < 127) { tok2[j] = R[j]; j++; }
-            while (j > 0 && tok2[j-1] == ' ') j--;
-            tok2[j] = '\0';
-            /* Tokenize tok2 */
-            { char *p = tok2; while (*p == ' ') p++;
-              while (*p && ac2 < 8) {
-                  av2[ac2++] = p;
-                  while (*p && *p != ' ') p++;
-                  if (*p) { *p = '\0'; p++; while (*p == ' ') p++; }
-              } av2[ac2] = 0; }
-            if (ac2 > 0) { j = 0; const char *s = av2[0]; while (s[j] && j < 31) { prog2[j]=s[j]; j++; } prog2[j]='\0'; }
-            else prog2[0] = '\0';
-
-            if (!prog1[0] || !prog2[0]) {
+    /* ---- Pipeline operator '|': prog1 | prog2 ---- */
+    /* ---- Multi-stage pipeline: prog1 | prog2 | ... | progN (maks 6) ---- */
+    {
+        /* Cek apakah ada '|' (tapi bukan bagian dari '||' yang sudah di-handle) */
+        int has_pipe = 0;
+        {
+            int ic;
+            for (ic = 0; input_buffer[ic]; ic++) {
+                if (input_buffer[ic] == '|') { has_pipe = 1; break; }
+            }
+        }
+        if (has_pipe) {
+            char stage_buf[MAX_PIPE_STAGES][128];
+            int  n_stages = 0;
+            /* Split input_buffer pada '|' menjadi stage_buf[] */
+            {
+                int si = 0, bi = 0;
+                while (input_buffer[si] && n_stages < MAX_PIPE_STAGES) {
+                    if (input_buffer[si] == '|') {
+                        while (bi > 0 && stage_buf[n_stages][bi-1] == ' ') bi--;
+                        stage_buf[n_stages][bi] = '\0';
+                        if (bi > 0) n_stages++;
+                        bi = 0;
+                    } else if (bi < 127) {
+                        stage_buf[n_stages][bi++] = input_buffer[si];
+                    }
+                    si++;
+                }
+                while (bi > 0 && stage_buf[n_stages][bi-1] == ' ') bi--;
+                stage_buf[n_stages][bi] = '\0';
+                if (bi > 0) n_stages++;
+            }
+            if (n_stages < 2) {
                 set_color(GFX_LRED, GFX_BLACK);
-                print("pipe: gunakan: prog1 | prog2\n");
+                print("pipe: butuh setidaknya dua perintah\n");
                 set_color(GFX_WHITE, GFX_BLACK);
                 return;
             }
-            int pipe_fd = pipe_alloc();
-            if (pipe_fd < 0) {
-                set_color(GFX_LRED, GFX_BLACK);
-                print("pipe: gagal alokasi pipe\n");
-                set_color(GFX_WHITE, GFX_BLACK);
-                return;
+            /* Alokasikan n_stages-1 pipe */
+            int pipes[MAX_PIPE_STAGES - 1];
+            int np, ok = 1;
+            for (np = 0; np < n_stages - 1; np++) {
+                pipes[np] = pipe_alloc();
+                if (pipes[np] < 0) {
+                    int q; for (q = 0; q < np; q++) pipe_free(pipes[q]);
+                    set_color(GFX_LRED, GFX_BLACK); print("pipe: gagal alokasi\n");
+                    set_color(GFX_WHITE, GFX_BLACK); ok = 0; break;
+                }
             }
-            uint32_t sz1, sz2;
-            const uint8_t *d1 = fs_read_bin(prog1, &sz1);
-            const uint8_t *d2 = fs_read_bin(prog2, &sz2);
-            if (!d1 || !d2) {
-                pipe_free(pipe_fd);
-                set_color(GFX_LRED, GFX_BLACK);
-                if (!d1) { print("pipe: tidak ditemukan: "); print(prog1); print("\n"); }
-                if (!d2) { print("pipe: tidak ditemukan: "); print(prog2); print("\n"); }
-                set_color(GFX_WHITE, GFX_BLACK);
-                return;
+            if (!ok) return;
+            /* Start setiap stage */
+            int tids[MAX_PIPE_STAGES];
+            for (np = 0; np < n_stages; np++) {
+                ShCmd sc;
+                shcmd_parse(stage_buf[np], &sc);
+                int in_fd  = (np > 0)            ? pipes[np-1] : -1;
+                int out_fd = (np < n_stages - 1) ? pipes[np]   : -1;
+                tids[np] = shcmd_run_nowait(&sc, in_fd, out_fd);
+                if (tids[np] == -2) {
+                    set_color(GFX_LRED, GFX_BLACK);
+                    print(sc.prog); print(": tidak ditemukan\n");
+                    set_color(GFX_WHITE, GFX_BLACK);
+                }
             }
-            /* Buat prog1 (writer): stdout → pipe write-end */
-            uint64_t *dir1 = vmm_create_page_dir();
-            uint64_t entry1 = elf_load(d1, sz1, dir1);
-            int tid1 = -1;
-            if (entry1) {
-                uint64_t sp1 = pmm_alloc_frame();
-                vmm_map_page(dir1, 0x600000, sp1, 7);
-                __asm__ volatile("cli" ::: "memory");
-                tid1 = task_create_user(entry1, dir1, 0x600000 + PAGE_SIZE, prog1, ac1, av1);
-                vfs_redirect_out_pipe(tid1, pipe_fd);
-                __asm__ volatile("sti" ::: "memory");
+            /* Tunggu semua stage */
+            keyboard_set_fg_pid(tids[0] >= 0 ? tids[0] : -1);
+            for (np = 0; np < n_stages; np++) {
+                if (tids[np] >= 0) task_wait(tids[np]);
             }
-            /* Buat prog2 (reader): stdin ← pipe read-end */
-            uint64_t *dir2 = vmm_create_page_dir();
-            uint64_t entry2 = elf_load(d2, sz2, dir2);
-            int tid2 = -1;
-            if (entry2) {
-                uint64_t sp2 = pmm_alloc_frame();
-                vmm_map_page(dir2, 0x600000, sp2, 7);
-                __asm__ volatile("cli" ::: "memory");
-                tid2 = task_create_user(entry2, dir2, 0x600000 + PAGE_SIZE, prog2, ac2, av2);
-                vfs_redirect_in_pipe(tid2, pipe_fd);
-                __asm__ volatile("sti" ::: "memory");
-            }
-            if (tid1 < 0 || tid2 < 0) {
-                pipe_free(pipe_fd);
-                set_color(GFX_LRED, GFX_BLACK);
-                print("pipe: gagal memuat ELF\n");
-                set_color(GFX_WHITE, GFX_BLACK);
-                return;
-            }
-            /* Tunggu prog1 selesai (EOF terkirim ke prog2), lalu tunggu prog2.
-             * F-T: Ctrl+C diteruskan ke prog1 (writer). */
-            keyboard_set_fg_pid(tid1);
-            task_wait(tid1);
-            task_wait(tid2);
             keyboard_set_fg_pid(-1);
+            last_exit_code = (tids[n_stages-1] >= 0)
+                             ? task_get_exit_code(tids[n_stages-1]) : 1;
+            for (np = 0; np < n_stages - 1; np++) pipe_free(pipes[np]);
             return;
         }
     }
@@ -735,9 +868,14 @@ static void shell_execute(){
         print("mq_send <pid> <msg>  - kirim pesan ke task pid\n");
         print("mq_recv              - terima pesan dari mailbox shell\n");
         print("paging               - tampilkan status paging\n");
-        print("exec <nama> [&]      - jalankan program ELF (& = background)\n");
-        print("exec <nama> > <file> - jalankan program, stdout ke file\n");
-        print("exec <nama> < <file> - jalankan program, stdin dari file\n");
+        print("exec <nama> [&]           - jalankan program ELF (& = background)\n");
+        print("exec <nama> > <file>      - jalankan program, stdout ke file (truncate)\n");
+        print("exec <nama> >> <file>     - jalankan program, stdout ke file (append)\n");
+        print("exec <nama> < <file>      - jalankan program, stdin dari file\n");
+        print("<prog> [args] [>/>>/<] [&] - jalankan program langsung (tanpa 'exec')\n");
+        print("prog1 | prog2 | prog3     - pipeline (maksimal 6 stage)\n");
+        print("cmd1 && cmd2              - jalankan cmd2 hanya jika cmd1 berhasil\n");
+        print("cmd1 || cmd2              - jalankan cmd2 hanya jika cmd1 gagal\n");
         print("ps                   - tampilkan daftar proses\n");
         print("kill <id>            - matikan proses berdasarkan ID\n");
         print("setprio <id> <1-3>   - ubah priority proses\n");
@@ -1126,89 +1264,26 @@ static void shell_execute(){
         set_color(GFX_WHITE, GFX_BLACK);
     }
     else if(str_starts_with(input_buffer, "exec ")) {
-        /* Parse: exec <prog> [arg1 arg2 ...] [< infile] [> outfile] [&] */
-        char exec_name[64];
-        char rout_file[32];
-        char rin_file[32];
-        char cmd_buf[128];         /* backing store untuk tokenisasi argumen */
-        const char *exec_argv[9];  /* argv[0..7] + NULL sentinel */
-        int  exec_argc = 0;
-        {
-            const char *src = input_buffer + 5;
-            int si = 0, ci = 0;
-            rout_file[0] = '\0';
-            rin_file[0]  = '\0';
-            /* Ekstrak bagian sebelum '>'/'<' ke cmd_buf (berisi prog + semua arg) */
-            while (src[si] && src[si] != '>' && src[si] != '<' && ci < 127)
-                cmd_buf[ci++] = src[si++];
-            while (ci > 0 && cmd_buf[ci-1] == ' ') ci--;  /* trim trailing space */
-            cmd_buf[ci] = '\0';
-            /* Tokenize cmd_buf → exec_argv[0]=prog exec_argv[1]=arg1 ... */
-            {
-                char *p = cmd_buf;
-                while (*p == ' ') p++;
-                while (*p && exec_argc < 8) {
-                    exec_argv[exec_argc++] = p;
-                    while (*p && *p != ' ') p++;
-                    if (*p) { *p = '\0'; p++; while (*p == ' ') p++; }
-                }
-                exec_argv[exec_argc] = 0;
-            }
-            /* Nama program = token pertama */
-            exec_name[0] = '\0';
-            if (exec_argc > 0) {
-                int ni = 0;
-                const char *s0 = exec_argv[0];
-                while (s0[ni] && ni < 63) exec_name[ni] = s0[ni], ni++;
-                exec_name[ni] = '\0';
-            }
-            /* Parse redirect operators (sisa setelah bagian program+args) */
-            while (src[si]) {
-                char op = src[si++];        /* '>' atau '<' */
-                int fi = 0;
-                while (src[si] == ' ') si++;
-                while (src[si] && src[si] != '>' && src[si] != '<' && src[si] != ' ' && fi < 31)
-                    if (op == '>') rout_file[fi++] = src[si++];
-                    else           rin_file[fi++]  = src[si++];
-                if (op == '>') rout_file[fi] = '\0';
-                else           rin_file[fi]  = '\0';
-                /* skip sisa sampai operator berikutnya */
-                while (src[si] && src[si] != '>' && src[si] != '<') si++;
-            }
-        }
-        const char *name = exec_name;
-        uint32_t size;
-        const uint8_t *data = fs_read_bin(name, &size);
-        if (!data) {
-            print("exec: file tidak ditemukan: ");
-            print(name);
-            print("\n");
+        /* Gunakan helper shcmd_parse — mendukung >, >>, <, & dan seterusnya */
+        ShCmd ec;
+        shcmd_parse(input_buffer + 5, &ec);
+        if (!ec.prog[0]) {
+            set_color(GFX_LRED, GFX_BLACK); print("exec: nama program kosong\n");
+            set_color(GFX_WHITE, GFX_BLACK);
         } else {
-            /* Buat page directory baru, isolasi penuh untuk proses ini */
-            uint64_t *proc_dir = vmm_create_page_dir();
-            uint64_t entry = elf_load(data, size, proc_dir);
-            if (!entry) {
-                print("exec: gagal memuat ELF\n");
-            } else {
-                uint64_t stack_phys = pmm_alloc_frame();
-                vmm_map_page(proc_dir, 0x600000, stack_phys, 7);
-                uint64_t user_esp = 0x600000 + PAGE_SIZE;
-                /* Matikan interrupt agar redirect diterapkan sebelum task sempat dijadwal */
-                __asm__ volatile("cli" ::: "memory");
-                int tid = task_create_user(entry, proc_dir, user_esp, name,
-                                           exec_argc, exec_argv);
-                /* Terapkan redirect I/O sebelum task mulai berjalan */
-                if (rout_file[0]) vfs_redirect_out(tid, rout_file);
-                if (rin_file[0])  vfs_redirect_in(tid, rin_file);
-                __asm__ volatile("sti" ::: "memory");
-                if (bg_exec) {
+            int bg = ec.bg || bg_exec;
+            ec.bg = 0;  /* shcmd_run_nowait tidak menunggu; kita handle di sini */
+            int tid = shcmd_run_nowait(&ec, -1, -1);
+            if (tid == -2) {
+                print("exec: file tidak ditemukan: "); print(ec.prog); print("\n");
+            } else if (tid >= 0) {
+                if (bg) {
                     char tbuf[8]; itoa((uint32_t)tid, tbuf);
-                    print("exec: ["); print(tbuf); print("] "); print(name); print(" &\n");
+                    print("["); print(tbuf); print("] "); print(ec.prog); print(" &\n");
                 } else {
-                    /* Foreground: blok shell sampai program selesai.
-                     * F-T: daftarkan tid ke keyboard agar Ctrl+C kirim SIGINT. */
                     keyboard_set_fg_pid(tid);
                     task_wait(tid);
+                    last_exit_code = task_get_exit_code(tid);
                     keyboard_set_fg_pid(-1);
                 }
             }
@@ -1764,54 +1839,30 @@ static void shell_execute(){
             }
         } else {
             /* Auto-exec: coba jalankan input_buffer sebagai program.
-             * Format: progname [arg1 arg2 ...]
-             * Jika program ditemukan di filesystem, run langsung tanpa 'exec ' prefix. */
-            char ae_buf[128];
-            const char *ae_argv[9];
-            int ae_argc = 0;
-            int ae_i = 0;
-            /* Salin input ke ae_buf */
-            while (input_buffer[ae_i] && ae_i < 127) { ae_buf[ae_i] = input_buffer[ae_i]; ae_i++; }
-            ae_buf[ae_i] = '\0';
-            /* Tokenize */
-            { char *p = ae_buf; while (*p == ' ') p++;
-              while (*p && ae_argc < 8) {
-                  ae_argv[ae_argc++] = p; while (*p && *p != ' ') p++;
-                  if (*p) { *p = '\0'; p++; while (*p == ' ') p++; }
-              } ae_argv[ae_argc] = 0; }
-            /* Cari program di filesystem */
-            if (ae_argc > 0) {
-                char ae_name[64];
-                int ni = 0;
-                const char *s0 = ae_argv[0];
-                while (s0[ni] && ni < 63) ae_name[ni] = s0[ni], ni++;
-                ae_name[ni] = '\0';
-                uint32_t ae_size;
-                const uint8_t *ae_data = fs_read_bin(ae_name, &ae_size);
-                if (ae_data) {
-                    uint64_t *ae_dir = vmm_create_page_dir();
-                    uint64_t ae_entry = elf_load(ae_data, ae_size, ae_dir);
-                    if (ae_entry) {
-                        uint64_t ae_sp = pmm_alloc_frame();
-                        vmm_map_page(ae_dir, 0x600000, ae_sp, 7);
-                        __asm__ volatile("cli" ::: "memory");
-                        int ae_tid = task_create_user(ae_entry, ae_dir, 0x600000 + PAGE_SIZE,
-                                                      ae_name, ae_argc, ae_argv);
-                        __asm__ volatile("sti" ::: "memory");
-                        keyboard_set_fg_pid(ae_tid);
-                        task_wait(ae_tid);
-                        keyboard_set_fg_pid(-1);
-                    } else {
-                        set_color(GFX_LRED, GFX_BLACK);
-                        print("Perintah tidak dikenal: ");
-                        print(input_buffer); print("\n");
-                        set_color(GFX_WHITE, GFX_BLACK);
-                    }
-                } else {
+             * Mendukung: progname [args] [> file] [>> file] [< file] [&]
+             * Jika program ditemukan di filesystem, run tanpa 'exec ' prefix. */
+            ShCmd ae;
+            shcmd_parse(input_buffer, &ae);
+            if (ae.argc > 0) {
+                int bg = ae.bg || bg_exec;
+                ae.bg = 0;
+                int ae_tid = shcmd_run_nowait(&ae, -1, -1);
+                if (ae_tid == -2) {
                     set_color(GFX_LRED, GFX_BLACK);
                     print("Perintah tidak dikenal: ");
                     print(input_buffer); print("\n");
                     set_color(GFX_WHITE, GFX_BLACK);
+                    last_exit_code = 127;
+                } else if (ae_tid >= 0) {
+                    if (bg) {
+                        char tbuf[8]; itoa((uint32_t)ae_tid, tbuf);
+                        print("["); print(tbuf); print("] "); print(ae.prog); print(" &\n");
+                    } else {
+                        keyboard_set_fg_pid(ae_tid);
+                        task_wait(ae_tid);
+                        last_exit_code = task_get_exit_code(ae_tid);
+                        keyboard_set_fg_pid(-1);
+                    }
                 }
             }
         }
