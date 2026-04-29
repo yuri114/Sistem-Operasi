@@ -84,4 +84,12 @@ int  net_tcp_accept(int listen_id, uint32_t timeout_ms);
 /* Berhenti listen. */
 void net_tcp_unlisten(int listen_id);
 
+/* ================================================================
+ * Fondasi AP — IPv6 + ICMPv6 ping6
+ * ================================================================ */
+/* Kirim ICMPv6 Echo Request ke dst_ip6 sebanyak count kali.
+ * dst_ip6: array 16 byte (IPv6 address).
+ * Return 0 sukses, -1 NIC tidak ada. */
+int  net_ping6(const uint8_t dst_ip6[16], int count);
+
 #endif

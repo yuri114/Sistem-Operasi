@@ -23,6 +23,9 @@ extern void     set_color(uint32_t fg, uint32_t bg);
 /* ---- Konfigurasi jaringan statis ---- */
 static uint8_t my_mac[6];
 static const uint8_t MY_IP[4]    = {10, 0, 2, 15};
+
+/* Fondasi AP forward declaration */
+static void ip6_make_link_local(void);
 static const uint8_t GW_IP[4]    = {10, 0, 2,  2};
 static const uint8_t BCAST_MAC[6]= {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 
@@ -421,6 +424,7 @@ void net_init(void) {
     rtl8139_init();
     if (!rtl8139_present()) return;
     rtl8139_get_mac(my_mac);
+    ip6_make_link_local();
 }
 
 int net_present(void) { return rtl8139_present(); }
@@ -1593,5 +1597,242 @@ int ntp_sync(void) {
     set_color(0x00FF5555, 0);
     print("ntp: timeout — tidak ada balasan\n");
     set_color(0x00FFFFFF, 0);
+    return 0;
+}
+
+/* ================================================================== */
+/* Fondasi AP — IPv6 + ICMPv6 ping6                                  */
+/* ================================================================== */
+
+/* Link-local IPv6 guest: fe80:: + EUI-64 dari MAC */
+static uint8_t MY_IP6[16];
+static int     my_ip6_ready = 0;
+
+/* MAC gateway IPv6 (fe80::2 → QEMU SLIRP, resolved via NDP) */
+static uint8_t gw_mac6[6];
+static int     gw_mac6_valid = 0;
+
+/* Hitung EUI-64 link-local dari MAC dan simpan ke MY_IP6 */
+static void ip6_make_link_local(void) {
+    /* fe80::/10 prefix */
+    MY_IP6[0] = 0xFE; MY_IP6[1] = 0x80;
+    MY_IP6[2]=0; MY_IP6[3]=0; MY_IP6[4]=0; MY_IP6[5]=0;
+    MY_IP6[6]=0; MY_IP6[7]=0;
+    /* EUI-64: flip U/L bit, masukkan FF:FE di tengah MAC */
+    MY_IP6[8]  = my_mac[0] ^ 0x02;
+    MY_IP6[9]  = my_mac[1];
+    MY_IP6[10] = my_mac[2];
+    MY_IP6[11] = 0xFF;
+    MY_IP6[12] = 0xFE;
+    MY_IP6[13] = my_mac[3];
+    MY_IP6[14] = my_mac[4];
+    MY_IP6[15] = my_mac[5];
+    my_ip6_ready = 1;
+}
+
+/* Checksum ICMPv6 dengan pseudo-header IPv6 */
+static uint16_t icmp6_checksum(const uint8_t src6[16], const uint8_t dst6[16],
+                                const uint8_t *payload, uint16_t plen) {
+    uint32_t sum = 0;
+    int i;
+    /* Pseudo-header: src (16) + dst (16) + length (4) + zeros(3) + NH=58 (1) */
+    for (i = 0; i < 16; i += 2)
+        sum += (uint32_t)(((uint16_t)src6[i] << 8) | src6[i+1]);
+    for (i = 0; i < 16; i += 2)
+        sum += (uint32_t)(((uint16_t)dst6[i] << 8) | dst6[i+1]);
+    sum += (uint32_t)plen;
+    sum += 58; /* Next Header ICMPv6 */
+    /* Payload */
+    for (i = 0; i+1 < (int)plen; i += 2)
+        sum += (uint32_t)(((uint16_t)payload[i] << 8) | payload[i+1]);
+    if (plen & 1) sum += (uint32_t)((uint16_t)payload[plen-1] << 8);
+    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+    return (uint16_t)(~sum);
+}
+
+/* Bangun dan kirim frame Ethernet + IPv6 + ICMPv6 */
+static void ip6_send(const uint8_t dst_mac[6], const uint8_t dst6[16],
+                     uint8_t next_hdr, const uint8_t *payload, uint16_t plen) {
+    uint8_t frame[1514];
+    uint8_t *p = frame;
+    int i;
+    /* Ethernet header */
+    for (i=0; i<6; i++) p[i]   = dst_mac[i];
+    for (i=0; i<6; i++) p[6+i] = my_mac[i];
+    p[12] = 0x86; p[13] = 0xDD;   /* EtherType IPv6 */
+    p += 14;
+    /* IPv6 fixed header (40 bytes) */
+    p[0] = 0x60; p[1]=0; p[2]=0; p[3]=0;   /* version=6, TC=0, flow=0 */
+    p[4] = (uint8_t)(plen >> 8);
+    p[5] = (uint8_t)(plen & 0xFF);           /* payload length */
+    p[6] = next_hdr;
+    p[7] = 64;                               /* hop limit */
+    for (i=0; i<16; i++) p[8+i]  = MY_IP6[i];
+    for (i=0; i<16; i++) p[24+i] = dst6[i];
+    p += 40;
+    /* Payload */
+    for (i=0; i<(int)plen; i++) p[i] = payload[i];
+    rtl8139_send(frame, (uint16_t)(14 + 40 + plen));
+}
+
+/* Multicast MAC untuk IPv6: 33:33 + last 4 bytes IPv6 */
+static void ip6_mcast_mac(const uint8_t ip6[16], uint8_t mac[6]) {
+    mac[0]=0x33; mac[1]=0x33;
+    mac[2]=ip6[12]; mac[3]=ip6[13]; mac[4]=ip6[14]; mac[5]=ip6[15];
+}
+
+/* Solicited-node multicast: FF02::1:FF<last3> */
+static void ip6_solicited_node(const uint8_t target[16], uint8_t snm[16]) {
+    snm[0]=0xFF; snm[1]=0x02;
+    snm[2]=0; snm[3]=0; snm[4]=0; snm[5]=0;
+    snm[6]=0; snm[7]=0; snm[8]=0; snm[9]=0;
+    snm[10]=0; snm[11]=0x01;
+    snm[12]=0xFF;
+    snm[13]=target[13]; snm[14]=target[14]; snm[15]=target[15];
+}
+
+/* Kirim NDP Neighbor Solicitation untuk target */
+static void ndp_send_ns(const uint8_t target6[16]) {
+    uint8_t snm[16], dst_mac[6];
+    uint8_t icmp6[32];
+    uint16_t csum;
+    int i;
+    ip6_solicited_node(target6, snm);
+    ip6_mcast_mac(snm, dst_mac);
+    /* ICMPv6 NS: type=135, code=0, cksum(placeholder), reserved(4), target(16),
+     * option: type=1(src link-layer), len=1(8 bytes), MAC(6) */
+    icmp6[0]=135; icmp6[1]=0; icmp6[2]=0; icmp6[3]=0; /* type,code,cksum */
+    icmp6[4]=0;icmp6[5]=0;icmp6[6]=0;icmp6[7]=0;       /* reserved */
+    for (i=0;i<16;i++) icmp6[8+i]=target6[i];           /* target */
+    icmp6[24]=1; icmp6[25]=1;                            /* option type=1, len=1(×8) */
+    for (i=0;i<6;i++) icmp6[26+i]=my_mac[i];            /* source MAC */
+    csum = icmp6_checksum(MY_IP6, snm, icmp6, 32);
+    icmp6[2]=(uint8_t)(csum>>8); icmp6[3]=(uint8_t)(csum&0xFF);
+    ip6_send(dst_mac, snm, 58, icmp6, 32);
+}
+
+/* Resolve IPv6 → MAC via NDP, simpan ke out_mac. Return 1 sukses, 0 timeout */
+static int ndp_resolve(const uint8_t target6[16], uint8_t out_mac[6]) {
+    uint8_t rbuf[1514]; uint16_t rlen;
+    uint32_t deadline;
+    int attempt, i;
+    /* Cek cache gateway */
+    if (gw_mac6_valid) {
+        int same = 1;
+        for (i=0;i<16;i++) if (target6[i] != ((uint8_t[]){0xfe,0x80,0,0,0,0,0,0,0,0,0,0,0,0,0,0x02})[i]) { same=0; break; }
+        if (same) { for(i=0;i<6;i++) out_mac[i]=gw_mac6[i]; return 1; }
+    }
+    for (attempt=0; attempt<3; attempt++) {
+        ndp_send_ns(target6);
+        deadline = get_ticks() + 1500;
+        while (get_ticks() < deadline) {
+            if (rtl8139_recv(rbuf, &rlen) == 0 && rlen >= 86) {
+                /* Check: EtherType=0x86DD, IPv6, ICMPv6 type=136 (NA) */
+                if (rbuf[12]==0x86 && rbuf[13]==0xDD &&
+                    (rbuf[14]>>4)==6 &&
+                    rbuf[20]==58 /* next hdr ICMPv6 */ &&
+                    rbuf[54]==136 /* NA */)
+                {
+                    /* target addr di NA: offset 14+40+8 = 62 */
+                    int match = 1;
+                    for (i=0;i<16;i++) if (rbuf[62+i]!=target6[i]) { match=0; break; }
+                    if (match) {
+                        /* Option type=2(target link-layer) offset 78 */
+                        if (rlen >= 86 && rbuf[78]==2 && rbuf[79]==1) {
+                            for(i=0;i<6;i++) out_mac[i]=rbuf[80+i];
+                            /* simpan jika ini gateway */
+                            {
+                                int isgw=1;
+                                static const uint8_t GW6[16]={0xfe,0x80,0,0,0,0,0,0,0,0,0,0,0,0,0,0x02};
+                                for(i=0;i<16;i++) if(target6[i]!=GW6[i]){isgw=0;break;}
+                                if(isgw){ for(i=0;i<6;i++) gw_mac6[i]=out_mac[i]; gw_mac6_valid=1; }
+                            }
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+/* Public: ping6 ke dst_ip6 sebanyak count kali. */
+int net_ping6(const uint8_t dst_ip6[16], int count) {
+    uint8_t icmp6[16], dst_mac[6];
+    uint8_t rbuf[1514]; uint16_t rlen;
+    uint16_t csum;
+    int seq, i;
+    if (!rtl8139_present()) { print("ping6: NIC tidak ada\n"); return -1; }
+    if (!my_ip6_ready) ip6_make_link_local();
+
+    /* Resolve MAC destination */
+    if (!ndp_resolve(dst_ip6, dst_mac)) {
+        /* Fallback: gunakan multicast MAC agar SLIRP tetap menerima */
+        ip6_mcast_mac(dst_ip6, dst_mac);
+    }
+
+    for (seq = 1; seq <= count; seq++) {
+        uint32_t t0, deadline;
+        /* ICMPv6 Echo Request type=128 */
+        icmp6[0]=128; icmp6[1]=0; icmp6[2]=0; icmp6[3]=0;
+        icmp6[4]=0x6F; icmp6[5]=0x72; /* ID = 'or' */
+        icmp6[6]=(uint8_t)(seq>>8); icmp6[7]=(uint8_t)(seq&0xFF);
+        icmp6[8]=0x61; icmp6[9]=0x70; icmp6[10]=0x36; icmp6[11]=0; /* data */
+        icmp6[12]=0; icmp6[13]=0; icmp6[14]=0; icmp6[15]=0;
+        csum = icmp6_checksum(MY_IP6, dst_ip6, icmp6, 16);
+        icmp6[2]=(uint8_t)(csum>>8); icmp6[3]=(uint8_t)(csum&0xFF);
+        t0 = get_ticks();
+        ip6_send(dst_mac, dst_ip6, 58, icmp6, 16);
+
+        /* Tunggu ICMPv6 Echo Reply */
+        deadline = t0 + 3000;
+        while (get_ticks() < deadline) {
+            if (rtl8139_recv(rbuf, &rlen) == 0 && rlen >= 62) {
+                if (rbuf[12]==0x86 && rbuf[13]==0xDD &&
+                    (rbuf[14]>>4)==6 && rbuf[20]==58 &&
+                    rbuf[54]==129 /* Echo Reply */)
+                {
+                    /* Cek ID cocok ('or' = 0x6F72) */
+                    if (rbuf[58]==0x6F && rbuf[59]==0x72) {
+                        uint32_t rtt = get_ticks() - t0;
+                        /* Cetak: ping6 reply dari <addr> seq=N rtt=Xms */
+                        set_color(0x0055FF55, 0);
+                        print("ping6: reply dari [");
+                        for (i=0;i<16;i++) {
+                            if (i>0 && (i%2)==0) print(":");
+                            {
+                                char hb[3];
+                                hb[0]="0123456789abcdef"[rbuf[22+i]>>4];
+                                hb[1]="0123456789abcdef"[rbuf[22+i]&0xF];
+                                hb[2]=0;
+                                print(hb);
+                            }
+                        }
+                        print("]  seq=");
+                        { char nb[8]; itoa((uint32_t)seq, nb); print(nb); }
+                        print("  rtt=");
+                        { char nb[8]; itoa(rtt, nb); print(nb); }
+                        print(" ms\n");
+                        set_color(0x00FFFFFF, 0);
+                        goto next_seq;
+                    }
+                }
+                /* Tangani NDP NS masuk jika ada (respond to neighbor solicitation) */
+                if (rbuf[12]==0x86 && rbuf[13]==0xDD &&
+                    (rbuf[14]>>4)==6 && rbuf[20]==58 &&
+                    rbuf[54]==135 /* NS */)
+                {
+                    /* Balas dengan NA — opsional, SLIRP biasanya tidak butuh ini */
+                }
+            }
+        }
+        set_color(0x00FF5555, 0);
+        print("ping6: timeout  seq=");
+        { char nb[8]; itoa((uint32_t)seq, nb); print(nb); }
+        print("\n");
+        set_color(0x00FFFFFF, 0);
+        next_seq:;
+    }
     return 0;
 }

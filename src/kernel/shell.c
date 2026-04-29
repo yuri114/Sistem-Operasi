@@ -18,6 +18,10 @@
 #include "mq.h"
 #include "keyboard.h"
 #include "mfs4.h"
+#include "tls13.h"
+#include "x509.h"
+#include "ext2.h"
+#include "serial.h"
 #include "rtc.h"
 
 /*fungsi dari kernel.c*/
@@ -1811,6 +1815,87 @@ static void shell_execute() {
             net_ping(ip, 4);
         }
     }
+    /* --- Fondasi AP: ping6 --- */
+    else if (str_compare(input_buffer, "ping6")) {
+        print("gunakan ping6 <ipv6>  contoh: ping6 fe80::2\n");
+    }
+    else if (str_starts_with(input_buffer, "ping6 ")) {
+        /* Parse IPv6 address sederhana: fe80::2 atau xx:xx:xx:xx:xx:xx:xx:xx */
+        const char *p = input_buffer + 6;
+        uint8_t ip6[16];
+        int ok = 0;
+        /* Hanya handle bentuk "fe80::X" dan "xx:xx::yy" dengan expand :: */
+        {
+            /* Simpan bagian sebelum :: dan sesudah :: */
+            uint16_t grp_left[8], grp_right[8];
+            int nl=0, nr=0;
+            const char *pp = p;
+            int found_dc = 0; /* :: ditemukan */
+            const char *dc_pos = 0;
+            /* Cari :: */
+            while (*pp) {
+                if (pp[0]==':' && pp[1]==':') { dc_pos = pp; found_dc=1; break; }
+                pp++;
+            }
+            /* Parse bagian kiri */
+            pp = p;
+            while (*pp) {
+                if (found_dc && pp == dc_pos) break;
+                if (*pp == ':') { pp++; continue; }
+                /* Baca satu grup hex */
+                uint16_t g = 0;
+                while ((*pp>='0'&&*pp<='9')||(*pp>='a'&&*pp<='f')||(*pp>='A'&&*pp<='F')) {
+                    uint8_t d;
+                    if (*pp>='0'&&*pp<='9') d=(uint8_t)(*pp-'0');
+                    else if (*pp>='a'&&*pp<='f') d=(uint8_t)(*pp-'a'+10);
+                    else d=(uint8_t)(*pp-'A'+10);
+                    g=(uint16_t)((g<<4)|d); pp++;
+                }
+                if (nl < 8) grp_left[nl++] = g;
+                if (*pp == ':' && pp[1] != ':') pp++;
+            }
+            /* Parse bagian kanan (setelah ::) */
+            if (found_dc) {
+                pp = dc_pos + 2;
+                while (*pp) {
+                    if (*pp == ':') { pp++; continue; }
+                    uint16_t g = 0;
+                    while ((*pp>='0'&&*pp<='9')||(*pp>='a'&&*pp<='f')||(*pp>='A'&&*pp<='F')) {
+                        uint8_t d;
+                        if (*pp>='0'&&*pp<='9') d=(uint8_t)(*pp-'0');
+                        else if (*pp>='a'&&*pp<='f') d=(uint8_t)(*pp-'a'+10);
+                        else d=(uint8_t)(*pp-'A'+10);
+                        g=(uint16_t)((g<<4)|d); pp++;
+                    }
+                    if (nr < 8) grp_right[nr++] = g;
+                    if (*pp == ':') pp++;
+                }
+            }
+            if (nl + nr <= 8) {
+                int zeros = 8 - nl - nr;
+                int i;
+                for (i=0;i<nl;i++) {
+                    ip6[i*2]=(uint8_t)(grp_left[i]>>8);
+                    ip6[i*2+1]=(uint8_t)(grp_left[i]&0xFF);
+                }
+                for (i=0;i<zeros;i++) {
+                    ip6[(nl+i)*2]=0; ip6[(nl+i)*2+1]=0;
+                }
+                for (i=0;i<nr;i++) {
+                    ip6[(nl+zeros+i)*2]=(uint8_t)(grp_right[i]>>8);
+                    ip6[(nl+zeros+i)*2+1]=(uint8_t)(grp_right[i]&0xFF);
+                }
+                ok = 1;
+            }
+        }
+        if (!ok) {
+            set_color(GFX_LRED, GFX_BLACK);
+            print("ping6: format alamat IPv6 tidak valid\n");
+            set_color(GFX_WHITE, GFX_BLACK);
+        } else {
+            net_ping6(ip6, 4);
+        }
+    }
     else if (str_starts_with(input_buffer, "udp_send ")) {
         /* Syntax: udp_send <ip> <port> <pesan> */
         const char *p = input_buffer + 9;
@@ -1933,6 +2018,60 @@ static void shell_execute() {
             http_get(url);
         }
     }
+    /* --- Fondasi AQ: certcheck <hostname> --- */
+    else if (str_compare(input_buffer, "certcheck")) {
+        print("gunakan certcheck <hostname>  contoh: certcheck example.com\n");
+    }
+    else if (str_starts_with(input_buffer, "certcheck ")) {
+        const char *host = input_buffer + 10;
+        while (*host == ' ') host++;
+        if (!*host) {
+            print("certcheck: gunakan: certcheck <hostname>\n");
+        } else {
+            uint8_t ip[4];
+            print("certcheck: resolving "); print(host); print("...\n");
+            if (!dns_resolve(host, ip)) {
+                set_color(GFX_LRED, GFX_BLACK);
+                print("certcheck: DNS gagal\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+            } else {
+                int tid = net_tcp_connect(ip, 443);
+                if (tid < 0) {
+                    set_color(GFX_LRED, GFX_BLACK);
+                    print("certcheck: TCP gagal\n");
+                    set_color(GFX_WHITE, GFX_BLACK);
+                } else {
+                    int rc = tls13_connect(tid, host);
+                    if (rc != 0) {
+                        set_color(GFX_LRED, GFX_BLACK);
+                        print("certcheck: TLS handshake gagal\n");
+                        set_color(GFX_WHITE, GFX_BLACK);
+                    } else {
+                        X509Cert cert;
+                        set_color(GFX_LCYAN, GFX_BLACK);
+                        print("=== Sertifikat Server ===\n");
+                        set_color(GFX_WHITE, GFX_BLACK);
+                        if (tls13_get_last_cert(&cert)) {
+                            x509_print(&cert);
+                            int hn = tls13_check_hostname(host);
+                            if (hn == 1) {
+                                set_color(GFX_LGREEN, GFX_BLACK);
+                                print("  Hostname    : OK (cocok)\n");
+                            } else {
+                                set_color(GFX_YELLOW, GFX_BLACK);
+                                print("  Hostname    : TIDAK COCOK\n");
+                            }
+                            set_color(GFX_WHITE, GFX_BLACK);
+                        } else {
+                            print("  [sertifikat tidak tersedia]\n");
+                        }
+                        tls13_close(tid);
+                    }
+                    net_tcp_close(tid);
+                }
+            }
+        }
+    }
     /* F-X4: nslookup <hostname> */
     else if (str_starts_with(input_buffer, "nslookup ")) {
         const char *host = input_buffer + 9;
@@ -2012,6 +2151,31 @@ static void shell_execute() {
     }
     else if (str_compare(input_buffer, "ntpdate")) {
         ntp_sync();
+    }
+    /* --- Fondasi AR: EXT2 filesystem --- */
+    else if (str_compare(input_buffer, "mount ext2") || str_starts_with(input_buffer, "mount ext2")) {
+        ext2_mount();
+    }
+    else if (str_compare(input_buffer, "ext2ls") || str_compare(input_buffer, "ext2ls /")) {
+        ext2_ls("/");
+    }
+    else if (str_starts_with(input_buffer, "ext2ls ")) {
+        ext2_ls(input_buffer + 7);
+    }
+    else if (str_starts_with(input_buffer, "ext2cat ")) {
+        ext2_cat(input_buffer + 8);
+    }
+    /* --- Fondasi AS: kdbg — Kernel Debugger via serial --- */
+    else if (str_compare(input_buffer, "kdbg")) {
+        set_color(GFX_LCYAN, GFX_BLACK);
+        print("kdbg: masuk mode debugger serial (COM1).\n");
+        print("      Sambungkan terminal serial ke QEMU -serial stdio\n");
+        print("      atau gunakan 'kdbg' dari layar utama saat QEMU -serial telnet:...\n");
+        set_color(GFX_WHITE, GFX_BLACK);
+        kdbg_run();
+        set_color(GFX_LGREEN, GFX_BLACK);
+        print("kdbg: keluar dari debugger.\n");
+        set_color(GFX_WHITE, GFX_BLACK);
     }
     /* Fondasi AM: httpd [start [port] | stop] — HTTP server */
     else if (str_starts_with(input_buffer, "httpd") || str_compare(input_buffer, "httpd")) {

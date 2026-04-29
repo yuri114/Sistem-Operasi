@@ -1,15 +1,17 @@
 ﻿/* tls13.c — TLS 1.3 minimal client
  * Alur: ClientHello -> ServerHello -> [EncExt+Cert+CertVerify+Finished] -> Finished
- * Sertifikat TIDAK diverifikasi (educational OS).
+ * Fondasi AQ: sertifikat di-parse (x509) dan hostname di-verifikasi.
  * Cipher suite: TLS_AES_128_GCM_SHA256 (0x1301) + X25519 */
 #include "tls13.h"
 #include "crypto.h"
+#include "x509.h"
 
 /* Forward declarations dari net.h (hindari circular include) */
 extern int  net_tcp_send(int id, const void *data, uint16_t len);
 extern int  net_tcp_recv(int id, void *buf, uint16_t maxlen);
 extern uint64_t get_ticks(void);
-
+extern void print(const char *s);
+extern void set_color(uint32_t fg, uint32_t bg);
 
 /* Konstanta */
 #define TLS_MAX_CONN          4
@@ -21,6 +23,7 @@ extern uint64_t get_ticks(void);
 #define TLS_CHANGE_CIPHER  0x14
 #define HS_CLIENT_HELLO    1
 #define HS_SERVER_HELLO    2
+#define HS_CERTIFICATE     11
 #define HS_FINISHED        20
 
 /* State TLS */
@@ -41,7 +44,10 @@ typedef struct {
     uint32_t ap_head, ap_tail;
 } TlsConn;
 
-static TlsConn tls_conns[TLS_MAX_CONN];
+static TlsConn  tls_conns[TLS_MAX_CONN];
+/* Fondasi AQ: sertifikat server terakhir yang di-parse */
+static X509Cert tls_last_cert;
+static int      tls_last_cert_valid = 0;
 
 /* Utilitas */
 static void tmemset(void *p, uint8_t v, uint32_t n)
@@ -361,12 +367,34 @@ int tls13_connect(int tcp_id, const char *host)
             if (ict < 0) continue;
             if (ict == TLS_HANDSHAKE) {
                 sha256_update(&c->transcript, rdata, dlen);
-                /* Scan untuk HS_FINISHED */
+                /* Scan untuk HS_FINISHED dan HS_CERTIFICATE */
                 uint32_t hp = 0;
                 while (hp + 4 <= dlen) {
                     uint8_t hs_type = rdata[hp];
                     uint32_t hs_len = ((uint32_t)rdata[hp+1]<<16)|((uint32_t)rdata[hp+2]<<8)|rdata[hp+3];
                     if (hs_type == HS_FINISHED) got_fin = 1;
+                    /* Fondasi AQ: parse Certificate message */
+                    if (hs_type == HS_CERTIFICATE && hs_len > 4) {
+                        /* TLS 1.3 Certificate: [0]=req_ctx_len, [1..3]=cert_list_len
+                         * cert_entry: [0..2]=cert_data_len, [3..]=DER */
+                        uint32_t cp = hp + 4;
+                        uint32_t cp_end = cp + hs_len;
+                        if (cp < cp_end) cp++; /* skip request_context length */
+                        if (cp + 3 <= cp_end) {
+                            /* cert_list_len */
+                            cp += 3;
+                            if (cp + 3 <= cp_end) {
+                                uint32_t cder_len = ((uint32_t)rdata[cp]<<16)|
+                                                    ((uint32_t)rdata[cp+1]<<8)|rdata[cp+2];
+                                cp += 3;
+                                if (cp + cder_len <= cp_end) {
+                                    /* Parse first (leaf) certificate */
+                                    tls_last_cert_valid = x509_parse(
+                                        rdata + cp, cder_len, &tls_last_cert);
+                                }
+                            }
+                        }
+                    }
                     hp += 4 + hs_len;
                 }
             }
@@ -490,4 +518,24 @@ int tls13_is_open(int tcp_id)
         if (tls_conns[i].used && tls_conns[i].tcp_id==tcp_id && tls_conns[i].state==1)
             return 1;
     return 0;
+}
+
+/* ================================================================
+ * Fondasi AQ — Certificate info API
+ * ================================================================ */
+/* Salin cert server terakhir ke out. Return 1 jika ada, 0 jika tidak ada. */
+int tls13_get_last_cert(X509Cert *out) {
+    if (!tls_last_cert_valid) return 0;
+    /* manual copy */
+    uint8_t *d = (uint8_t*)out, *s = (uint8_t*)&tls_last_cert;
+    uint32_t n = sizeof(X509Cert);
+    while (n--) *d++ = *s++;
+    return 1;
+}
+
+/* Periksa apakah hostname cocok dengan cert server terakhir.
+ * Return 1 cocok, 0 tidak cocok, -1 cert tidak tersedia. */
+int tls13_check_hostname(const char *hostname) {
+    if (!tls_last_cert_valid) return -1;
+    return x509_check_hostname(&tls_last_cert, hostname);
 }
