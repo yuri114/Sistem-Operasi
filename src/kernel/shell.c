@@ -1585,7 +1585,9 @@ static void shell_execute() {
         const char *url = input_buffer + 5;
         while (*url == ' ') url++;
         if (!*url) {
-            print("curl: gunakan: curl http://hostname/path\n");
+            print("curl: gunakan: curl http[s]://hostname/path\n");
+        } else if (url[0]=='h'&&url[1]=='t'&&url[2]=='t'&&url[3]=='p'&&url[4]=='s') {
+            https_get(url);
         } else {
             http_get(url);
         }

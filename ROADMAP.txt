@@ -13,8 +13,8 @@ KONDISI SAAT INI (setelah Tahap C)
 - GUI         : Window Manager (16 window), taskbar, 5 built-in apps
 - User space  : Ring-3 isolasi penuh, ELF64 loader, fork/COW, mmap, threading
 - Shell       : Multi-stage pipeline (6 stage) | >> && || auto-exec operators
-- Networking  : RTL8139, ARP, IPv4, ICMP, UDP, TCP, DNS, HTTP curl
-- Kernel size : ~441KB
+- Networking  : RTL8139, ARP, IPv4, ICMP, UDP, TCP, DNS, HTTP curl, HTTPS/TLS 1.3
+- Kernel size : ~480KB
 - Platform    : QEMU qemu-system-x86_64, build via WSL cross-compiler (x86_64-linux-gnu)
 
 ================================================================
@@ -374,6 +374,7 @@ RINGKASAN URUTAN & STATUS
   [DONE] Fondasi R2  — VFS_TYPE_PIPE/NET/TTY, fd diwarisi fork (vfs_copy_fds)  (2 April 2026)
   [DONE] Fondasi R3  — MFS4 inode layer: symlink, hardlink, stat, listdir, mkdir, unlink  (2 April 2026)
   [DONE] Fondasi AI  — Shell operators lanjutan: multi-pipe (6 stage), >>, &&/||, auto-exec  (29 April 2026)
+  [DONE] Fondasi AJ  — HTTPS/TLS 1.3: curl https:// via AES-128-GCM + X25519 + SHA-256  (29 April 2026)
 
 ================================================================
 
@@ -1599,6 +1600,7 @@ RINGKASAN URUTAN & TARGET 100%
   [DONE] Fondasi Z   — HTTP chunked + redirect  (~105%)
   [DONE] Fondasi AA–AH — Daily Driver: argv, tools, scripting, RTC, editor, history, ANSI, procfs
   [DONE] Fondasi AI  — Shell operators lanjutan: multi-pipe, >>, &&/||, auto-exec  (~128%) ← SELESAI
+  [DONE] Fondasi AJ  — HTTPS/TLS 1.3: curl https:// (AES-128-GCM, X25519, SHA-256)  (~131%) ← SELESAI
 
 ================================================================
 ROADMAP DAILY DRIVER (Fondasi AA – AH)
@@ -1617,6 +1619,7 @@ Urutan pengerjaan (berdasarkan dampak/kepentingan):
   [x] Fondasi AG — ANSI/VT100 escape codes di output        (~122%)
   [x] Fondasi AH — procfs /proc (ps/mem/net via file)        (~125%)
   [x] Fondasi AI — Shell operators: multi-pipe |, >>, &&/||, auto-exec  (~128%)
+  [x] Fondasi AJ — HTTPS/TLS 1.3: curl https:// (AES-128-GCM, X25519, SHA-256)  (~131%)
 
 ================================================================
 FONDASI AA — ARGV/ARGC: ARGUMEN PROGRAM
@@ -1860,5 +1863,104 @@ Tujuan: Lengkapi kemampuan shell dengan operator standar Unix —
     shcmd_parse(src, c)              — parse satu perintah lengkap
     shcmd_run_nowait(c, in_fd, out_fd) — spawn task, return tid (non-blocking)
     vfs_redirect_out_append(tid, path)  — set stdout ke append mode
+
+================================================================
+FONDASI AJ — HTTPS / TLS 1.3
+================================================================
+Status: [SELESAI] ✓ Selesai 29 April 2026 — build 480KB, test QEMU OK
+Prioritas: 10
+Prasyarat: Fondasi X (TCP/DNS) + Fondasi Y (HTTP curl) selesai ✓
+----------------------------------------------------------------
+Tujuan: Implementasi HTTPS (curl https://) menggunakan TLS 1.3 murni C,
+        tanpa library eksternal, tanpa verifikasi sertifikat (educational OS).
+        Cipher suite: TLS_AES_128_GCM_SHA256 (0x1301), key exchange: X25519.
+
+  [AJ1] ✓ crypto.c / crypto.h — Kriptografi primitif lengkap (~700 baris)
+        Bagian 1: SHA-256 (FIPS 180-4)
+          - sha256_init / sha256_update / sha256_final / sha256()
+        Bagian 2: HMAC-SHA256
+          - hmac_sha256(key, klen, msg, mlen, out[32])
+        Bagian 3: HKDF-SHA256 + TLS 1.3 helpers
+          - hkdf_extract(salt, ikm, prk[32])
+          - hkdf_expand(prk, info, out, olen)
+          - hkdf_expand_label(secret, label, ctx, out, olen)
+          - tls13_derive_secret(secret, label, transcript_hash, out)
+        Bagian 4: AES-128
+          - SBOX[256] (full S-box)
+          - aes128_setkey(aes, key[16]) — key schedule 10 ronde
+          - aes128_encrypt_block(aes, in[16], out[16])
+        Bagian 5: AES-128-GCM
+          - gcm_mul(out, X, Y) — GHASH multiply (bit-by-bit, 128 iter)
+          - ghash(H, aad, aad_len, cipher, clen, out[16])
+          - gcm_ctr(aes, iv, buf, len, ctr_start)
+          - aes128gcm_encrypt(aes, iv, aad, aad_len, buf, len, tag[16])
+          - aes128gcm_decrypt(aes, iv, aad, aad_len, buf, len, tag[16]) → 0/-1
+        Bagian 6: X25519 (Curve25519 DH)
+          - fe[5]: 51-bit limb, GF(2^255-19)
+          - fe_mul() dengan __uint128_t, fe_sq, fe_add, fe_sub, fe_mul_scalar
+          - fe_invert() via Fermat (z^(2^255-21))
+          - fe_cswap() constant-time conditional swap
+          - fe_from_bytes / fe_to_bytes (little-endian 32 byte)
+          - curve25519_ladder() — Montgomery ladder 255 bit
+          - x25519_generate_private(), x25519_public(), x25519_shared()
+        PRNG: xorshift64 di-seed dari get_ticks() + alamat stack
+        File: src/kernel/crypto.h, src/kernel/crypto.c
+
+  [AJ2] ✓ tls13.c / tls13.h — TLS 1.3 minimal client (~480 baris)
+        State machine: TlsConn (per-koneksi, maks 4)
+          - Field: c_priv/c_pub/s_pub/ecdhe (X25519 keys)
+          - hs_s/c_key[16], hs_s/c_iv[12]
+          - ap_s/c_key[16], ap_s/c_iv[12]
+          - c_hs_traffic[32] — disimpan untuk client Finished key
+          - sequence counter (hs_s/c_seq, ap_s/c_seq)
+          - Sha256 transcript, state, app_buf ring buffer
+        tls13_connect(tcp_id, host):
+          1. x25519_generate_private/public
+          2. send_client_hello dengan SNI extension
+          3. Baca ServerHello (skip ChangeCipherSpec)
+          4. x25519_shared → ECDHE secret
+          5. derive_hs_keys (HKDF early → derived → hs_secret → s/c hs traffic)
+          6. Loop baca encrypted records → dekripsi → scan HS_FINISHED
+          7. derive_app_keys (hs_secret → derived2 → master → s/c ap traffic)
+          8. Kirim client Finished (HMAC-SHA256 dari c_hs_traffic)
+        tls13_send/recv/close/is_open
+        File: src/kernel/tls13.h, src/kernel/tls13.c
+
+  [AJ3] ✓ net.c — https_get(url)
+        - Parse "https://host/path"
+        - dns_resolve(host) → IP
+        - net_tcp_connect(ip, 443)
+        - tls13_connect(conn, host) — dengan SNI
+        - Kirim HTTP/1.0 GET request via tls13_send
+        - Terima respons + tampilkan header (warna) + body (warna berbeda)
+        - tls13_close + net_tcp_close setelah selesai
+        File: src/kernel/net.c (fungsi https_get ditambah di akhir)
+        net.h: deklarasi int https_get(const char *url)
+
+  [AJ4] ✓ shell.c — curl https:// detection
+        - Cek prefix "https://" → panggil https_get(url)
+        - Cek prefix "http://"  → panggil http_get(url) (lama)
+        File: src/kernel/shell.c
+
+  [AJ5] ✓ build.ps1 — crypto.c + tls13.c ditambah ke build
+        - Compile: crypto.c → build/crypto.o
+        - Compile: tls13.c  → build/tls13.o
+        - Linker: tambah build/crypto.o build/tls13.o
+        File: build.ps1
+
+  Bug yang ditemukan & diperbaiki selama development:
+    [BUG-1] SNI tidak ada → server modern gagal routing →
+            tambah extension server_name (type 0x0000) di ClientHello
+    [BUG-2] Finished key salah → pakai hs_c_key (16B AES key)
+            bukan c_hs_traffic (32B HKDF secret) →
+            simpan c_hs_traffic di struct, pakai itu untuk
+            hkdf_expand_label(..., "finished", ...)
+    [BUG-3] ChangeCipherSpec sebelum ServerHello tidak di-skip →
+            loop skip CCS sebelum parse ServerHello
+
+  Hasil test:
+    curl https://example.com  → DNS OK, TCP:443 OK, TLS 1.3 OK, HTTP 200 OK
+    curl https://google.com   → DNS OK, TCP:443 OK, TLS 1.3 OK
+    Kernel size: 441KB → 480KB (+39KB crypto+tls13)
 
 ================================================================

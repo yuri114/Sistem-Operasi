@@ -61,4 +61,9 @@ int  dns_resolve(const char *hostname, uint8_t out_ip[4]);
  * Return 0 sukses, -1 error. */
 int  http_get(const char *url);
 
+/* F-AJ: HTTPS GET client — fetch URL via TLS 1.3 (port 443).
+ * url format: "https://hostname/path" atau "https://hostname"
+ * Return 0 sukses, -1 error. */
+int  https_get(const char *url);
+
 #endif

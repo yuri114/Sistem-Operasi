@@ -1231,3 +1231,117 @@ int http_get(const char *url) {
     set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
     return -1;
 }
+
+/* ================================================================== */
+/* F-AJ: https_get(url) — HTTPS GET via TLS 1.3                       */
+/* url format: "https://hostname/path" atau "https://hostname"        */
+/* ================================================================== */
+#include "tls13.h"
+
+int https_get(const char *url) {
+    /* Parse: lewati "https://" */
+    const char *p = url;
+    if (p[0]=='h'&&p[1]=='t'&&p[2]=='t'&&p[3]=='p'&&p[4]=='s'&&p[5]==':'&&p[6]=='/'&&p[7]=='/')
+        p += 8;
+    else { print("https: URL harus mulai dengan https://\n"); return -1; }
+
+    /* Ekstrak hostname dan path */
+    char host[128]; int hi=0;
+    while (*p && *p != '/' && hi < 127) host[hi++]=*p++;
+    host[hi]=0;
+    const char *path = (*p=='/') ? p : "/";
+
+    /* DNS resolve */
+    uint8_t ip[4];
+    set_color(HTTP_COLOR_INFO, HTTP_COLOR_BG);
+    print("https: resolving "); print(host); print("...\n");
+    if (!dns_resolve(host, ip)) {
+        set_color(HTTP_COLOR_ERROR, HTTP_COLOR_BG);
+        print("https: gagal resolve hostname\n");
+        set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+        return -1;
+    }
+
+    /* TCP connect ke port 443 */
+    set_color(HTTP_COLOR_INFO, HTTP_COLOR_BG);
+    print("https: connecting port 443...\n");
+    int conn = net_tcp_connect(ip, 443);
+    if (conn < 0) {
+        set_color(HTTP_COLOR_ERROR, HTTP_COLOR_BG);
+        print("https: gagal TCP connect\n");
+        set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+        return -1;
+    }
+
+    /* TLS handshake */
+    set_color(HTTP_COLOR_INFO, HTTP_COLOR_BG);
+    print("https: TLS handshake...\n");
+    if (tls13_connect(conn, host) != 0) {
+        set_color(HTTP_COLOR_ERROR, HTTP_COLOR_BG);
+        print("https: TLS handshake gagal\n");
+        net_tcp_close(conn);
+        set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+        return -1;
+    }
+    set_color(HTTP_COLOR_INFO, HTTP_COLOR_BG);
+    print("https: TLS established\n");
+
+    /* Kirim HTTP request */
+    static char req[512];
+    int rp=0;
+    /* GET path HTTP/1.0\r\nHost: host\r\nConnection: close\r\n\r\n */
+    const char *method = "GET ";
+    for(int i=0;method[i];i++) req[rp++]=method[i];
+    for(int i=0;path[i];i++) req[rp++]=path[i];
+    const char *proto = " HTTP/1.0\r\nHost: ";
+    for(int i=0;proto[i];i++) req[rp++]=proto[i];
+    for(int i=0;host[i];i++) req[rp++]=host[i];
+    const char *tail = "\r\nConnection: close\r\n\r\n";
+    for(int i=0;tail[i];i++) req[rp++]=tail[i];
+    tls13_send(conn, req, rp);
+
+    /* Terima respons */
+    static uint8_t rbuf[4096];
+    set_color(HTTP_COLOR_HEADER, HTTP_COLOR_BG);
+    int body_started = 0;
+    uint32_t body_bytes = 0;
+    for (;;) {
+        int got = tls13_recv(conn, rbuf, sizeof(rbuf)-1);
+        if (got <= 0) break;
+        rbuf[got] = 0;
+        if (!body_started) {
+            /* Cari \r\n\r\n */
+            for (int i=0;i<got-3;i++) {
+                if (rbuf[i]=='\r'&&rbuf[i+1]=='\n'&&rbuf[i+2]=='\r'&&rbuf[i+3]=='\n') {
+                    /* Cetak header */
+                    rbuf[i+4]=0;
+                    print((char*)rbuf);
+                    /* Mulai body */
+                    set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+                    body_started=1;
+                    int bstart=i+4;
+                    if (bstart<got) {
+                        body_bytes+=got-bstart;
+                        rbuf[got]=0;
+                        print((char*)rbuf+bstart);
+                    }
+                    break;
+                }
+            }
+            if (!body_started) { print((char*)rbuf); }
+        } else {
+            body_bytes+=got;
+            print((char*)rbuf);
+        }
+    }
+
+    tls13_close(conn);
+    net_tcp_close(conn);
+
+    set_color(HTTP_COLOR_INFO, HTTP_COLOR_BG);
+    print("\nhttps: selesai (");
+    { char nb[10]; itoa(body_bytes, nb); print(nb); }
+    print(" bytes body)\n");
+    set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+    return 0;
+}
