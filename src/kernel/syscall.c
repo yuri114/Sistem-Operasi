@@ -23,6 +23,28 @@ extern void print(const char *str); // dari kernel.c
 extern void clear_screen();         // dari kernel.c
 
 /* -----------------------------------------------------------------------
+ * AT4: Clipboard — buffer kernel 512 byte, dapat diakses via syscall
+ * ----------------------------------------------------------------------- */
+static char g_clipboard[512];
+static int  g_clip_len = 0;
+
+/* Salin string ke clipboard (dipanggil dari shell atau via syscall) */
+void clip_copy(const char *s) {
+    int i = 0;
+    while (s[i] && i < 511) { g_clipboard[i] = s[i]; i++; }
+    g_clipboard[i] = '\0';
+    g_clip_len = i;
+}
+
+/* Tempel clipboard ke buffer dst (max maxlen-1 karakter + null). Return panjang. */
+int clip_paste(char *dst, int maxlen) {
+    int i = 0;
+    while (i < g_clip_len && i < maxlen - 1) { dst[i] = g_clipboard[i]; i++; }
+    dst[i] = '\0';
+    return i;
+}
+
+/* -----------------------------------------------------------------------
  * F-U1: Futex table — maks 32 waiter sekaligus
  * ----------------------------------------------------------------------- */
 typedef struct {
@@ -927,6 +949,21 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         }
         if (ac <= 8) uargv[ac] = 0;  /* null sentinel */
         return (uint64_t)(unsigned int)ac;
+    }
+
+    /* AT4 — SYS_CLIP_COPY(96): salin string user ke clipboard kernel */
+    if (eax == SYS_CLIP_COPY) {
+        if (!is_user_ptr(ebx)) return (uint64_t)-1;
+        clip_copy((const char *)(uintptr_t)ebx);
+        return 0;
+    }
+
+    /* AT4 — SYS_CLIP_PASTE(97): baca clipboard ke buffer user */
+    if (eax == SYS_CLIP_PASTE) {
+        if (!is_user_ptr(ebx)) return (uint64_t)-1;
+        int mlen = (int)(unsigned int)edx;
+        if (mlen <= 0 || mlen > 512) mlen = 512;
+        return (uint64_t)(unsigned int)clip_paste((char *)(uintptr_t)ebx, mlen);
     }
 
     return (uint64_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal

@@ -6,11 +6,21 @@
  * Konstanta Window Manager
  * ============================================================ */
 #define MAX_WINDOWS     16   /* maksimum window yang bisa hidup bersamaan */
-#define TITLEBAR_H      18   /* tinggi title bar dalam piksel */
-#define CLOSE_BTN_W     18   /* lebar tombol tutup (X) */
-#define MIN_BTN_W       18   /* lebar tombol minimize (-) */
-#define RESIZE_HANDLE   10   /* ukuran handle resize sudut kanan bawah */
-#define BORDER_W         1   /* tebal border window */
+#define TITLEBAR_H      28   /* tinggi title bar (AT2 flat, cukup untuk font 8x16 + padding) */
+#define CLOSE_BTN_W     24   /* lebar tombol tutup (X) */
+#define MIN_BTN_W       24   /* lebar tombol minimize (-) */
+#define RESIZE_HANDLE   12   /* ukuran handle resize sudut kanan bawah */
+#define BORDER_W         2   /* tebal border window */
+
+/* Flat UI color palette (AT custom design) */
+#define WM_TB_FOCUSED    0x002D2D2Du  /* title bar focused: abu gelap */
+#define WM_TB_UNFOCUSED  0x001A1A1Au  /* title bar unfocused: lebih gelap */
+#define WM_BTN_CLOSE     0x00F38BA8u  /* tombol close: merah pastel Catppuccin */
+#define WM_BTN_MIN       0x003A3A4Au  /* tombol minimize: abu kebiruan */
+#define WM_BDR_FOCUSED   0x0045475Au  /* border focused: abu Catppuccin */
+#define WM_BDR_UNFOCUSED 0x00313244u  /* border unfocused: lebih gelap */
+#define WM_TITLE_FG      0x00CDD6F4u  /* teks judul: putih Catppuccin */
+#define WM_DESKTOP_BG_FB 0x00181825u  /* desktop fallback jika wallpaper gagal */
 #define WIN_EVQ_SIZE    16   /* kapasitas antrian event per window */
 #define WIN_TEXTBUF     32   /* maks baris teks yang disimpan per window (backing store) */
 #define WIN_TEXTBUF_STR 64   /* panjang maks string per entri backing store */
@@ -18,7 +28,7 @@
 #define WIN_RECTBUF     48   /* maks entri backing store fill_rect per window */
 #define WIN_KEYQ_SIZE   32   /* kapasitas antrian karakter keyboard per window */
 
-#define WM_DESKTOP_BG    0x00555555u  /* GFX_DGRAY — warna latar desktop */
+#define WM_DESKTOP_BG    WM_DESKTOP_BG_FB  /* fallback desktop bg */
 
 /* ---- Event Types ---- */
 #define WIN_EVENT_NONE   0   /* tidak ada event */

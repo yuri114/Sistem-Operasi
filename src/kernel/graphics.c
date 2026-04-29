@@ -113,3 +113,23 @@ void draw_string_4x8(int x, int y, const char *s, uint32_t fg, uint32_t bg) {
 void draw_string_gfx(int x, int y, const char *s, uint32_t fg, uint32_t bg) {
     while (*s) { draw_char_gfx(x, y, *s++, fg, bg); x += 8; }
 }
+
+/* AT1 — Font 8x16: setiap baris font 8x8 digambar dua kali (row-doubling).
+ * Hasil: karakter lebih tinggi (16px) dan lebih mudah dibaca di title bar. */
+void draw_char_gfx16(int x, int y, char c, uint32_t fg, uint32_t bg) {
+    const uint8_t *glyph = font8x8[(unsigned char)c & 0x7F];
+    int row, col;
+    for (row = 0; row < 8; row++) {
+        uint8_t bits = glyph[row];
+        for (col = 0; col < 8; col++) {
+            uint32_t pixel = (bits & (0x80u >> col)) ? fg : bg;
+            draw_pixel(x + col, y + row * 2,     pixel);
+            draw_pixel(x + col, y + row * 2 + 1, pixel);
+        }
+    }
+}
+
+/* Gambar string dengan font 8x16 (stride 8px per karakter, tinggi 16px). */
+void draw_string_gfx16(int x, int y, const char *s, uint32_t fg, uint32_t bg) {
+    while (*s) { draw_char_gfx16(x, y, *s++, fg, bg); x += 8; }
+}

@@ -39,33 +39,50 @@ static void fb_put(int x, int y, uint32_t c) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Bitmap kursor panah 8x8 (bit7 = piksel kiri, 1 = gambar, 0 = transparan) */
+/* Bitmap kursor panah 16×16                                           */
+/* bit15 = piksel paling kiri, 1 = gambar, 0 = transparan             */
 /* ------------------------------------------------------------------ */
-static const uint8_t cursor_bmp[8] = {
-    0x80,   /* 1000 0000 */
-    0xC0,   /* 1100 0000 */
-    0xE0,   /* 1110 0000 */
-    0xF0,   /* 1111 0000 */
-    0xF8,   /* 1111 1000 */
-    0xE0,   /* 1110 0000 */
-    0x90,   /* 1001 0000 */
-    0x08    /* 0000 1000 */
+static const uint16_t cursor_bmp[16] = {
+    0x8000,  /* 1000 0000 0000 0000 */
+    0xC000,  /* 1100 0000 0000 0000 */
+    0xE000,  /* 1110 0000 0000 0000 */
+    0xF000,  /* 1111 0000 0000 0000 */
+    0xF800,  /* 1111 1000 0000 0000 */
+    0xFC00,  /* 1111 1100 0000 0000 */
+    0xFE00,  /* 1111 1110 0000 0000 */
+    0xFF00,  /* 1111 1111 0000 0000 */
+    0xFF80,  /* 1111 1111 1000 0000 */
+    0xFC00,  /* 1111 1100 0000 0000 */
+    0xEC00,  /* 1110 1100 0000 0000 */
+    0xC600,  /* 1100 0110 0000 0000 */
+    0x0600,  /* 0000 0110 0000 0000 */
+    0x0300,  /* 0000 0011 0000 0000 */
+    0x0300,  /* 0000 0011 0000 0000 */
+    0x0000   /* 0000 0000 0000 0000 */
 };
 
-/* Outline hitam: piksel yang bersebelahan dengan cursor_bmp */
-static const uint8_t cursor_outline[8] = {
-    0x40,   /* 0100 0000 */
-    0x20,   /* 0010 0000 */
-    0x10,   /* 0001 0000 */
-    0x0C,   /* 0000 1100 */
-    0x06,   /* 0000 0110 */
-    0x1A,   /* 0001 1010 */
-    0x6C,   /* 0110 1100 */
-    0x74    /* 0111 0100 */
+/* Outline: piksel di sekitar kursor (warna hitam sebagai border) */
+static const uint16_t cursor_outline[16] = {
+    0x4000,
+    0x2000,
+    0x1000,
+    0x0800,
+    0x0400,
+    0x0200,
+    0x0100,
+    0x0080,
+    0x0240,
+    0x0380,
+    0x1200,
+    0x2100,
+    0xE300,
+    0x04C0,
+    0x04C0,
+    0x0180
 };
 
-static uint32_t cursor_bg[8 * 8]; /* simpan area 8x8 piksel latar kursor */
-#define CSIZE 8  /* ukuran kursor piksel */
+static uint32_t cursor_bg[16 * 16]; /* simpan area 16×16 piksel latar kursor */
+#define CSIZE 16  /* ukuran kursor piksel */
 
 static int cursor_visible = 0;
 static int cursor_sx = 0, cursor_sy = 0;
@@ -122,13 +139,13 @@ static void cursor_draw(int x, int y) {
     /* Gambar outline hitam dahulu (di bawah), lalu kursor putih */
     for (row = 0; row < CSIZE; row++) {
         for (col = 0; col < CSIZE; col++) {
-            if (cursor_outline[row] & (0x80u >> col))
+            if (cursor_outline[row] & (0x8000u >> col))
                 fb_put(x + col, y + row, GFX_BLACK);
         }
     }
     for (row = 0; row < CSIZE; row++) {
         for (col = 0; col < CSIZE; col++) {
-            if (cursor_bmp[row] & (0x80u >> col))
+            if (cursor_bmp[row] & (0x8000u >> col))
                 fb_put(x + col, y + row, GFX_WHITE);
         }
     }

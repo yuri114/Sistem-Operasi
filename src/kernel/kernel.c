@@ -66,15 +66,18 @@
 #include "condvar.h"
 #include "mfs4.h"
 
-/* Bochs VBE 1280x720 @ 32bpp: font 8x8 = 160 kolom x 90 baris */
+/* VBE 1920×1080 @ 32bpp: font 8×16 = 160 kolom × 60 baris */
 #define VGA_COLS 160
-#define VGA_ROWS 90
+#define VGA_ROWS 60
 
 /* posisi kursor teks saat ini (dalam satuan sel karakter 8x8) */
 int cursor_col = 0;
 int cursor_row = 0;
 int input_start_row = 0;
 int input_start_col = 0;
+
+/* Mode OS: 0=console, 1=GUI */
+int g_gui_mode = 0;
 void scroll();
 void update_cursor();
 void itoa(uint32_t num, char *buf);
@@ -83,6 +86,10 @@ void itoa(uint32_t num, char *buf);
 uint8_t current_color = 0x0f;  /* legacy compat drv_vga */
 uint32_t fg_color = GFX_LGRAY;  /* warna foreground karakter */
 uint32_t bg_color = GFX_BLACK;  /* warna background sel */
+
+/* ---- text cell buffer (untuk redraw di atas wallpaper) ---- */
+static char     g_textbuf[VGA_ROWS][VGA_COLS];
+static uint32_t g_fgbuf  [VGA_ROWS][VGA_COLS];
 
 void vga_put_char_at(int col, int row, char c, uint32_t color);
 
@@ -177,20 +184,43 @@ static void ansi_dispatch(char term) {
     } else if (term == 'K') {  /* erase line */
         int col;
         if (n0 == 0) {  /* clear cursor to end of line */
-            for (col = cursor_col; col < VGA_COLS; col++)
-                draw_char_gfx(col*8, cursor_row*8, ' ', fg_color, bg_color);
+            for (col = cursor_col; col < VGA_COLS; col++) {
+                g_textbuf[cursor_row][col] = 0;
+                draw_char_gfx16(col*8, cursor_row*16, ' ', fg_color, bg_color);
+            }
         } else if (n0 == 1) {  /* clear start of line to cursor */
-            for (col = 0; col <= cursor_col; col++)
-                draw_char_gfx(col*8, cursor_row*8, ' ', fg_color, bg_color);
+            for (col = 0; col <= cursor_col; col++) {
+                g_textbuf[cursor_row][col] = 0;
+                draw_char_gfx16(col*8, cursor_row*16, ' ', fg_color, bg_color);
+            }
         } else if (n0 == 2) {  /* clear whole line */
-            for (col = 0; col < VGA_COLS; col++)
-                draw_char_gfx(col*8, cursor_row*8, ' ', fg_color, bg_color);
+            for (col = 0; col < VGA_COLS; col++) {
+                g_textbuf[cursor_row][col] = 0;
+                draw_char_gfx16(col*8, cursor_row*16, ' ', fg_color, bg_color);
+            }
         }
     }
 }
 
+/* Redraw semua karakter dari g_textbuf di atas bg solid */
+static void terminal_redraw(void) {
+    int r, c;
+    fill_screen(bg_color);
+    for (r = 0; r < VGA_ROWS; r++)
+        for (c = 0; c < VGA_COLS; c++)
+            if (g_textbuf[r][c])
+                draw_char_gfx16(c * 8, r * 16, g_textbuf[r][c],
+                                g_fgbuf[r][c], bg_color);
+}
+
 /*fungsi: hapus seluruh layar*/
 void clear_screen() {
+    int r, c;
+    for (r = 0; r < VGA_ROWS; r++)
+        for (c = 0; c < VGA_COLS; c++) {
+            g_textbuf[r][c] = 0;
+            g_fgbuf  [r][c] = fg_color;
+        }
     fill_screen(bg_color);
     cursor_col = 0;
     cursor_row = 0;
@@ -223,7 +253,9 @@ void print_char(char c) {
         if (cursor_row >= VGA_ROWS) scroll();
         return;
     }
-    draw_char_gfx(cursor_col * 8, cursor_row * 8, c, fg_color, bg_color);
+    g_textbuf[cursor_row][cursor_col] = c;
+    g_fgbuf  [cursor_row][cursor_col] = fg_color;
+    draw_char_gfx16(cursor_col * 8, cursor_row * 16, c, fg_color, bg_color);
     cursor_col++;
     if (cursor_col >= VGA_COLS) {
         cursor_col = 0;
@@ -241,22 +273,25 @@ void backspace_char() {
     } else {
         cursor_col--;
     }
-    draw_char_gfx(cursor_col * 8, cursor_row * 8, ' ', fg_color, bg_color);
+    g_textbuf[cursor_row][cursor_col] = 0;
+    g_fgbuf  [cursor_row][cursor_col] = fg_color;
+    draw_char_gfx16(cursor_col * 8, cursor_row * 16, ' ', fg_color, bg_color);
     update_cursor();
 }
 
 void scroll() {
-    /* Geser framebuffer ke atas 8 baris — 32bpp: tiap word = 1 piksel.
-     * stride = SCREEN_W (1280 word per baris) */
-    uint32_t *fb32  = (uint32_t *)FB_ADDR;
-    uint32_t stride = SCREEN_W;  /* uint32_t per baris (32bpp) */
-    int i;
-    /* Copy baris 8..479 ke baris 0..471 */
-    for (i = 0; i < (int)(stride * (SCREEN_H - 8)); i++)
-        fb32[i] = fb32[i + stride * 8];
-    /* Hapus 8 baris terakhir dengan warna background */
-    for (i = (int)(stride * (SCREEN_H - 8)); i < (int)(stride * SCREEN_H); i++)
-        fb32[i] = bg_color;
+    /* Geser text buffer satu baris ke atas */
+    int r, c;
+    for (r = 0; r < VGA_ROWS - 1; r++)
+        for (c = 0; c < VGA_COLS; c++) {
+            g_textbuf[r][c] = g_textbuf[r + 1][c];
+            g_fgbuf  [r][c] = g_fgbuf  [r + 1][c];
+        }
+    for (c = 0; c < VGA_COLS; c++) {
+        g_textbuf[VGA_ROWS - 1][c] = 0;
+        g_fgbuf  [VGA_ROWS - 1][c] = fg_color;
+    }
+    terminal_redraw();
     cursor_row = VGA_ROWS - 1;
 }
 
@@ -656,8 +691,8 @@ void kernel_main(){
     /* IRQ12 — PS/2 Mouse (INT 44 = slave IRQ4) */
     extern void irq12();
     idt_set_gate(44, (uint64_t)irq12);
-    wm_init();
-    mouse_init();
+    /* wm_init() dan mouse_init() TIDAK dipanggil di sini.
+     * Diaktifkan oleh command 'gui' dari shell. */
 
     __asm__ volatile ("sti");
 
@@ -673,10 +708,13 @@ void kernel_main(){
     while (1) {
         char c = keyboard_getchar();
         if (c) {
-            if (wm_has_focus())
-                wm_key_event(c);   /* kirim ke window yang sedang fokus */
-            else
+            if (g_gui_mode) {
+                /* GUI mode: keyboard hanya ke window manager */
+                wm_key_event(c);
+            } else {
+                /* Console mode */
                 shell_process_char(c);
+            }
         }
     }
 }

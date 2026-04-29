@@ -18,6 +18,7 @@
 #include "timer.h"
 #include "syscall.h"
 #include "memory.h"
+#include "wallpaper.h"
 #include <stdint.h>
 
 /* ============================================================
@@ -163,6 +164,13 @@ static void wm_drawstr(int x, int y, const char *s, uint32_t fg, uint32_t bg, in
         draw_char_gfx(cx, y, s[i], fg, bg);
 }
 
+/* AT1 — Draw string 8x16 dengan batas piksel (untuk title bar) */
+static void wm_drawstr16(int x, int y, const char *s, uint32_t fg, uint32_t bg, int max_px) {
+    int cx = x;
+    for (int i = 0; s[i] && (cx + 8 <= x + max_px); i++, cx += 8)
+        draw_char_gfx16(cx, y, s[i], fg, bg);
+}
+
 static void wm_draw_window(int id) {
     WinSlot *w = &windows[id];
     if (!w->alive) return;
@@ -176,42 +184,45 @@ static void wm_draw_window(int id) {
             break;
         }
     }
-    uint32_t tb_color  = focused ? GFX_BLUE  : GFX_DGRAY;
-    uint32_t bdr_color = focused ? GFX_LCYAN : GFX_LGRAY;
+    uint32_t bdr_color = focused ? WM_BDR_FOCUSED : WM_BDR_UNFOCUSED;
 
-    /* --- Border (1px) — cyan saat focused, abu-abu saat tidak --- */
+    /* --- Border (2px) --- */
     fill_rect(w->x,                      w->y,                       w->w, BORDER_W, bdr_color);
     fill_rect(w->x,                      w->y + w->h - BORDER_W,     w->w, BORDER_W, bdr_color);
     fill_rect(w->x,                      w->y,                       BORDER_W, w->h, bdr_color);
     fill_rect(w->x + w->w - BORDER_W,    w->y,                       BORDER_W, w->h, bdr_color);
 
-    /* --- Title bar --- */
+    /* --- AT2 Flat: Title bar solid, top highlight 1px --- */
     int tb_x = w->x + BORDER_W;
     int tb_y = w->y + BORDER_W;
     int tb_w = w->w - 2 * BORDER_W;
-    fill_rect(tb_x, tb_y, tb_w, TITLEBAR_H, tb_color);
+    uint32_t tb_bg = focused ? WM_TB_FOCUSED : WM_TB_UNFOCUSED;
+    fill_rect(tb_x, tb_y, tb_w, TITLEBAR_H, tb_bg);
+    /* top accent line: border color saat focused, lebih redup saat tidak */
+    fill_rect(tb_x, tb_y, tb_w, 1, bdr_color);
 
-    /* Teks judul (maks sampai tombol minimize, padding 5px dari kiri) */
-    int title_max_px = tb_w - CLOSE_BTN_W - MIN_BTN_W - 6;
+    /* AT1: Teks judul dengan font 8x16, vertikal-center */
+    int title_max_px = tb_w - CLOSE_BTN_W - MIN_BTN_W - 10;
     if (title_max_px > 0)
-        wm_drawstr(tb_x + 5, tb_y + (TITLEBAR_H - 8) / 2,
-                   w->title, GFX_WHITE, tb_color, title_max_px);
+        wm_drawstr16(tb_x + 6, tb_y + (TITLEBAR_H - 16) / 2,
+                     w->title, WM_TITLE_FG, tb_bg, title_max_px);
 
-    /* --- Tombol Minimize (-, abu-abu 3D) --- */
+    /* --- AT2 Flat: Tombol Minimize (abu kebiruan, flat) --- */
     int mb_x = w->x + w->w - BORDER_W - CLOSE_BTN_W - MIN_BTN_W;
-    fill_rect(mb_x, tb_y, MIN_BTN_W, TITLEBAR_H, GFX_LGRAY);
-    fill_rect(mb_x, tb_y, MIN_BTN_W, 1, GFX_WHITE);
-    fill_rect(mb_x, tb_y, 1, TITLEBAR_H, GFX_WHITE);
-    fill_rect(mb_x + MIN_BTN_W - 1, tb_y, 1, TITLEBAR_H, GFX_DGRAY);
-    fill_rect(mb_x, tb_y + TITLEBAR_H - 1, MIN_BTN_W, 1, GFX_DGRAY);
-    draw_char_gfx(mb_x + (MIN_BTN_W - 8) / 2,
-                  tb_y + (TITLEBAR_H - 8) / 2, '-', GFX_BLACK, GFX_LGRAY);
+    fill_rect(mb_x, tb_y, MIN_BTN_W, TITLEBAR_H, WM_BTN_MIN);
+    /* underscore 2px di tengah bawah */
+    {
+        int ux = mb_x + (MIN_BTN_W - 8) / 2;
+        int uy = tb_y + TITLEBAR_H - 8;
+        fill_rect(ux, uy, 8, 2, WM_TITLE_FG);
+    }
 
-    /* --- Tombol Close (X, merah) --- */
+    /* --- AT2 Flat: Tombol Close (merah pastel, flat) --- */
     int cb_x = w->x + w->w - BORDER_W - CLOSE_BTN_W;
-    fill_rect(cb_x, tb_y, CLOSE_BTN_W, TITLEBAR_H, GFX_RED);
-    draw_char_gfx(cb_x + (CLOSE_BTN_W - 8) / 2,
-                  tb_y + (TITLEBAR_H - 8) / 2, 'X', GFX_WHITE, GFX_RED);
+    fill_rect(cb_x, tb_y, CLOSE_BTN_W, TITLEBAR_H, WM_BTN_CLOSE);
+    /* X dengan font 8x16 */
+    draw_char_gfx16(cb_x + (CLOSE_BTN_W - 8) / 2,
+                    tb_y + (TITLEBAR_H - 16) / 2, 'X', 0x00181825u, WM_BTN_CLOSE);
 
     /* --- Area Konten --- */
     int ca_x = w->x + BORDER_W;
@@ -281,14 +292,30 @@ static void wm_draw_window(int id) {
         wm_drawstr(tx, ty, btn->label, GFX_BLACK, GFX_LGRAY, bx + btn->w - tx);
     }
 
-    /* --- Resize handle (sudut kanan bawah, 10x10) --- */
+    /* --- AT3: Resize handle (sudut kanan bawah) — diagonal grip lines --- */
     int rh_x = w->x + w->w - BORDER_W - RESIZE_HANDLE;
     int rh_y = w->y + w->h - BORDER_W - RESIZE_HANDLE;
     if (rh_x >= ca_x && rh_y >= ca_y) {
         fill_rect(rh_x, rh_y, RESIZE_HANDLE, RESIZE_HANDLE, GFX_LGRAY);
-        for (int k = 1; k < 4; k++) {
-            draw_pixel(rh_x + RESIZE_HANDLE - 2 - k, rh_y + RESIZE_HANDLE - 2, GFX_DGRAY);
-            draw_pixel(rh_x + RESIZE_HANDLE - 2,     rh_y + RESIZE_HANDLE - 2 - k, GFX_DGRAY);
+        /* highlight atas dan kiri */
+        fill_rect(rh_x, rh_y, RESIZE_HANDLE, 1, GFX_WHITE);
+        fill_rect(rh_x, rh_y, 1, RESIZE_HANDLE, GFX_WHITE);
+        /* shadow bawah dan kanan */
+        fill_rect(rh_x, rh_y + RESIZE_HANDLE - 1, RESIZE_HANDLE, 1, GFX_DGRAY);
+        fill_rect(rh_x + RESIZE_HANDLE - 1, rh_y, 1, RESIZE_HANDLE, GFX_DGRAY);
+        /* 3 garis diagonal grip (kiri-atas = putih, kanan-bawah = gelap) */
+        {
+            int d, k;
+            for (d = 3; d <= 7; d += 2) {
+                for (k = 0; k <= d; k++) {
+                    int px2 = rh_x + RESIZE_HANDLE - 2 - k;
+                    int py2 = rh_y + RESIZE_HANDLE - 2 - (d - k);
+                    if (px2 > rh_x && py2 > rh_y &&
+                        px2 < rh_x + RESIZE_HANDLE - 1 &&
+                        py2 < rh_y + RESIZE_HANDLE - 1)
+                        draw_pixel(px2, py2, (k & 1) ? GFX_WHITE : GFX_DGRAY);
+                }
+            }
         }
     }
 }
@@ -318,7 +345,12 @@ static int hit_desktop_icon(int mx, int my) {
 }
 
 static void wm_redraw_all(void) {
-    fill_rect(0, 0, SCREEN_W, SCREEN_H, WM_DESKTOP_BG);
+    /* Desktop background: wallpaper jika sudah dimuat, fallback solid color */
+    if (wp_is_loaded()) {
+        wp_blit();
+    } else {
+        fill_rect(0, 0, SCREEN_W, SCREEN_H, WM_DESKTOP_BG);
+    }
     draw_desktop_icons();
     for (int i = 0; i < z_count; i++)
         wm_draw_window(z_order[i]);
@@ -405,8 +437,8 @@ void wm_init(void) {
     z_count   = 0;
     drag_id   = -1;
     resize_id = -1;
-    /* Layar TIDAK dibersihkan di sini — shell sudah menggambar prompt-nya.
-     * Pembersihan dilakukan oleh program GUI yang berjalan (e.g. gui_demo). */
+    /* Gambar wallpaper + desktop icons + taskbar */
+    wm_redraw_all();
 }
 
 int wm_create(int x, int y, int w, int h, const char *title) {
@@ -766,15 +798,6 @@ void wm_draw_pixel(int id, int cx, int cy, uint32_t color) {
         w->pixel_buf[cy * w->pb_w + cx] = color;
 
     int sx = ca_x + cx, sy = ca_y + cy;
-    /* Cek z-order: skip jika tertutup window lain */
-    for (int zi = z_count - 1; zi >= 0; zi--) {
-        int zid = z_order[zi];
-        if (zid == id) break;
-        WinSlot *zw = &windows[zid];
-        if (!zw->alive || zw->minimized) continue;
-        if (sx >= zw->x && sx < zw->x + zw->w &&
-            sy >= zw->y && sy < zw->y + zw->h) return;
-    }
     draw_pixel(sx, sy, color);
     cursor_update_pixel(sx, sy, color);
 }
@@ -839,19 +862,10 @@ void wm_fill_rect(int id, int cx, int cy, int rw, int rh, uint32_t color) {
     }
 
     for (int y = 0; y < rh; y++) {
+        int sy_abs = ca_y + cy + y;
         for (int x = 0; x < rw; x++) {
-            int sx = ca_x + cx + x, sy = ca_y + cy + y;
-            /* Cek z-order: skip piksel yang tertutup window lain */
-            int covered = 0;
-            for (int zi = z_count - 1; zi >= 0; zi--) {
-                int zid = z_order[zi];
-                if (zid == id) break;
-                WinSlot *zw = &windows[zid];
-                if (!zw->alive || zw->minimized) continue;
-                if (sx >= zw->x && sx < zw->x + zw->w &&
-                    sy >= zw->y && sy < zw->y + zw->h) { covered = 1; break; }
-            }
-            if (!covered) draw_pixel(sx, sy, color);
+            int sx_abs = ca_x + cx + x;
+            draw_pixel(sx_abs, sy_abs, color);
         }
     }
     cursor_update_region(ca_x + cx, ca_y + cy, rw, rh, color);

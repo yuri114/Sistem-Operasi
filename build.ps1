@@ -198,6 +198,7 @@ x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-built
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/virtio_blk.c -o build/virtio_blk.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/x509.c       -o build/x509.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/ext2.c       -o build/ext2.o
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/wallpaper.c   -o build/wallpaper.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/apic.c       -o build/apic.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/acpi.c       -o build/acpi.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/smp.c        -o build/smp.o
@@ -227,7 +228,7 @@ x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-built
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/window.c     -o build/window.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/taskbar.c    -o build/taskbar.o
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-pic -mno-sse -mno-sse2 -mno-mmx -c src/kernel/rtc.c          -o build/rtc.o
-x86_64-linux-gnu-ld -m elf_x86_64 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o build/condvar.o build/shm.o build/vfs.o build/mfs4.o build/mq.o build/rtl8139.o build/net.o build/apic.o build/acpi.o build/smp.o build/device.o build/drv_vga.o build/drv_kbd.o build/vbe.o build/graphics.o build/ata.o build/serial.o build/mouse.o build/window.o build/taskbar.o build/rtc.o build/crypto.o build/tls13.o build/websocket.o build/virtio_blk.o build/x509.o build/ext2.o -o build/kernel.elf
+x86_64-linux-gnu-ld -m elf_x86_64 -T src/kernel/linker.ld build/kernel_entry.o build/isr.o build/kernel.o build/idt.o build/pic.o build/keyboard.o build/shell.o build/memory.o build/timer.o build/fs.o build/paging.o build/task.o build/syscall.o build/tss.o build/vmm.o build/elf_loader.o build/ipc.o build/semaphore.o build/pipe.o build/condvar.o build/shm.o build/vfs.o build/mfs4.o build/mq.o build/rtl8139.o build/net.o build/apic.o build/acpi.o build/smp.o build/device.o build/drv_vga.o build/drv_kbd.o build/vbe.o build/graphics.o build/ata.o build/serial.o build/mouse.o build/window.o build/taskbar.o build/rtc.o build/crypto.o build/tls13.o build/websocket.o build/virtio_blk.o build/x509.o build/ext2.o build/wallpaper.o -o build/kernel.elf
 x86_64-linux-gnu-objcopy -O binary build/kernel.elf build/kernel.bin
 echo done
 "@
@@ -276,8 +277,9 @@ function Build-Image {
 }
 
 function Run-QEMU {
-    $os_img   = "$BUILD\os.img"
-    $disk_img = "$BUILD\disk.img"
+    $os_img       = "$BUILD\os.img"
+    $disk_img     = "$BUILD\disk.img"
+    $wallpaper_img = "$BUILD\wallpaper.img"
 
     if (-not (Test-Path $os_img)) {
         Write-Host "[ERROR] OS image belum ada. Jalankan: .\build.ps1 build" -ForegroundColor Red
@@ -295,13 +297,70 @@ function Run-QEMU {
     Write-Host "       Tekan Ctrl+Alt+G untuk release mouse dari QEMU" -ForegroundColor Yellow
     Write-Host "       Zoom: View > Zoom In/Out di menu QEMU (GTK)" -ForegroundColor Yellow
     Write-Host "       Serial COM1: output serial tampil di jendela PowerShell ini" -ForegroundColor DarkGray
-    & $QEMU -machine pc `
-        -smp 2 `
-        -drive format=raw,file=$os_img,index=0,if=ide `
-        -drive format=raw,file=$disk_img,index=1,if=ide `
-        -netdev user,id=net0 -device rtl8139,netdev=net0 `
-        -serial stdio `
-        -display gtk,zoom-to-fit=on
+
+    # Bangun argumen QEMU secara dinamis (wallpaper drive opsional)
+    $qemuArgs = @(
+        "-machine", "pc",
+        "-smp", "2",
+        "-drive", "format=raw,file=$os_img,index=0,if=ide",
+        "-drive", "format=raw,file=$disk_img,index=1,if=ide"
+    )
+    if (Test-Path $wallpaper_img) {
+        $qemuArgs += @("-drive", "format=raw,file=$wallpaper_img,index=2,if=ide")
+        Write-Host "       Wallpaper: $wallpaper_img" -ForegroundColor DarkGray
+    }
+    $qemuArgs += @(
+        "-netdev", "user,id=net0", "-device", "rtl8139,netdev=net0",
+        "-serial", "stdio",
+        "-display", "gtk,zoom-to-fit=on"
+    )
+    & $QEMU @qemuArgs
+}
+
+function Convert-Wallpaper {
+    $src = "background\frame_1120.png"
+    $dst = "$BUILD\wallpaper.img"
+
+    if (-not (Test-Path $src)) {
+        Write-Host "[WALL]  background\frame_1120.png tidak ditemukan, skip wallpaper" -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "[WALL]  Konversi wallpaper PNG 1920x1080 -> raw BGRA32 960x540..." -ForegroundColor Cyan
+
+    Add-Type -AssemblyName System.Drawing
+
+    $srcBmp = [System.Drawing.Bitmap]::new((Resolve-Path $src).Path)
+
+    # Scale 1/2: 1920x1080 -> 960x540
+    $scaled = [System.Drawing.Bitmap]::new(960, 540)
+    $g = [System.Drawing.Graphics]::FromImage($scaled)
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g.SmoothingMode     = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+    $g.DrawImage($srcBmp, 0, 0, 960, 540)
+    $g.Dispose()
+    $srcBmp.Dispose()
+
+    # Lock bits -> raw BGRA32 (Format32bppArgb = BGRA di memory little-endian)
+    $rect    = [System.Drawing.Rectangle]::new(0, 0, 960, 540)
+    $bmpData = $scaled.LockBits($rect,
+        [System.Drawing.Imaging.ImageLockMode]::ReadOnly,
+        [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+
+    $stride  = $bmpData.Stride   # = 960*4 = 3840
+    $rawSize = [Math]::Abs($stride) * 540
+    $rawData = New-Object byte[] $rawSize
+    [System.Runtime.InteropServices.Marshal]::Copy($bmpData.Scan0, $rawData, 0, $rawSize)
+    $scaled.UnlockBits($bmpData)
+    $scaled.Dispose()
+
+    # Padding ke 4MB (divisible by 512)
+    $padSize = 4 * 1024 * 1024
+    $wpImg   = New-Object byte[] $padSize
+    [Array]::Copy($rawData, $wpImg, [Math]::Min($rawData.Length, $padSize))
+    [System.IO.File]::WriteAllBytes($dst, $wpImg)
+
+    Write-Host "       --> $dst ($padSize bytes, 960x540 BGRA32)" -ForegroundColor Green
 }
 
 function Clean-Build {
@@ -317,12 +376,14 @@ switch ($Action.ToLower()) {
         Build-Kernel
         Build-Bootloader
         Build-Image
+        Convert-Wallpaper
     }
     "run" {
         Write-Host "=== Building & Running Oria OS ===" -ForegroundColor White
         Build-Kernel
         Build-Bootloader
         Build-Image
+        Convert-Wallpaper
         Run-QEMU
     }
     "clean" {

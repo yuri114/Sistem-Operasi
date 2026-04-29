@@ -46,4 +46,8 @@ void draw_string_gfx(int x, int y, const char *s, uint32_t fg, uint32_t bg);
 void draw_char_4x8(int x, int y, char c, uint32_t fg, uint32_t bg);
 void draw_string_4x8(int x, int y, const char *s, uint32_t fg, uint32_t bg);
 
+/* AT1 — Font 8x16 (row-doubled dari font 8x8) */
+void draw_char_gfx16(int x, int y, char c, uint32_t fg, uint32_t bg);
+void draw_string_gfx16(int x, int y, const char *s, uint32_t fg, uint32_t bg);
+
 #endif /* GRAPHICS_H */

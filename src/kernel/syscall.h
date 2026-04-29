@@ -132,6 +132,10 @@
 /* Fondasi AA — argv retrieval */
 #define SYS_GETARGV       95  // get argv: rdi=buf_ptr, rsi=argv_ptr_array → return argc
 
+/* AT4 — Clipboard */
+#define SYS_CLIP_COPY     96  // salin string ke clipboard: ebx=str_ptr (max 511 char)
+#define SYS_CLIP_PASTE    97  // baca clipboard: ebx=buf_ptr, edx=max_len → return len
+
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);
 

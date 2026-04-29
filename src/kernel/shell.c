@@ -32,6 +32,17 @@ void backspace_char();
 void itoa(uint32_t num, char *buf);
 void set_color(uint32_t fg, uint32_t bg);
 
+/* GUI mode — dari kernel.c / window.c */
+extern int  g_gui_mode;
+extern void wm_init(void);
+extern void mouse_init(void);
+extern void wp_blit(void);
+extern int  wp_is_loaded(void);
+
+/* AT4 — Clipboard (dari syscall.c) */
+extern void clip_copy(const char *s);
+extern int  clip_paste(char *dst, int maxlen);
+
 /* Buffer untuk menyimpan input dari keyboard */
 static char input_buffer[256];
 static int input_len = 0;
@@ -49,7 +60,7 @@ static int hist_cursor = -1; // -1 = tidak browse; 0 = paling baru, 1 = sebelumn
 /* ================================================================
  * FONDASI AE — Text Editor State
  * ================================================================ */
-#define ED_VIEW_ROWS  88    /* baris konten: row 2..89 (VGA_ROWS=90) */
+#define ED_VIEW_ROWS  53    /* baris konten: row 2..54 (VGA_ROWS=60) */
 #define ED_MAX_LINES 200    /* maks baris per file                   */
 #define ED_LINE_CAP  160    /* maks karakter per baris (VGA_COLS)    */
 static int  editor_active = 0;
@@ -427,6 +438,56 @@ static void ed_process_char(char c) {
 
     /* Ctrl+S = simpan */
     if (c == '\x13') { ed_save(); ed_draw_status(); ed_fix_cursor(); return; }
+
+    /* AT4 — Ctrl+V: tempel clipboard ke posisi kursor editor */
+    if (c == '\x16') {
+        char pbuf[256];
+        int plen = clip_paste(pbuf, 256);
+        int pi;
+        for (pi = 0; pi < plen; pi++) {
+            char pc = pbuf[pi];
+            if (pc == '\n') {
+                /* sisipkan baris baru jika ada newline di clipboard */
+                if (ed_nlines < ED_MAX_LINES) {
+                    int row = ed_cur_row, col = ed_cur_col;
+                    int ln = ed_len[row];
+                    int ni = ed_nlines - 1;
+                    /* geser baris ke bawah */
+                    for (; ni > row; ni--) {
+                        ed_len[ni+1] = ed_len[ni];
+                        int k2;
+                        for (k2 = 0; k2 <= ed_len[ni]; k2++)
+                            ed_lines[ni+1][k2] = ed_lines[ni][k2];
+                    }
+                    ed_nlines++;
+                    /* baris baru = sisa baris saat ini */
+                    int suf = ln - col;
+                    int k3;
+                    for (k3 = 0; k3 < suf; k3++)
+                        ed_lines[row+1][k3] = ed_lines[row][col+k3];
+                    ed_len[row+1] = suf;
+                    ed_lines[row+1][suf] = '\0';
+                    ed_len[row] = col;
+                    ed_lines[row][col] = '\0';
+                    ed_cur_row++; ed_cur_col = 0;
+                    ed_modified = 1;
+                }
+            } else if (pc >= ' ' && ed_cur_col < ED_LINE_CAP - 1) {
+                /* sisipkan karakter biasa */
+                int row = ed_cur_row, col = ed_cur_col;
+                int ln = ed_len[row];
+                int k4;
+                for (k4 = ln; k4 > col; k4--)
+                    ed_lines[row][k4] = ed_lines[row][k4-1];
+                ed_lines[row][col] = pc;
+                ed_len[row]++;
+                ed_lines[row][ed_len[row]] = '\0';
+                ed_cur_col++;
+                ed_modified = 1;
+            }
+        }
+        ed_render_all(); ed_draw_status(); ed_fix_cursor(); return;
+    }
 
     /* Navigasi atas */
     if (c == '\x01') {
@@ -1162,6 +1223,7 @@ static void shell_execute() {
         set_color(GFX_WHITE, GFX_BLACK);
         print("help                 - tampilkan daftar perintah\n");
         print("clear                - bersihkan layar\n");
+        print("gui                  - aktifkan mode GUI (desktop + wallpaper)\n");
         print("about                - informasi tentang Oria OS\n");
         print("memtest              - test alokasi memory\n");
         print("uptime               - tampilkan waktu berjalan OS\n");
@@ -1223,6 +1285,16 @@ static void shell_execute() {
     }
     else if(str_compare(input_buffer, "clear")){
         clear_screen();
+    }
+    else if(str_compare(input_buffer, "gui")){
+        /* Aktifkan GUI mode: wallpaper + window manager + mouse */
+        set_color(GFX_LGRAY, GFX_BLACK);
+        print("Memuat GUI...\n");
+        wm_init();
+        mouse_init();
+        g_gui_mode = 1;
+        /* Layar sudah digambar oleh wm_init (wp_blit) */
+        /* Di sini kita TIDAK kembali ke prompt — loop kernel ambil alih */
     }
     else if(str_compare(input_buffer, "ps")){
         /* Fondasi AH — list proses dari /proc/ps */
@@ -2932,6 +3004,26 @@ void shell_process_char(char c){
     }
     else if (c == '\x03') {                 /* Tab: auto-complete */
         shell_tab_complete();
+    }
+    else if (c == '\x19') {                 /* Ctrl+Y: salin baris input ke clipboard */
+        if (input_len > 0) {
+            input_buffer[input_len] = '\0';
+            clip_copy(input_buffer);
+            set_color(GFX_LCYAN, GFX_BLACK);
+            print(" [disalin]");
+            set_color(GFX_WHITE, GFX_BLACK);
+        }
+    }
+    else if (c == '\x16') {                 /* Ctrl+V: tempel dari clipboard */
+        char pbuf[256];
+        int plen = clip_paste(pbuf, 256);
+        int i;
+        for (i = 0; i < plen && input_len < 255; i++) {
+            char pc = pbuf[i];
+            if (pc < ' ') continue;          /* skip karakter kontrol */
+            input_buffer[input_len++] = pc;
+            print_char(pc);
+        }
     }
     else {
         if (input_len < 255) {
