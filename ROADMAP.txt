@@ -1232,7 +1232,7 @@ Urutan pengerjaan (berdasarkan dampak/kepentingan):
   [x] Fondasi AC  EShell scripting: if/while/for + file .sh (~113%)
   [x] Fondasi AD  ERTC driver + perintah date/time          (~115%)
   [x] Fondasi AE  EText editor (edit <file>, nano-like)      (~118%)
-  [x] Fondasi AF  ECommand history (↑�E) + TAB completion ++  (~120%)
+  [x] Fondasi AF  ECommand history (↑�E) + TAB completion ++  (~120%)
   [x] Fondasi AG  EANSI/VT100 escape codes di output        (~122%)
   [x] Fondasi AH ? procfs /proc (ps/mem/net via file)        (~125%)
   [x] Fondasi AI  EShell operators: multi-pipe |, >>, &&/||, auto-exec  (~128%)
@@ -1354,7 +1354,7 @@ Tujuan: edit <file> membuka editor teks di terminal  E
         - Body: baris teks dengan nomor baris
         - Footer: status bar + shortcut
 
-  [AE2] Navigasi: ↑�E←�E, Home/End, PgUp/PgDn
+  [AE2] Navigasi: ↑�E←�E, Home/End, PgUp/PgDn
   [AE3] Edit: ketik karakter, Backspace, Delete, Enter
   [AE4] Simpan: Ctrl+S ↁEfs_write
   [AE5] Keluar: Ctrl+Q (prompt simpan jika ada perubahan)
@@ -1363,7 +1363,7 @@ Tujuan: edit <file> membuka editor teks di terminal  E
 ================================================================
 FONDASI AF  ECOMMAND HISTORY + TAB COMPLETION LANJUT
 ================================================================
-Status: [SELESAI] ? Fondasi AF selesai ? command history (����) + TAB completion
+Status: [SELESAI] ? Fondasi AF selesai ? command history (����) + TAB completion
 Prasyarat: Fondasi Z selesai ✁E
 ----------------------------------------------------------------
   [AF1] Command history (50 entri)
@@ -1592,7 +1592,7 @@ dikerjakan, diurutkan berdasarkan prioritas dan ketergantungan.
 ================================================================
 FONDASI AK  EACPI: SHUTDOWN, REBOOT, POWER BUTTON
 ================================================================
-Status: [BELUM DIKERJAKAN]
+Status: [SELESAI] 2713
 Prioritas: 1  Esangat mudah, dampak langsung saat demo
 Prasyarat: kernel berjalan dengan QEMU ✁E
 ----------------------------------------------------------------
@@ -1615,7 +1615,7 @@ Tujuan: OS bisa shutdown/reboot secara bersih tanpa QEMU kill.
 ================================================================
 FONDASI AL  ENTP CLIENT (SINKRONISASI WAKTU)
 ================================================================
-Status: [BELUM DIKERJAKAN]
+Status: [SELESAI] ✓
 Prioritas: 2
 Prasyarat: Fondasi X (UDP/DNS) selesai ✁E Fondasi AD (RTC) selesai ✁E
 ----------------------------------------------------------------
@@ -1638,7 +1638,7 @@ Tujuan: OS menyinkronkan jam dari server NTP sehingga RTC selalu akurat.
 ================================================================
 FONDASI AM  EHTTP SERVER (httpd)
 ================================================================
-Status: [BELUM DIKERJAKAN]
+Status: [SELESAI] 2713
 Prioritas: 3
 Prasyarat: Fondasi X (TCP), Fondasi R3 (MFS4 filesystem) selesai ✁E
 ----------------------------------------------------------------
@@ -1664,7 +1664,7 @@ Tujuan: Oria OS dapat menyajikan file via HTTP  EOS sebagai server.
 ================================================================
 FONDASI AN  EWEBSOCKET CLIENT
 ================================================================
-Status: [BELUM DIKERJAKAN]
+Status: [SELESAI] ✓
 Prioritas: 4
 Prasyarat: Fondasi AJ (TLS 1.3) selesai ✁E
 ----------------------------------------------------------------
@@ -1690,7 +1690,7 @@ Tujuan: Koneksi WebSocket untuk komunikasi real-time (wss:// dan ws://).
 ================================================================
 FONDASI AO  EVIRTIO BLOCK DRIVER (pengganti ATA polling)
 ================================================================
-Status: [BELUM DIKERJAKAN]
+Status: [SELESAI] ✓
 Prioritas: 5
 Prasyarat: PCI scan (Tahap N) selesai ✁E
 ----------------------------------------------------------------
@@ -1718,7 +1718,7 @@ Tujuan: Ganti ATA PIO polling dengan VirtIO disk untuk performa
 ================================================================
 FONDASI AP  EIPv6 + ICMPv6 PING
 ================================================================
-Status: [BELUM DIKERJAKAN]
+Status: [SELESAI] 2713
 Prioritas: 6
 Prasyarat: Fondasi X (TCP/IP stack) selesai ✁E
 ----------------------------------------------------------------
@@ -1741,7 +1741,7 @@ Tujuan: Oria OS mendukung IPv6 untuk siap menghadapi dunia modern.
 ================================================================
 FONDASI AQ  ETLS CERTIFICATE VALIDATION (opsional/educational)
 ================================================================
-Status: [BELUM DIKERJAKAN]
+Status: [SELESAI] 2713
 Prioritas: 7  Eeducational value, bukan keamanan production
 Prasyarat: Fondasi AJ (TLS 1.3) selesai ✁E
 ----------------------------------------------------------------
@@ -1765,7 +1765,7 @@ Tujuan: Validasi sertifikat server agar curl https:// tidak blind trust.
 ================================================================
 FONDASI AR  EEXT2 FILESYSTEM (read-only mount)
 ================================================================
-Status: [BELUM DIKERJAKAN]
+Status: [SELESAI] 2713
 Prioritas: 8
 Prasyarat: VirtIO atau ATA driver, VFS selesai ✁E
 ----------------------------------------------------------------
@@ -1791,7 +1791,7 @@ Tujuan: Mount partisi ext2 dari disk image  Einteroperabilitas dengan Linux.
 ================================================================
 FONDASI AS  EKERNEL DEBUGGER (kgdb/serial console)
 ================================================================
-Status: [BELUM DIKERJAKAN]
+Status: [SELESAI] 2713
 Prioritas: 9
 Prasyarat:  E
 ----------------------------------------------------------------
@@ -1815,7 +1815,7 @@ Tujuan: Debugging kernel via QEMU serial port tanpa reboot.
 ================================================================
 FONDASI AT  EGUI: WINDOW DECORATIONS + FONT
 ================================================================
-Status: [BELUM DIKERJAKAN]
+Status: [SELESAI] 2713
 Prioritas: 10
 Prasyarat: GUI framebuffer 32bpp selesai ✁E
 ----------------------------------------------------------------

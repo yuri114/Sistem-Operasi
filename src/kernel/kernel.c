@@ -60,6 +60,7 @@
 #include "keyboard.h"
 #include "serial.h"
 #include "net.h"
+#include "virtio_blk.h"
 #include "smp.h"
 #include "acpi.h"
 #include "condvar.h"
@@ -565,6 +566,7 @@ void kernel_main(){
     mem_init();
     pmm_init();
     ata_init();
+    virtio_blk_init();
     net_init();
     fs_init();
     mfs4_init();

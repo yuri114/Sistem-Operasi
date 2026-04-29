@@ -168,3 +168,62 @@ void acpi_init(void)
         p += len;
     }
 }
+
+/* ================================================================
+ * Fondasi AK — ACPI Power Management
+ * ================================================================ */
+
+static inline void outw_ak(uint16_t port, uint16_t val) {
+    __asm__ volatile ("outw %0, %1" :: "a"(val), "Nd"(port));
+}
+static inline void outb_ak(uint16_t port, uint8_t val) {
+    __asm__ volatile ("outb %0, %1" :: "a"(val), "Nd"(port));
+}
+
+/* Cari port PM1a_CNT dari ACPI FADT (table "FACP") di RSDT.
+ * Jika tidak ditemukan, kembalikan 0x604 (QEMU default). */
+static uint32_t find_pm1a_port(void) {
+    Rsdp1 *rsdp = find_rsdp();
+    if (!rsdp) return 0x604;
+    AcpiSdt *rsdt = (AcpiSdt *)(uintptr_t)rsdp->rsdt_addr;
+    if (!rsdt) return 0x604;
+    if (!(rsdt->sig[0]=='R' && rsdt->sig[1]=='S' && rsdt->sig[2]=='D' && rsdt->sig[3]=='T'))
+        return 0x604;
+    if (!checksum_ok(rsdt, rsdt->len)) return 0x604;
+
+    uint32_t entries = (rsdt->len - sizeof(AcpiSdt)) / 4;
+    uint32_t *ptrs   = (uint32_t *)((uint8_t *)rsdt + sizeof(AcpiSdt));
+    uint32_t i;
+    for (i = 0; i < entries; i++) {
+        AcpiSdt *s = (AcpiSdt *)(uintptr_t)ptrs[i];
+        if (!s) continue;
+        /* FACP = Fixed ACPI Description Table */
+        if (s->sig[0]=='F' && s->sig[1]=='A' && s->sig[2]=='C' && s->sig[3]=='P') {
+            if (!checksum_ok(s, s->len)) continue;
+            /* PM1a_CNT_BLK ada di offset 64 dari awal SDT header */
+            if (s->len >= 68) {
+                uint32_t pm1a = *(uint32_t *)((uint8_t *)s + 64);
+                if (pm1a) return pm1a;
+            }
+        }
+    }
+    return 0x604; /* QEMU default */
+}
+
+void acpi_shutdown(void) {
+    uint32_t port = find_pm1a_port();
+    /* SLP_TYP=5 (S5 = soft off), SLP_EN=1 → value 0x2000 di QEMU
+     * Pada hardware asli SLP_TYP bisa berbeda; scan \_S5_ di DSDT untuk nilai tepat.
+     * Untuk QEMU 0x2000 selalu benar. */
+    outw_ak((uint16_t)port, 0x2000);
+    /* Fallback jika port ACPI berbeda: coba QEMU i440FX port */
+    outw_ak(0x604, 0x2000);
+    /* Jika masih berjalan (hardware), triple fault */
+    __asm__ volatile ("cli; hlt");
+}
+
+void acpi_reboot(void) {
+    outb_ak(0x64, 0xFE);
+    /* Fallback: triple fault */
+    __asm__ volatile ("cli; hlt");
+}

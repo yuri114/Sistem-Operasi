@@ -66,4 +66,22 @@ int  http_get(const char *url);
  * Return 0 sukses, -1 error. */
 int  https_get(const char *url);
 
+/* ================================================================
+ * Fondasi AL — NTP Client
+ * ================================================================ */
+/* Sinkronisasi waktu via NTP ke pool.ntp.org (UDP port 123).
+ * Tampilkan tanggal/jam UTC ke layar.
+ * Return 1 sukses, 0 gagal/timeout. */
+int  ntp_sync(void);
+
+/* ================================================================
+ * Fondasi AM — HTTP Server (TCP listen/accept)
+ * ================================================================ */
+/* Mulai listen di port. Return listen_id (>=0) sukses, -1 gagal. */
+int  net_tcp_listen(uint16_t port);
+/* Tunggu koneksi masuk. Return conn_id (>=0) sukses, -1 timeout, -2 invalid. */
+int  net_tcp_accept(int listen_id, uint32_t timeout_ms);
+/* Berhenti listen. */
+void net_tcp_unlisten(int listen_id);
+
 #endif

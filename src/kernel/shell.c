@@ -10,6 +10,8 @@
 #include "task.h"
 #include "pipe.h"
 #include "net.h"
+#include "websocket.h"
+#include "virtio_blk.h"
 #include "acpi.h"
 #include "smp.h"
 #include "vfs.h"
@@ -97,12 +99,12 @@ static int str_find_space(const char *str) {
 // Daftar semua perintah untuk tab-completion
 static const char *shell_commands[] = {
     "help", "clear", "about", "memtest", "uptime", "date",
-    "time", "reboot", "ls", "paging", "ps",
+    "time", "reboot", "shutdown", "poweroff", "ls", "paging", "ps",
     "echo ", "exec ", "read ", "write ", "del ", "rename ", "kill ",
     "cd ", "pwd", "export ", "env",
     "sync", "mkdir ", "chmod ",
     "ifconfig", "ping ", "cpuinfo",
-    "udp_send ", "tcp_get ", "nslookup ", "curl ",
+    "udp_send ", "tcp_get ", "nslookup ", "curl ", "ntpdate", "httpd ",
     "open ", "fread ", "fwrite ", "fclose ",
     "mq_send ", "mq_recv", "taskstat", "meminfo", "threadtest", "futextest",
     "polltest",
@@ -1163,6 +1165,8 @@ static void shell_execute() {
         print("echo <text>          - tampilkan text\n");
         print("time                 - tampilkan ticks sejak boot\n");
         print("reboot               - reboot sistem\n");
+        print("shutdown             - matikan sistem (ACPI poweroff)\n");
+        print("poweroff             - sama dengan shutdown\n");
         print("ls                   - tampilkan daftar file (di direktori saat ini)\n");
         print("cd <dir>             - pindah direktori (cd .. / cd / untuk root)\n");
         print("pwd                  - tampilkan direktori saat ini\n");
@@ -1181,6 +1185,12 @@ static void shell_execute() {
         print("tcp_get <ip> <port> [path]   - HTTP GET via TCP (demo koneksi internet)\n");
         print("nslookup <hostname>          - resolve DNS A record via 8.8.8.8\n");
         print("curl <url>                   - HTTP GET, tampilkan response (http://host/path)\n");
+        print("ntpdate              - sinkronisasi waktu via NTP (pool.ntp.org)\n");
+        print("httpd [start [port]] - jalankan HTTP server (default port 8080)\n");
+        print("httpd stop           - stop HTTP server\n");
+        print("ws <url>             - WebSocket client (ws://host/path)\n");
+        print("vdisk                - tampilkan info VirtIO block device\n");
+        print("vdisk read <sector>  - baca 1 sektor dari VirtIO disk (hex dump)\n");
         print("cpuinfo              - tampilkan info SMP (BSP/AP online)\n");
         print("taskstat             - tampilkan distribusi task per CPU\n");
         print("meminfo              - tampilkan statistik memori fisik & heap\n");
@@ -1333,7 +1343,11 @@ static void shell_execute() {
     }
     else if(str_compare(input_buffer, "reboot")){
         print("Rebooting...\n");
-        outb(0x64, 0xFE);
+        acpi_reboot();
+    }
+    else if(str_compare(input_buffer, "shutdown") || str_compare(input_buffer, "poweroff")){
+        print("Shutting down...\n");
+        acpi_shutdown();
     }
     else if(str_compare(input_buffer, "ls")){
         set_color(GFX_YELLOW, GFX_BLACK);
@@ -1944,6 +1958,200 @@ static void shell_execute() {
                 print("nslookup: gagal resolve '"); print(host); print("'\n");
                 set_color(GFX_WHITE, GFX_BLACK);
             }
+        }
+    }
+    /* Fondasi AO: vdisk — VirtIO block device info/read */
+    else if (str_compare(input_buffer, "vdisk")) {
+        if (!virtio_blk_present()) {
+            print("vdisk: VirtIO blk tidak ditemukan\n");
+            print("vdisk: tambah -drive file=disk.img,if=virtio,format=raw ke QEMU\n");
+        } else {
+            uint64_t cap = virtio_blk_capacity();
+            uint64_t mb  = (cap * 512) / (1024ULL * 1024ULL);
+            set_color(0x0055FF55, 0);
+            print("vdisk: VirtIO blk tersedia\n");
+            print("  kapasitas : ");
+            { char nb[16]; itoa((uint32_t)(cap & 0xFFFFFFFF), nb); print(nb); }
+            print(" sektor (");
+            { char nb[16]; itoa((uint32_t)mb, nb); print(nb); }
+            print(" MB)\n");
+            set_color(0x00FFFFFF, 0);
+        }
+    }
+    else if (str_starts_with(input_buffer, "vdisk read ")) {
+        const char *p3 = input_buffer + 11;
+        while (*p3 == ' ') p3++;
+        uint64_t sector = 0;
+        while (*p3 >= '0' && *p3 <= '9') sector = sector * 10 + (uint64_t)(*p3++ - '0');
+        if (!virtio_blk_present()) {
+            print("vdisk: tidak ada device\n");
+        } else {
+            static uint8_t secbuf[512];
+            int r = virtio_blk_read(sector, secbuf, 1);
+            if (r < 0) {
+                print("vdisk: read error\n");
+            } else {
+                set_color(0x0055FFFF, 0);
+                print("vdisk: sektor "); { char nb[12]; itoa((uint32_t)sector, nb); print(nb); } print(":\n");
+                set_color(0x00FFFFFF, 0);
+                /* Dump hex 32 byte pertama */
+                const char *hex = "0123456789ABCDEF";
+                char hline[64]; int hi = 0;
+                int bi;
+                for (bi = 0; bi < 32; bi++) {
+                    hline[hi++] = hex[secbuf[bi] >> 4];
+                    hline[hi++] = hex[secbuf[bi] & 0xF];
+                    hline[hi++] = ' ';
+                    if ((bi % 16) == 15) {
+                        hline[hi] = 0; print(hline); print("\n"); hi = 0;
+                    }
+                }
+                if (hi > 0) { hline[hi] = 0; print(hline); print("\n"); }
+            }
+        }
+    }
+    else if (str_compare(input_buffer, "ntpdate")) {
+        ntp_sync();
+    }
+    /* Fondasi AM: httpd [start [port] | stop] — HTTP server */
+    else if (str_starts_with(input_buffer, "httpd") || str_compare(input_buffer, "httpd")) {
+        /* Parse subcommand */
+        const char *sub = input_buffer + 5;
+        while (*sub == ' ') sub++;
+        int do_stop = (sub[0]=='s' && sub[1]=='t' && sub[2]=='o' && sub[3]=='p');
+        int port_num = 8080;
+        if (!do_stop) {
+            /* "start [port]" atau kosong */
+            const char *p2 = sub;
+            if (p2[0]=='s'&&p2[1]=='t'&&p2[2]=='a'&&p2[3]=='r'&&p2[4]=='t') {
+                p2 += 5; while (*p2 == ' ') p2++;
+            }
+            if (*p2 >= '0' && *p2 <= '9') {
+                int pv = 0;
+                while (*p2 >= '0' && *p2 <= '9') pv = pv * 10 + (*p2++ - '0');
+                port_num = pv;
+            }
+            set_color(0x0055FF55, 0);
+            print("httpd: listen di port "); { char nb[8]; itoa((uint32_t)port_num, nb); print(nb); }
+            print(" (ketuk Ctrl+C untuk stop, atau tunggu otomatis 10 koneksi)\n");
+            print("httpd: akses dari host: http://localhost:"); { char nb[8]; itoa((uint32_t)port_num, nb); print(nb); }
+            print("/\n");
+            set_color(0x00FFFFFF, 0);
+
+            int lid = net_tcp_listen((uint16_t)port_num);
+            if (lid < 0) { print("httpd: gagal listen\n"); }
+            else {
+                int req_count = 0;
+                while (req_count < 10) {
+                    int cid = net_tcp_accept(lid, 5000);
+                    if (cid < 0) { print("httpd: timeout, stop\n"); break; }
+                    req_count++;
+
+                    /* Baca HTTP request */
+                    static uint8_t hbuf[1024];
+                    int hlen = net_tcp_recv(cid, hbuf, (uint16_t)(sizeof(hbuf) - 1));
+                    if (hlen <= 0) { net_tcp_close(cid); continue; }
+                    hbuf[hlen] = 0;
+
+                    /* Cari path: "GET /path HTTP" */
+                    static char hpath[128];
+                    hpath[0] = 0;
+                    {
+                        int pi = 0;
+                        /* Cari "GET " */
+                        uint8_t *g = hbuf;
+                        while (*g && !(g[0]=='G'&&g[1]=='E'&&g[2]=='T'&&g[3]==' ')) g++;
+                        if (*g) {
+                            g += 4; /* skip "GET " */
+                            /* copy path sampai spasi */
+                            while (*g && *g != ' ' && pi < 127)
+                                hpath[pi++] = (char)*g++;
+                        }
+                        hpath[pi] = 0;
+                    }
+
+                    /* Logging */
+                    set_color(0x0055FF55, 0);
+                    print("httpd: GET ");
+                    print(hpath[0] ? hpath : "/");
+                    print("\n");
+                    set_color(0x00FFFFFF, 0);
+
+                    /* Serve konten */
+                    static uint8_t fbuf[8192];
+                    uint32_t fsize = 0;
+                    const char *content_type = "text/plain";
+                    int found = 0;
+
+                    if (!hpath[0] || (hpath[0]=='/'&&!hpath[1])) {
+                        /* Root: tampilkan index sederhana */
+                        static const char idx[] =
+                            "<!DOCTYPE html><html><head><title>Oria OS</title></head>"
+                            "<body><h1>Oria OS HTTP Server</h1>"
+                            "<p>Fondasi AM - HTTP Server berjalan di Oria OS.</p>"
+                            "<p>Gunakan URL /namafile untuk mengakses file dari MFS4.</p>"
+                            "</body></html>";
+                        int idxl = 0; while (idx[idxl]) idxl++;
+                        int ki; for (ki = 0; ki < idxl; ki++) fbuf[ki] = (uint8_t)idx[ki];
+                        fsize = (uint32_t)idxl;
+                        content_type = "text/html";
+                        found = 1;
+                    } else {
+                        /* Coba baca file dari MFS4 */
+                        char fname[64]; int fi = 0;
+                        const char *hp = hpath;
+                        if (*hp == '/') hp++;
+                        while (*hp && fi < 63) fname[fi++] = *hp++;
+                        fname[fi] = 0;
+                        if (fi > 0) {
+                            char fpath[128];
+                            make_path(fname, fpath, sizeof(fpath));
+                            void *data = fs_read_bin(fpath, &fsize);
+                            if (data && fsize > 0 && fsize <= sizeof(fbuf)) {
+                                int ki;
+                                for (ki = 0; ki < (int)fsize; ki++)
+                                    fbuf[ki] = ((uint8_t*)data)[ki];
+                                found = 1;
+                            }
+                        }
+                    }
+
+                    /* Bangun response */
+                    static char resp_hdr[256];
+                    int rhi = 0;
+                    const char *status = found ? "200 OK" : "404 Not Found";
+                    const char *r0 = "HTTP/1.0 "; int r0i = 0; while (r0[r0i]) resp_hdr[rhi++] = r0[r0i++];
+                    int ri; for (ri = 0; status[ri]; ri++) resp_hdr[rhi++] = status[ri];
+                    resp_hdr[rhi++] = '\r'; resp_hdr[rhi++] = '\n';
+                    const char *ct = "Content-Type: "; int cti = 0; while (ct[cti]) resp_hdr[rhi++] = ct[cti++];
+                    for (ri = 0; content_type[ri]; ri++) resp_hdr[rhi++] = content_type[ri];
+                    resp_hdr[rhi++] = '\r'; resp_hdr[rhi++] = '\n';
+                    const char *cl = "Content-Length: "; int cli = 0; while (cl[cli]) resp_hdr[rhi++] = cl[cli++];
+                    { char nb[12]; itoa(found ? fsize : 9, nb); int ni = 0; while (nb[ni]) resp_hdr[rhi++] = nb[ni++]; }
+                    resp_hdr[rhi++] = '\r'; resp_hdr[rhi++] = '\n';
+                    const char *conn = "Connection: close\r\n\r\n"; int coni = 0; while (conn[coni]) resp_hdr[rhi++] = conn[coni++];
+
+                    net_tcp_send(cid, resp_hdr, (uint16_t)rhi);
+                    if (found) {
+                        net_tcp_send(cid, fbuf, (uint16_t)fsize);
+                    } else {
+                        net_tcp_send(cid, "Not Found", 9);
+                    }
+                    net_tcp_close(cid);
+                }
+                net_tcp_unlisten(lid);
+                print("httpd: selesai\n");
+            }
+        }
+    }
+    /* Fondasi AN: ws <url> — WebSocket client */
+    else if (str_starts_with(input_buffer, "ws ")) {
+        const char *wsurl = input_buffer + 3;
+        while (*wsurl == ' ') wsurl++;
+        if (!*wsurl) {
+            print("ws: gunakan: ws ws://host/path\n");
+        } else {
+            ws_connect(wsurl);
         }
     }
     else if (str_compare(input_buffer, "cpuinfo")) {        char nbuf[16];

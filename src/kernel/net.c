@@ -97,7 +97,78 @@ typedef struct {
 static TcpConn tcp_conns[TCP_MAX_CONN];
 static uint16_t tcp_port_ctr = 49152;  /* ephemeral port counter */
 
-/* Forward declaration — defined after net_ping */
+/* Forward declarations needed by listen/accept code below */
+static int  net_process(const uint8_t *pkt, uint16_t len,
+                        const uint8_t *expect_src, uint16_t *rtt_out,
+                        uint32_t send_tick);
+static void tcp_tx(TcpConn *c, uint8_t flags, uint32_t seq, uint32_t ack,
+                   const uint8_t *data, uint16_t dlen);
+
+/* ================================================================
+ * Fondasi AM — TCP Listen / Accept (server side)
+ * ================================================================ */
+#define TCP_LISTEN_SLOTS  2   /* max simultan server socket */
+
+typedef struct {
+    uint8_t  active;          /* 1 = slot ini listening */
+    uint16_t port;            /* port yang di-listen */
+    /* Accept queue: simpan sampai 2 koneksi masuk yang belum di-accept */
+    int8_t   accept_q[2];     /* index ke tcp_conns, -1 = kosong */
+    uint8_t  aq_head;
+    uint8_t  aq_tail;
+    uint8_t  aq_count;
+} TcpListen;
+
+static TcpListen tcp_listen[TCP_LISTEN_SLOTS];
+
+/* net_tcp_listen(port): mulai listen di port.
+ * Return listen_id (0..TCP_LISTEN_SLOTS-1), atau -1 jika gagal. */
+int net_tcp_listen(uint16_t port) {
+    int i;
+    for (i = 0; i < TCP_LISTEN_SLOTS; i++) {
+        if (!tcp_listen[i].active) {
+            tcp_listen[i].active   = 1;
+            tcp_listen[i].port     = port;
+            tcp_listen[i].aq_head  = 0;
+            tcp_listen[i].aq_tail  = 0;
+            tcp_listen[i].aq_count = 0;
+            tcp_listen[i].accept_q[0] = -1;
+            tcp_listen[i].accept_q[1] = -1;
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* net_tcp_accept(listen_id, timeout_ms): tunggu koneksi masuk.
+ * Return conn_id sukses, -1 timeout, -2 invalid. */
+int net_tcp_accept(int lid, uint32_t timeout_ms) {
+    if (lid < 0 || lid >= TCP_LISTEN_SLOTS || !tcp_listen[lid].active) return -2;
+    uint32_t deadline = get_ticks() + timeout_ms;
+    while (get_ticks() < deadline) {
+        /* Poll paket masuk */
+        uint8_t pkt2[1514]; uint16_t plen;
+        if (rtl8139_recv(pkt2, &plen) == 0 && plen > 54) {
+            /* net_process menangani SYN dan membuat koneksi baru */
+            net_process(pkt2, plen, 0, 0, 0);
+        }
+        if (tcp_listen[lid].aq_count > 0) {
+            int8_t cid = tcp_listen[lid].accept_q[tcp_listen[lid].aq_head];
+            tcp_listen[lid].aq_head = (tcp_listen[lid].aq_head + 1) % 2;
+            tcp_listen[lid].aq_count--;
+            return (int)cid;
+        }
+    }
+    return -1;
+}
+
+/* net_tcp_unlisten(listen_id): berhenti listen */
+void net_tcp_unlisten(int lid) {
+    if (lid >= 0 && lid < TCP_LISTEN_SLOTS)
+        tcp_listen[lid].active = 0;
+}
+
+/* Forward declaration — tcp_rx_process defined after net_ping */
 static void tcp_rx_process(const uint8_t *ip_hdr, const uint8_t *tcp_seg, int tcp_total);
 
 /* ================================================================== */
@@ -592,6 +663,55 @@ static void tcp_rx_process(const uint8_t *ip_hdr, const uint8_t *tcp_seg, int tc
             if (flags & TCP_ACK) { c->used = 0; c->state = TCP_CLOSED; }
         }
         break;
+    }
+
+    /* ---- Fondasi AM: handle inbound SYN ke port yang di-listen ---- */
+    if ((flags & (TCP_SYN | TCP_ACK)) == TCP_SYN) {
+        /* Cari listen slot yang cocok */
+        int li;
+        for (li = 0; li < TCP_LISTEN_SLOTS; li++) {
+            if (!tcp_listen[li].active) continue;
+            if (tcp_listen[li].port != rdp) continue;
+            /* rdp = our port (dst of incoming packet) */
+            if (tcp_listen[li].aq_count >= 2) break; /* accept queue penuh */
+
+            /* Alokasikan TcpConn baru */
+            int ci;
+            for (ci = 0; ci < TCP_MAX_CONN; ci++) {
+                if (!tcp_conns[ci].used) break;
+            }
+            if (ci >= TCP_MAX_CONN) break;
+
+            TcpConn *nc = &tcp_conns[ci];
+            int ki;
+            for (ki = 0; ki < 4; ki++) nc->dst_ip[ki] = src_ip[ki];
+            for (ki = 0; ki < 6; ki++) nc->dst_mac[ki] = ip_hdr[-14 + ki + 6]; /* src MAC dari Ethernet */
+            nc->src_port   = rdp;          /* our port = server port */
+            nc->dst_port   = rsp;          /* remote client port */
+            nc->rcv_nxt    = sseq + 1;
+            nc->snd_nxt    = 0xAC000001;   /* ISN arbitrary */
+            nc->state      = TCP_ESTABLISHED;
+            nc->used       = 1;
+            nc->fin_recv   = 0;
+            nc->rst_recv   = 0;
+            nc->tx_len     = 0;
+            nc->rx_head    = 0;
+            nc->rx_tail    = 0;
+            nc->ooo_len    = 0;
+            nc->ka_probes  = 0;
+            nc->last_rx_tick = get_ticks();
+            nc->ka_next_tick = get_ticks() + TCP_KEEPALIVE_IDLE;
+
+            /* Kirim SYN+ACK */
+            tcp_tx(nc, TCP_SYN | TCP_ACK, nc->snd_nxt - 1, nc->rcv_nxt, 0, 0);
+            nc->snd_nxt++;  /* SYN mengkonsumsi 1 seq number */
+
+            /* Masukkan ke accept queue */
+            tcp_listen[li].accept_q[tcp_listen[li].aq_tail] = (int8_t)ci;
+            tcp_listen[li].aq_tail  = (tcp_listen[li].aq_tail + 1) % 2;
+            tcp_listen[li].aq_count++;
+            break;
+        }
     }
 }
 
@@ -1343,5 +1463,135 @@ int https_get(const char *url) {
     { char nb[10]; itoa(body_bytes, nb); print(nb); }
     print(" bytes body)\n");
     set_color(HTTP_COLOR_BODY, HTTP_COLOR_BG);
+    return 0;
+}
+
+/* ================================================================
+ * Fondasi AL — NTP Client
+ * Kirim NTP v3 request ke pool.ntp.org:123 via UDP.
+ * Parse Transmit Timestamp, tampilkan waktu.
+ * Return 1 sukses, 0 gagal.
+ * ================================================================ */
+#define NTP_PORT      123
+#define NTP_SRC_PORT  1123
+/* NTP epoch = 1 Jan 1900; Unix epoch = 1 Jan 1970.
+ * Selisih: 70 tahun = 2208988800 detik */
+#define NTP_UNIX_DIFF 2208988800UL
+
+int ntp_sync(void) {
+    if (!rtl8139_present()) {
+        print("ntp: NIC tidak tersedia\n"); return 0;
+    }
+
+    /* Resolve pool.ntp.org */
+    static const uint8_t ntp_fallback[4] = {216, 239, 35, 0}; /* time.google.com */
+    uint8_t ntp_ip[4];
+    print("ntp: resolve pool.ntp.org... ");
+    if (!dns_resolve("pool.ntp.org", ntp_ip)) {
+        ntp_ip[0] = ntp_fallback[0]; ntp_ip[1] = ntp_fallback[1];
+        ntp_ip[2] = ntp_fallback[2]; ntp_ip[3] = ntp_fallback[3];
+        print("timeout, pakai 216.239.35.0\n");
+    } else {
+        { char ib[16]; int ii;
+          for (ii = 0; ii < 4; ii++) {
+              char nb[4]; itoa(ntp_ip[ii], nb); print(nb);
+              if (ii < 3) print(".");
+          }
+          (void)ib;
+        }
+        print("\n");
+    }
+
+    /* Bangun NTP request packet (48 byte, RFC 5905) */
+    uint8_t pkt[48];
+    int k;
+    for (k = 0; k < 48; k++) pkt[k] = 0;
+    pkt[0] = 0x1B; /* LI=0, VN=3, Mode=3 (client) */
+
+    /* Kirim 3 kali, tunggu reply */
+    int attempt;
+    for (attempt = 0; attempt < 3; attempt++) {
+        net_udp_send(ntp_ip, NTP_PORT, NTP_SRC_PORT, pkt, 48);
+
+        uint32_t deadline = get_ticks() + 3000;
+        while (get_ticks() < deadline) {
+            uint8_t rx[1514]; uint16_t rlen;
+            if (rtl8139_recv(rx, &rlen) == 0 && rlen > 90) {
+                uint8_t *ip  = rx + 14;
+                if (ip[9] != 17) { net_process(rx, rlen, 0, 0, 0); continue; }
+                uint8_t *udp = ip + (ip[0] & 0xF) * 4;
+                uint16_t sp = (uint16_t)(((uint16_t)udp[0] << 8) | udp[1]);
+                uint16_t dp = (uint16_t)(((uint16_t)udp[2] << 8) | udp[3]);
+                if (sp != NTP_PORT || dp != NTP_SRC_PORT) {
+                    net_process(rx, rlen, 0, 0, 0); continue;
+                }
+                uint8_t *np = udp + 8;
+                /* Transmit Timestamp: byte 40-47 (NTP epoch seconds di [40..43]) */
+                uint32_t ntp_secs = ((uint32_t)np[40] << 24) | ((uint32_t)np[41] << 16)
+                                  | ((uint32_t)np[42] << 8)  |  (uint32_t)np[43];
+                if (ntp_secs < NTP_UNIX_DIFF) {
+                    /* Terima juga Originate/Receive timestamp */
+                    ntp_secs = ((uint32_t)np[32] << 24) | ((uint32_t)np[33] << 16)
+                             | ((uint32_t)np[34] << 8)  |  (uint32_t)np[35];
+                }
+                if (ntp_secs == 0) { net_process(rx, rlen, 0, 0, 0); continue; }
+
+                uint32_t unix_secs = ntp_secs - NTP_UNIX_DIFF;
+
+                /* Konversi Unix timestamp ke tahun/bulan/hari/jam/menit/detik */
+                uint32_t s = unix_secs % 86400;
+                uint32_t d = unix_secs / 86400;       /* hari sejak 1 Jan 1970 */
+                uint32_t hour   = s / 3600;
+                uint32_t minute = (s % 3600) / 60;
+                uint32_t second = s % 60;
+
+                /* Hitung tahun dan hari dalam tahun */
+                uint32_t year = 1970;
+                while (1) {
+                    int leap = ((year%4==0 && year%100!=0) || year%400==0);
+                    uint32_t days_in_year = (uint32_t)(leap ? 366 : 365);
+                    if (d < days_in_year) break;
+                    d -= days_in_year;
+                    year++;
+                }
+                static const uint8_t mdays[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
+                uint32_t month = 1;
+                {
+                    int leap = ((year%4==0 && year%100!=0) || year%400==0);
+                    int m;
+                    for (m = 0; m < 12; m++) {
+                        uint32_t md = mdays[m];
+                        if (m == 1 && leap) md = 29;
+                        if (d < md) { month = (uint32_t)(m + 1); break; }
+                        d -= md;
+                    }
+                }
+                uint32_t day = d + 1;
+
+                /* Tampilkan hasil */
+                set_color(0x0055FF55, 0);
+                print("ntp: OK  ");
+                { char nb[8]; itoa(year, nb); print(nb); }
+                print("-");
+                { char nb[4]; if (month < 10) print("0"); itoa(month, nb); print(nb); }
+                print("-");
+                { char nb[4]; if (day   < 10) print("0"); itoa(day,   nb); print(nb); }
+                print(" ");
+                { char nb[4]; if (hour   < 10) print("0"); itoa(hour,   nb); print(nb); }
+                print(":");
+                { char nb[4]; if (minute < 10) print("0"); itoa(minute, nb); print(nb); }
+                print(":");
+                { char nb[4]; if (second < 10) print("0"); itoa(second, nb); print(nb); }
+                print(" UTC  (unix=");
+                { char nb[12]; itoa(unix_secs, nb); print(nb); }
+                print(")\n");
+                set_color(0x00FFFFFF, 0);
+                return 1;
+            }
+        }
+    }
+    set_color(0x00FF5555, 0);
+    print("ntp: timeout — tidak ada balasan\n");
+    set_color(0x00FFFFFF, 0);
     return 0;
 }

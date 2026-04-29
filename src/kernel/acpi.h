@@ -22,4 +22,16 @@ extern CpuInfo  cpus[SMP_MAX_CPUS];
  * BSP sudah ada di cpus[0] (APIC ID yang menjalankan fungsi ini). */
 void acpi_init(void);
 
+/* ================================================================
+ * Fondasi AK — ACPI Power Management
+ * ================================================================ */
+
+/* Matikan sistem via ACPI PM1a_CNT (QEMU: port 0x604, nilai 0x2000).
+ * Setelah memanggil ini OS berhenti; tidak kembali. */
+void acpi_shutdown(void);
+
+/* Reboot via PS/2 keyboard controller reset line (port 0x64 <- 0xFE).
+ * Sama dengan perintah 'reboot' yang sudah ada. */
+void acpi_reboot(void);
+
 #endif /* ACPI_H */
