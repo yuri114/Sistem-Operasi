@@ -40,6 +40,24 @@ static int hist_head  = 0;  // slot berikutnya untuk ditulis
 static int hist_count = 0;  // jumlah entri tersimpan (maks HISTORY_SIZE)
 static int hist_cursor = -1; // -1 = tidak browse; 0 = paling baru, 1 = sebelumnya
 
+/* ================================================================
+ * FONDASI AE — Text Editor State
+ * ================================================================ */
+#define ED_VIEW_ROWS  88    /* baris konten: row 2..89 (VGA_ROWS=90) */
+#define ED_MAX_LINES 200    /* maks baris per file                   */
+#define ED_LINE_CAP  160    /* maks karakter per baris (VGA_COLS)    */
+static int  editor_active = 0;
+static char ed_lines[ED_MAX_LINES][ED_LINE_CAP + 1];
+static int  ed_len[ED_MAX_LINES];
+static int  ed_nlines    = 0;
+static int  ed_cur_row   = 0;    /* posisi kursor di dokumen */
+static int  ed_cur_col   = 0;
+static int  ed_scroll    = 0;    /* baris pertama yang tampil */
+static char ed_fname[64];
+static int  ed_modified  = 0;   /* 0=bersih, 1=ada ubahan, -1=diperingatkan */
+static char ed_smsg[80];        /* pesan status sementara */
+static char ed_outbuf[ED_MAX_LINES * (ED_LINE_CAP + 2)]; /* buffer simpan */
+
 /* F1 — Direktori kerja virtual */
 static char current_dir[64] = "";
 
@@ -226,6 +244,315 @@ static void shell_tab_complete() {
 
 void outb(uint16_t port, uint8_t val) {
     __asm__ volatile ("outb %0, %1" :: "a"(val), "Nd"(port));
+}
+
+/* ================================================================
+ * FONDASI AE — Text Editor Helper Functions
+ * ================================================================ */
+
+/* Pindahkan kursor ANSI ke baris/kolom layar (1-based) */
+static void ed_goto(int row, int col) {
+    char buf[20]; int i = 0;
+    int r = row > 0 ? row : 1;
+    int c = col  > 0 ? col  : 1;
+    buf[i++] = '\033'; buf[i++] = '[';
+    { char rev[8]; int ri = 0, n = r;
+      while (n > 0) { rev[ri++] = (char)('0' + n % 10); n /= 10; }
+      while (ri > 0) buf[i++] = rev[--ri]; }
+    buf[i++] = ';';
+    { char rev[8]; int ri = 0, n = c;
+      while (n > 0) { rev[ri++] = (char)('0' + n % 10); n /= 10; }
+      while (ri > 0) buf[i++] = rev[--ri]; }
+    buf[i++] = 'H'; buf[i] = '\0';
+    print(buf);
+}
+
+static void ed_putn(uint32_t n) { char b[12]; itoa(n, b); print(b); }
+
+/* Gambar satu baris dokumen di layar */
+static void ed_draw_row(int doc_row) {
+    int scr_row = doc_row - ed_scroll + 2;
+    if (scr_row < 2 || scr_row > ED_VIEW_ROWS + 1) return;
+    ed_goto(scr_row, 1);
+    { int ln = doc_row + 1;
+      set_color(GFX_DGRAY, GFX_BLACK);
+      if (ln < 10)   print("   ");
+      else if (ln < 100)  print("  ");
+      else if (ln < 1000) print(" ");
+      ed_putn((uint32_t)ln); print(" "); }
+    if (doc_row == ed_cur_row) set_color(GFX_WHITE, GFX_BLACK);
+    else                       set_color(GFX_LGRAY, GFX_BLACK);
+    ed_lines[doc_row][ed_len[doc_row]] = '\0';
+    print(ed_lines[doc_row]);
+    print("\033[K");
+    set_color(GFX_WHITE, GFX_BLACK);
+}
+
+/* Gambar status bar di baris 90 */
+static void ed_draw_status(void) {
+    ed_goto(90, 1);
+    set_color(GFX_BLACK, GFX_YELLOW);
+    print(" Baris:"); ed_putn((uint32_t)(ed_cur_row + 1));
+    print("/");       ed_putn((uint32_t)ed_nlines);
+    print("  Kol:");  ed_putn((uint32_t)(ed_cur_col + 1));
+    print("  ");
+    if (ed_smsg[0]) print(ed_smsg);
+    print("\033[K");
+    set_color(GFX_WHITE, GFX_BLACK);
+}
+
+/* Pastikan scroll mencakup kursor, lalu posisikan kursor ANSI */
+static void ed_fix_cursor(void) {
+    if (ed_cur_row < ed_scroll) ed_scroll = ed_cur_row;
+    if (ed_cur_row >= ed_scroll + ED_VIEW_ROWS)
+        ed_scroll = ed_cur_row - ED_VIEW_ROWS + 1;
+    ed_goto((ed_cur_row - ed_scroll) + 2, ed_cur_col + 6);
+}
+
+/* Gambar ulang seluruh layar editor */
+static void ed_render_all(void) {
+    int i;
+    print("\033[2J");
+    /* Header */
+    ed_goto(1, 1);
+    set_color(GFX_BLACK, GFX_LCYAN);
+    print(" EDIT: "); print(ed_fname);
+    if (ed_modified) print(" [*]");
+    print("   Ctrl+S=Simpan  Ctrl+Q=Keluar  Del=Hapus");
+    print("\033[K");
+    set_color(GFX_WHITE, GFX_BLACK);
+    /* Baris konten */
+    for (i = 0; i < ED_VIEW_ROWS; i++) {
+        int doc_row = ed_scroll + i;
+        ed_goto(i + 2, 1);
+        if (doc_row < ed_nlines) {
+            int ln = doc_row + 1;
+            set_color(GFX_DGRAY, GFX_BLACK);
+            if (ln < 10)   print("   ");
+            else if (ln < 100)  print("  ");
+            else if (ln < 1000) print(" ");
+            ed_putn((uint32_t)ln); print(" ");
+            if (doc_row == ed_cur_row) set_color(GFX_WHITE, GFX_BLACK);
+            else                       set_color(GFX_LGRAY, GFX_BLACK);
+            ed_lines[doc_row][ed_len[doc_row]] = '\0';
+            print(ed_lines[doc_row]);
+        }
+        print("\033[K");
+        set_color(GFX_WHITE, GFX_BLACK);
+    }
+    ed_draw_status();
+    ed_fix_cursor();
+}
+
+/* Muat file ke ed_lines (buat baru jika tidak ada) */
+static void ed_load(const char *fname) {
+    int i;
+    for (i = 0; i < ED_MAX_LINES; i++) { ed_len[i] = 0; ed_lines[i][0] = '\0'; }
+    ed_nlines = 0; ed_cur_row = 0; ed_cur_col = 0; ed_scroll = 0;
+    ed_modified = 0; ed_smsg[0] = '\0';
+    i = 0; while (fname[i] && i < 63) { ed_fname[i] = fname[i]; i++; }
+    ed_fname[i] = '\0';
+    { uint32_t fsz;
+      const uint8_t *fdata = fs_read_bin(fname, &fsz);
+      if (!fdata || fsz == 0) { ed_nlines = 1; return; }
+      { uint32_t di = 0; int col = 0;
+        while (di < fsz && ed_nlines < ED_MAX_LINES) {
+            char ch = (char)fdata[di++];
+            if (ch == '\r') continue;
+            if (ch == '\n') {
+                ed_lines[ed_nlines][col] = '\0';
+                ed_len[ed_nlines] = col;
+                ed_nlines++; col = 0;
+            } else if (col < ED_LINE_CAP) {
+                ed_lines[ed_nlines][col++] = ch;
+            }
+        }
+        if (col > 0 || ed_nlines == 0) {
+            ed_lines[ed_nlines][col] = '\0';
+            ed_len[ed_nlines] = col;
+            ed_nlines++;
+        }
+      }
+    }
+    if (ed_nlines == 0) ed_nlines = 1;
+}
+
+/* Simpan ed_lines ke file */
+static void ed_save(void) {
+    int oi = 0, i, j;
+    const char *msg;
+    for (i = 0; i < ed_nlines; i++) {
+        for (j = 0; j < ed_len[i] && oi < (int)sizeof(ed_outbuf) - 2; j++)
+            ed_outbuf[oi++] = ed_lines[i][j];
+        if (i < ed_nlines - 1) ed_outbuf[oi++] = '\n';
+    }
+    ed_outbuf[oi] = '\0';
+    if (fs_write(ed_fname, ed_outbuf)) {
+        ed_modified = 0; msg = "Tersimpan!";
+    } else {
+        msg = "Gagal menyimpan!";
+    }
+    i = 0; while (msg[i]) ed_smsg[i] = msg[i++]; ed_smsg[i] = '\0';
+}
+
+/* Proses keystroke saat editor aktif */
+static void ed_process_char(char c) {
+    int i, j;
+    ed_smsg[0] = '\0';
+
+    /* Ctrl+Q = keluar */
+    if (c == '\x11') {
+        if (ed_modified > 0) {
+            const char *msg = "Ada perubahan! Ctrl+Q lagi = keluar tanpa simpan";
+            i = 0; while (msg[i]) ed_smsg[i] = msg[i++]; ed_smsg[i] = '\0';
+            ed_modified = -1;
+            ed_draw_status(); ed_fix_cursor();
+        } else {
+            editor_active = 0;
+            print("\033[2J"); ed_goto(1, 1);
+            set_color(GFX_WHITE, GFX_BLACK);
+            set_color(GFX_LGREEN, GFX_BLACK); print("> ");
+            set_color(GFX_WHITE, GFX_BLACK);
+        }
+        return;
+    }
+    /* Reset status peringatan jika tombol lain ditekan */
+    if (ed_modified == -1) ed_modified = 1;
+
+    /* Ctrl+S = simpan */
+    if (c == '\x13') { ed_save(); ed_draw_status(); ed_fix_cursor(); return; }
+
+    /* Navigasi atas */
+    if (c == '\x01') {
+        if (ed_cur_row > 0) {
+            ed_cur_row--;
+            if (ed_cur_col > ed_len[ed_cur_row]) ed_cur_col = ed_len[ed_cur_row];
+        }
+        if (ed_cur_row < ed_scroll) { ed_scroll = ed_cur_row; ed_render_all(); return; }
+        ed_draw_row(ed_cur_row); ed_draw_row(ed_cur_row + 1);
+        ed_draw_status(); ed_fix_cursor(); return;
+    }
+    /* Navigasi bawah */
+    if (c == '\x02') {
+        if (ed_cur_row < ed_nlines - 1) {
+            ed_cur_row++;
+            if (ed_cur_col > ed_len[ed_cur_row]) ed_cur_col = ed_len[ed_cur_row];
+        }
+        if (ed_cur_row >= ed_scroll + ED_VIEW_ROWS) {
+            ed_scroll = ed_cur_row - ED_VIEW_ROWS + 1;
+            ed_render_all(); return;
+        }
+        ed_draw_row(ed_cur_row - 1); ed_draw_row(ed_cur_row);
+        ed_draw_status(); ed_fix_cursor(); return;
+    }
+    /* Navigasi kiri */
+    if (c == '\x04') {
+        if (ed_cur_col > 0) {
+            ed_cur_col--;
+        } else if (ed_cur_row > 0) {
+            ed_cur_row--; ed_cur_col = ed_len[ed_cur_row];
+            if (ed_cur_row < ed_scroll) { ed_scroll = ed_cur_row; ed_render_all(); return; }
+        }
+        ed_draw_status(); ed_fix_cursor(); return;
+    }
+    /* Navigasi kanan */
+    if (c == '\x05') {
+        if (ed_cur_col < ed_len[ed_cur_row]) {
+            ed_cur_col++;
+        } else if (ed_cur_row < ed_nlines - 1) {
+            ed_cur_row++; ed_cur_col = 0;
+            if (ed_cur_row >= ed_scroll + ED_VIEW_ROWS) {
+                ed_scroll = ed_cur_row - ED_VIEW_ROWS + 1;
+                ed_render_all(); return;
+            }
+        }
+        ed_draw_status(); ed_fix_cursor(); return;
+    }
+    /* Delete (KEY_DELETE) = hapus karakter di kursor */
+    if (c == '\x06') {
+        if (ed_cur_col < ed_len[ed_cur_row]) {
+            int ln = ed_len[ed_cur_row];
+            for (j = ed_cur_col; j < ln - 1; j++)
+                ed_lines[ed_cur_row][j] = ed_lines[ed_cur_row][j+1];
+            ed_lines[ed_cur_row][ln-1] = '\0';
+            ed_len[ed_cur_row]--; ed_modified = 1;
+        } else if (ed_cur_row < ed_nlines - 1) {
+            int cur_len = ed_len[ed_cur_row];
+            int nxt_len = ed_len[ed_cur_row + 1];
+            if (cur_len + nxt_len <= ED_LINE_CAP) {
+                for (j = 0; j < nxt_len; j++)
+                    ed_lines[ed_cur_row][cur_len + j] = ed_lines[ed_cur_row+1][j];
+                ed_len[ed_cur_row] = cur_len + nxt_len;
+                ed_lines[ed_cur_row][ed_len[ed_cur_row]] = '\0';
+                for (i = ed_cur_row + 1; i < ed_nlines - 1; i++) {
+                    int k; ed_len[i] = ed_len[i+1];
+                    for (k = 0; k <= ed_len[i]; k++) ed_lines[i][k] = ed_lines[i+1][k];
+                }
+                ed_nlines--; ed_modified = 1; ed_render_all(); return;
+            }
+        }
+        ed_draw_row(ed_cur_row); ed_draw_status(); ed_fix_cursor(); return;
+    }
+    /* Backspace = hapus karakter sebelum kursor */
+    if (c == '\b') {
+        if (ed_cur_col > 0) {
+            int ln = ed_len[ed_cur_row];
+            for (j = ed_cur_col - 1; j < ln - 1; j++)
+                ed_lines[ed_cur_row][j] = ed_lines[ed_cur_row][j+1];
+            ed_lines[ed_cur_row][ln-1] = '\0';
+            ed_len[ed_cur_row]--; ed_cur_col--; ed_modified = 1;
+        } else if (ed_cur_row > 0) {
+            int prev_len = ed_len[ed_cur_row - 1];
+            int cur_len  = ed_len[ed_cur_row];
+            if (prev_len + cur_len <= ED_LINE_CAP) {
+                for (j = 0; j < cur_len; j++)
+                    ed_lines[ed_cur_row-1][prev_len+j] = ed_lines[ed_cur_row][j];
+                ed_len[ed_cur_row-1] = prev_len + cur_len;
+                ed_lines[ed_cur_row-1][ed_len[ed_cur_row-1]] = '\0';
+                for (i = ed_cur_row; i < ed_nlines - 1; i++) {
+                    int k; ed_len[i] = ed_len[i+1];
+                    for (k = 0; k <= ed_len[i]; k++) ed_lines[i][k] = ed_lines[i+1][k];
+                }
+                ed_nlines--; ed_cur_row--; ed_cur_col = prev_len; ed_modified = 1;
+                if (ed_cur_row < ed_scroll) ed_scroll = ed_cur_row;
+                ed_render_all(); return;
+            }
+        }
+        ed_draw_row(ed_cur_row); ed_draw_status(); ed_fix_cursor(); return;
+    }
+    /* Enter = sisipkan baris baru */
+    if (c == '\n') {
+        if (ed_nlines < ED_MAX_LINES) {
+            int ln = ed_len[ed_cur_row];
+            char rem[ED_LINE_CAP + 1]; int rlen = ln - ed_cur_col;
+            for (j = 0; j < rlen; j++) rem[j] = ed_lines[ed_cur_row][ed_cur_col + j];
+            rem[rlen] = '\0';
+            ed_lines[ed_cur_row][ed_cur_col] = '\0';
+            ed_len[ed_cur_row] = ed_cur_col;
+            for (i = ed_nlines; i > ed_cur_row + 1; i--) {
+                int k; ed_len[i] = ed_len[i-1];
+                for (k = 0; k <= ed_len[i]; k++) ed_lines[i][k] = ed_lines[i-1][k];
+            }
+            ed_cur_row++;
+            for (j = 0; j <= rlen; j++) ed_lines[ed_cur_row][j] = rem[j];
+            ed_len[ed_cur_row] = rlen; ed_cur_col = 0;
+            ed_nlines++; ed_modified = 1;
+            if (ed_cur_row >= ed_scroll + ED_VIEW_ROWS) ed_scroll++;
+            ed_render_all();
+        }
+        return;
+    }
+    /* Karakter biasa: sisipkan di posisi kursor */
+    if ((unsigned char)c >= 0x20 && (unsigned char)c < 0x7F) {
+        int ln = ed_len[ed_cur_row];
+        if (ln < ED_LINE_CAP) {
+            for (j = ln; j > ed_cur_col; j--)
+                ed_lines[ed_cur_row][j] = ed_lines[ed_cur_row][j-1];
+            ed_lines[ed_cur_row][ed_cur_col] = c;
+            ed_len[ed_cur_row]++; ed_cur_col++; ed_modified = 1;
+        }
+        ed_draw_row(ed_cur_row); ed_draw_status(); ed_fix_cursor();
+    }
 }
 
 /* ================================================================
@@ -1756,6 +2083,290 @@ static void shell_execute() {
         }
         set_color(GFX_WHITE, GFX_BLACK);
     }
+    /* ================================================================
+     * FONDASI AB — Alat Unix bawaan (cat, cp, mv, wc, head, tail,
+     *               find, stat, touch)
+     * ================================================================ */
+    /* cat <file> */
+    else if (str_compare(input_buffer, "cat")) {
+        print("Penggunaan: cat <file>\n");
+    }
+    else if (str_starts_with(input_buffer, "cat ")) {
+        const char *fn = input_buffer + 4;
+        while (*fn == ' ') fn++;
+        char pbuf[64];
+        fn = make_path(fn, pbuf, 64);
+        uint32_t sz;
+        const uint8_t *d = fs_read_bin(fn, &sz);
+        if (!d) {
+            set_color(GFX_LRED, GFX_BLACK);
+            print("cat: tidak ditemukan: "); print(fn); print("\n");
+            set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+        } else {
+            uint32_t i;
+            for (i = 0; i < sz; i++) {
+                char ch = (char)d[i];
+                if (ch == '\r') continue;
+                print_char(ch);
+            }
+            if (sz > 0 && (char)d[sz-1] != '\n') print_char('\n');
+        }
+    }
+    /* cp <sumber> <tujuan> */
+    else if (str_compare(input_buffer, "cp")) {
+        print("Penggunaan: cp <sumber> <tujuan>\n");
+    }
+    else if (str_starts_with(input_buffer, "cp ")) {
+        const char *args = input_buffer + 3;
+        int sp = str_find_space(args);
+        if (sp < 0) { print("Penggunaan: cp <sumber> <tujuan>\n"); last_exit_code = 1; }
+        else {
+            char srcb[64], dstb[64], sp2[64], dp2[64]; int ii;
+            for (ii = 0; ii < sp && ii < 63; ii++) srcb[ii] = args[ii];
+            srcb[sp < 63 ? sp : 63] = '\0';
+            const char *drest = args + sp + 1;
+            for (ii = 0; drest[ii] && ii < 63; ii++) dstb[ii] = drest[ii]; dstb[ii] = '\0';
+            const char *srcf = make_path(srcb, sp2, 64);
+            const char *dstf = make_path(dstb, dp2, 64);
+            uint32_t sz2; const uint8_t *d2 = fs_read_bin(srcf, &sz2);
+            if (!d2) {
+                set_color(GFX_LRED, GFX_BLACK);
+                print("cp: tidak ditemukan: "); print(srcf); print("\n");
+                set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+            } else if (!fs_write_bin(dstf, d2, sz2)) {
+                set_color(GFX_LRED, GFX_BLACK);
+                print("cp: gagal menulis ke: "); print(dstf); print("\n");
+                set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+            } else {
+                set_color(GFX_LGREEN, GFX_BLACK);
+                print("cp: "); print(srcf); print(" -> "); print(dstf); print("\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+            }
+        }
+    }
+    /* mv <lama> <baru> */
+    else if (str_compare(input_buffer, "mv")) {
+        print("Penggunaan: mv <lama> <baru>\n");
+    }
+    else if (str_starts_with(input_buffer, "mv ")) {
+        const char *args = input_buffer + 3;
+        int sp = str_find_space(args);
+        if (sp < 0) { print("Penggunaan: mv <lama> <baru>\n"); last_exit_code = 1; }
+        else {
+            char oldb[64], newb[64], op[64], np[64]; int ii;
+            for (ii = 0; ii < sp && ii < 63; ii++) oldb[ii] = args[ii];
+            oldb[sp < 63 ? sp : 63] = '\0';
+            const char *drest = args + sp + 1;
+            for (ii = 0; drest[ii] && ii < 63; ii++) newb[ii] = drest[ii]; newb[ii] = '\0';
+            int rc = mfs4_rename(make_path(oldb, op, 64), make_path(newb, np, 64));
+            if (rc == 0) {
+                set_color(GFX_LGREEN, GFX_BLACK);
+                print("mv: "); print(make_path(oldb, op, 64));
+                print(" -> "); print(make_path(newb, np, 64)); print("\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+            } else {
+                set_color(GFX_LRED, GFX_BLACK);
+                print("mv: gagal (file tidak ada atau nama sudah digunakan)\n");
+                set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+            }
+        }
+    }
+    /* wc <file> */
+    else if (str_compare(input_buffer, "wc")) {
+        print("Penggunaan: wc <file>\n");
+    }
+    else if (str_starts_with(input_buffer, "wc ")) {
+        const char *fn = input_buffer + 3;
+        while (*fn == ' ') fn++;
+        char pbuf[64]; fn = make_path(fn, pbuf, 64);
+        uint32_t sz;
+        const uint8_t *d = fs_read_bin(fn, &sz);
+        if (!d) {
+            set_color(GFX_LRED, GFX_BLACK);
+            print("wc: tidak ditemukan: "); print(fn); print("\n");
+            set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+        } else {
+            uint32_t i, lines = 0, words = 0; int in_word = 0;
+            for (i = 0; i < sz; i++) {
+                char ch = (char)d[i];
+                if (ch == '\n') lines++;
+                if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') in_word = 0;
+                else { if (!in_word) { words++; in_word = 1; } }
+            }
+            char nb[12];
+            itoa(lines, nb); print(nb); print(" ");
+            itoa(words, nb); print(nb); print(" ");
+            itoa(sz,    nb); print(nb); print(" ");
+            print(fn); print("\n");
+        }
+    }
+    /* head [-n N] <file> */
+    else if (str_compare(input_buffer, "head")) {
+        print("Penggunaan: head [-n N] <file>  (default 10 baris)\n");
+    }
+    else if (str_starts_with(input_buffer, "head ")) {
+        const char *p = input_buffer + 5; int nlns = 10;
+        while (*p == ' ') p++;
+        if (p[0] == '-' && p[1] == 'n' && p[2] == ' ') {
+            p += 3; while (*p == ' ') p++;
+            nlns = 0;
+            while (*p >= '0' && *p <= '9') { nlns = nlns * 10 + (*p - '0'); p++; }
+            while (*p == ' ') p++;
+        }
+        char pbuf[64]; p = make_path(p, pbuf, 64);
+        uint32_t sz; const uint8_t *d = fs_read_bin(p, &sz);
+        if (!d) {
+            set_color(GFX_LRED, GFX_BLACK);
+            print("head: tidak ditemukan: "); print(p); print("\n");
+            set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+        } else {
+            int cur = 0; uint32_t i;
+            for (i = 0; i < sz && cur < nlns; i++) {
+                char ch = (char)d[i]; if (ch == '\r') continue;
+                print_char(ch); if (ch == '\n') cur++;
+            }
+        }
+    }
+    /* tail [-n N] <file> */
+    else if (str_compare(input_buffer, "tail")) {
+        print("Penggunaan: tail [-n N] <file>  (default 10 baris)\n");
+    }
+    else if (str_starts_with(input_buffer, "tail ")) {
+        const char *p = input_buffer + 5; int nlns = 10;
+        while (*p == ' ') p++;
+        if (p[0] == '-' && p[1] == 'n' && p[2] == ' ') {
+            p += 3; while (*p == ' ') p++;
+            nlns = 0;
+            while (*p >= '0' && *p <= '9') { nlns = nlns * 10 + (*p - '0'); p++; }
+            while (*p == ' ') p++;
+        }
+        char pbuf[64]; p = make_path(p, pbuf, 64);
+        uint32_t sz; const uint8_t *d = fs_read_bin(p, &sz);
+        if (!d) {
+            set_color(GFX_LRED, GFX_BLACK);
+            print("tail: tidak ditemukan: "); print(p); print("\n");
+            set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+        } else {
+            uint32_t i; int total_nl = 0;
+            for (i = 0; i < sz; i++) if ((char)d[i] == '\n') total_nl++;
+            int skip = total_nl - nlns; if (skip < 0) skip = 0;
+            int skipped = 0;
+            for (i = 0; i < sz; i++) {
+                char ch = (char)d[i]; if (ch == '\r') continue;
+                if (skipped < skip) { if (ch == '\n') skipped++; continue; }
+                print_char(ch);
+            }
+        }
+    }
+    /* find <pola> */
+    else if (str_compare(input_buffer, "find")) {
+        print("Penggunaan: find <pola>  (cari file yang mengandung pola)\n");
+    }
+    else if (str_starts_with(input_buffer, "find ")) {
+        const char *pat = input_buffer + 5;
+        while (*pat == ' ') pat++;
+        static char find_list[2048];
+        int n = fs_list_buf(find_list, 2048);
+        if (n <= 0) {
+            set_color(GFX_LGRAY, GFX_BLACK); print("find: filesystem kosong\n");
+            set_color(GFX_WHITE, GFX_BLACK);
+        } else {
+            int fi = 0, found = 0;
+            while (find_list[fi]) {
+                char name[64]; int ni = 0;
+                while (find_list[fi] && find_list[fi] != '\n' && ni < 63)
+                    name[ni++] = find_list[fi++];
+                name[ni] = '\0';
+                if (find_list[fi] == '\n') fi++;
+                if (ni == 0) continue;
+                int pi, nn, contains = 0;
+                for (nn = 0; name[nn] && !contains; nn++) {
+                    int match = 1; pi = 0;
+                    while (pat[pi] && name[nn+pi]) {
+                        if (pat[pi] != name[nn+pi]) { match = 0; break; }
+                        pi++;
+                    }
+                    if (match && pat[pi] == '\0') contains = 1;
+                }
+                if (contains) { print(name); print("\n"); found++; }
+            }
+            if (!found) {
+                set_color(GFX_LGRAY, GFX_BLACK);
+                print("find: tidak ada hasil untuk: "); print(pat); print("\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+            }
+        }
+    }
+    /* stat <file> */
+    else if (str_compare(input_buffer, "stat")) {
+        print("Penggunaan: stat <file>\n");
+    }
+    else if (str_starts_with(input_buffer, "stat ")) {
+        const char *fn = input_buffer + 5;
+        while (*fn == ' ') fn++;
+        char pbuf[64]; fn = make_path(fn, pbuf, 64);
+        MFS4Stat st;
+        if (mfs4_stat(fn, &st) != 0) {
+            set_color(GFX_LRED, GFX_BLACK);
+            print("stat: tidak ditemukan: "); print(fn); print("\n");
+            set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+        } else {
+            char nb[12];
+            print("  Nama  : "); print(fn); print("\n");
+            print("  Tipe  : ");
+            if (st.type == MFS4_TYPE_DIR) print("direktori\n"); else print("file\n");
+            print("  Ukuran: "); itoa(st.size, nb); print(nb); print(" byte\n");
+            { /* perms sebagai hex */
+              char hx[5]; int hxi = 0;
+              uint16_t pv = (uint16_t)st.perms;
+              const char hxd[] = "0123456789ABCDEF";
+              hx[hxi++] = hxd[(pv >> 12) & 0xF]; hx[hxi++] = hxd[(pv >>  8) & 0xF];
+              hx[hxi++] = hxd[(pv >>  4) & 0xF]; hx[hxi++] = hxd[(pv      ) & 0xF];
+              hx[hxi]   = '\0';
+              print("  Perms : 0x"); print(hx); print("\n");
+            }
+            print("  mtime : "); itoa(st.mtime, nb); print(nb); print(" ticks\n");
+        }
+    }
+    /* touch <file> */
+    else if (str_compare(input_buffer, "touch")) {
+        print("Penggunaan: touch <file>\n");
+    }
+    else if (str_starts_with(input_buffer, "touch ")) {
+        const char *fn = input_buffer + 6;
+        while (*fn == ' ') fn++;
+        char pbuf[64]; fn = make_path(fn, pbuf, 64);
+        uint32_t sz2; const uint8_t *ex = fs_read_bin(fn, &sz2);
+        if (ex) {
+            set_color(GFX_LGRAY, GFX_BLACK);
+            print("touch: "); print(fn); print(" (sudah ada, tidak berubah)\n");
+            set_color(GFX_WHITE, GFX_BLACK);
+        } else {
+            if (fs_write(fn, "")) {
+                set_color(GFX_LGREEN, GFX_BLACK);
+                print("touch: "); print(fn); print(" dibuat\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+            } else {
+                set_color(GFX_LRED, GFX_BLACK);
+                print("touch: gagal membuat file\n");
+                set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+            }
+        }
+    }
+    /* ================================================================
+     * FONDASI AE — Text Editor: edit <file>
+     * ================================================================ */
+    else if (str_compare(input_buffer, "edit")) {
+        print("Penggunaan: edit <file>\n");
+    }
+    else if (str_starts_with(input_buffer, "edit ")) {
+        const char *fn = input_buffer + 5;
+        while (*fn == ' ') fn++;
+        char pbuf[64]; fn = make_path(fn, pbuf, 64);
+        ed_load(fn);
+        editor_active = 1;
+        ed_render_all();
+    }
     else {
         /* Cek apakah ada operator ' | ' (pipe inline) */
         int pipe_pos = -1;
@@ -1880,6 +2491,8 @@ void shell_init() {
 }
 
 void shell_process_char(char c){
+    /* Fondasi AE: Saat editor aktif, alihkan semua input ke editor */
+    if (editor_active) { ed_process_char(c); return; }
     if (c=='\n'){                           /* enter ditekan*/
         input_buffer[input_len] = '\0';     /* tutup string */
 
