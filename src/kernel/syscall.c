@@ -732,6 +732,66 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
     }
 
     // ---------------------------------------------------------------
+    // Fondasi AX — file-backed mmap / munmap
+    // ---------------------------------------------------------------
+
+    // SYS_MMAP_FILE(98): mmap file dari fd.
+    // ebx=fd, edx=n_pages (0=auto dari ukuran file) → VA awal, 0=gagal
+    if (eax == SYS_MMAP_FILE) {
+        int fd = (int)ebx;
+        int tid = task_get_current();
+        uint64_t *pdir = task_get_page_dir(tid);
+        if (!pdir) return 0;
+
+        /* Seek ke awal, lalu baca sampai EOF */
+        vfs_seek(tid, fd, 0);
+
+        static uint64_t mmap_file_next_va = 0xB00000ULL;  /* terpisah dari anonim */
+        uint64_t va_base = mmap_file_next_va;
+
+        /* Baca file 4096 byte per halaman; stop saat vfs_read < 4096 */
+        uint64_t max_pages = (uint64_t)edx;
+        if (max_pages == 0) max_pages = 256;  /* auto: max 1MB */
+        if (max_pages > 256) max_pages = 256;
+
+        uint64_t npages = 0;
+        uint64_t i;
+        for (i = 0; i < max_pages; i++) {
+            uint64_t frame = pmm_alloc_frame();
+            if (!frame) break;
+            uint8_t *fp = (uint8_t *)frame;
+            /* zero-fill */
+            uint32_t b; for (b = 0; b < 4096; b++) fp[b] = 0;
+            /* Baca satu halaman dari file */
+            int nr = vfs_read(tid, fd, (char *)fp, 4096);
+            vmm_map_page(pdir, va_base + i * 0x1000ULL, frame, 7); /* P+RW+User */
+            npages++;
+            if (nr < 4096) break;  /* EOF */
+        }
+        if (npages == 0) return 0;
+        mmap_file_next_va += (npages + 1) * 0x1000ULL;  /* +1 guard page */
+        return va_base;
+    }
+
+    // SYS_MUNMAP_FILE(99): bebaskan file-backed mapping; sama seperti MUNMAP
+    if (eax == SYS_MUNMAP_FILE) {
+        uint64_t va = ebx & ~(uint64_t)0xFFF;
+        uint64_t n  = edx;
+        if (n == 0) return 0;
+        int tid = task_get_current();
+        uint64_t *pdir = task_get_page_dir(tid);
+        if (!pdir) return 0;
+        uint64_t i;
+        for (i = 0; i < n; i++) {
+            uint64_t page_va = va + i * 0x1000ULL;
+            uint64_t phys = vmm_get_phys(pdir, page_va);
+            vmm_unmap_page(pdir, page_va);
+            if (phys >= 768ULL * 4096) pmm_free_frame(phys);
+        }
+        return 0;
+    }
+
+    // ---------------------------------------------------------------
     // F-R2 — VFS pipe/net/tty via file descriptor
     // ---------------------------------------------------------------
 

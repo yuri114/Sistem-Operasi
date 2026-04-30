@@ -89,11 +89,15 @@ static int cursor_sx = 0, cursor_sy = 0;
 
 static void cursor_erase(void) {
     if (!cursor_visible || !gfx_lfb_addr) return;
-    int row, col;
-    for (row = 0; row < CSIZE; row++)
+    volatile uint32_t *fb = (volatile uint32_t *)(uintptr_t)gfx_lfb_addr;
+    int row;
+    for (row = 0; row < CSIZE; row++) {
+        volatile uint32_t *fb_row = fb + (uint32_t)((cursor_sy + row) * SCREEN_W + cursor_sx);
+        uint32_t          *bg_row = cursor_bg + row * CSIZE;
+        int col;
         for (col = 0; col < CSIZE; col++)
-            fb_put(cursor_sx + col, cursor_sy + row,
-                   cursor_bg[row * CSIZE + col]);
+            fb_row[col] = bg_row[col];
+    }
     cursor_visible = 0;
 }
 
@@ -130,23 +134,20 @@ static void cursor_draw(int x, int y) {
     cursor_sx = x;
     cursor_sy = y;
 
-    /* Simpan latar belakang */
-    int row, col;
-    for (row = 0; row < CSIZE; row++)
-        for (col = 0; col < CSIZE; col++)
-            cursor_bg[row * CSIZE + col] = fb_get(x + col, y + row);
-
-    /* Gambar outline hitam dahulu (di bawah), lalu kursor putih */
+    volatile uint32_t *fb = (volatile uint32_t *)(uintptr_t)gfx_lfb_addr;
+    /* Single pass: simpan background + gambar outline + gambar fill */
+    int row;
     for (row = 0; row < CSIZE; row++) {
+        uint16_t ob = cursor_outline[row];
+        uint16_t cb = cursor_bmp[row];
+        volatile uint32_t *fb_row = fb + (uint32_t)((y + row) * SCREEN_W + x);
+        uint32_t          *bg_row = cursor_bg + row * CSIZE;
+        int col;
         for (col = 0; col < CSIZE; col++) {
-            if (cursor_outline[row] & (0x8000u >> col))
-                fb_put(x + col, y + row, GFX_BLACK);
-        }
-    }
-    for (row = 0; row < CSIZE; row++) {
-        for (col = 0; col < CSIZE; col++) {
-            if (cursor_bmp[row] & (0x8000u >> col))
-                fb_put(x + col, y + row, GFX_WHITE);
+            uint16_t bit = (uint16_t)(0x8000u >> col);
+            bg_row[col] = fb_row[col];          /* simpan background */
+            if      (cb & bit) fb_row[col] = GFX_WHITE;  /* fill kursor */
+            else if (ob & bit) fb_row[col] = GFX_BLACK;  /* outline     */
         }
     }
     cursor_visible = 1;

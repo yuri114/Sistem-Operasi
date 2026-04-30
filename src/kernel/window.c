@@ -246,8 +246,10 @@ static void wm_draw_window(int id) {
             fill_rect(rx, ry, rw2, rh2, re->color);
     }
 
-    /* Blit pixel content buffer (coretan paint, dll) — di atas rect fills */
-    if (w->pixel_buf) {
+    /* Blit pixel content buffer (coretan paint, dll) — di atas rect fills.
+     * Dilewati saat drag aktif: terlalu mahal untuk update 100Hz, dan isi
+     * konten tidak berubah saat di-drag. Tampilkan konten penuh saat release. */
+    if (w->pixel_buf && id != drag_id) {
         int bw = w->pb_w < ca_w ? w->pb_w : ca_w;
         int bh = w->pb_h < ca_h ? w->pb_h : ca_h;
         for (int py2 = 0; py2 < bh; py2++) {
@@ -259,7 +261,8 @@ static void wm_draw_window(int id) {
         }
     }
 
-    /* Replay backing store teks */
+    /* Replay backing store teks — dilewati saat drag (konten tidak berubah) */
+    if (id != drag_id) {
     for (int t = 0; t < w->text_count; t++) {
         WinText *te = &w->text_buf[t];
         int sx = ca_x + te->x;
@@ -268,6 +271,7 @@ static void wm_draw_window(int id) {
         if (mpx > 0 && sy >= ca_y && sy + 8 <= ca_y + ca_h)
             wm_drawstr(sx, sy, te->s, te->fg, te->bg, mpx);
     }
+    } /* end if id != drag_id */
 
     /* Render tombol (button widget) */
     for (int b = 0; b < w->btn_count; b++) {
@@ -317,6 +321,24 @@ static void wm_draw_window(int id) {
                 }
             }
         }
+    }
+}
+
+/* Gambar ikon di desktop — hanya yang overlap dengan region (rx,ry,rw,rh) */
+static void draw_desktop_icons_region(int rx, int ry, int rw, int rh) {
+    for (int i = 0; i < DESKTOP_ICON_COUNT; i++) {
+        const DesktopIcon *ic = &desktop_icons[i];
+        int ix = ic->x, iy = ic->y;
+        /* Bounding box ikon: DESKTOP_ICON_W × 42 (30px kotak + 12px label) */
+        if (ix >= rx + rw || ix + DESKTOP_ICON_W <= rx ||
+            iy >= ry + rh || iy + 42             <= ry)
+            continue;   /* tidak overlap — lewati */
+        fill_rect(ix, iy, DESKTOP_ICON_W, 30, ic->color);
+        fill_rect(ix, iy, DESKTOP_ICON_W, 1,  GFX_WHITE);
+        fill_rect(ix, iy, 1, 30, GFX_WHITE);
+        fill_rect(ix + DESKTOP_ICON_W - 1, iy, 1, 30, GFX_DGRAY);
+        fill_rect(ix, iy + 29, DESKTOP_ICON_W, 1, GFX_DGRAY);
+        wm_drawstr(ix + 2, iy + 32, ic->label, GFX_WHITE, WM_DESKTOP_BG, DESKTOP_ICON_W);
     }
 }
 
@@ -370,7 +392,7 @@ static void wm_redraw_region(int id, int rx, int ry, int rw, int rh) {
     } else {
         fill_rect(rx, ry, rw, rh, WM_DESKTOP_BG);
     }
-    draw_desktop_icons();
+    draw_desktop_icons_region(rx, ry, rw, rh);
     /* Redraw window lain yang berada di bawah id dan overlap region */
     for (int i = 0; i < z_count; i++) {
         int zid = z_order[i];

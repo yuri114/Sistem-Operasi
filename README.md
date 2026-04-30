@@ -1,14 +1,14 @@
-# Oria OS
+﻿# Oria OS
 
-Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM) dan C, berjalan di **64-bit Long Mode**, dengan layar GUI 1920×1080 32bpp, multitasking preemptive, filesystem sendiri, dan window manager sederhana.
+Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM) dan C, berjalan di **64-bit Long Mode**, dengan layar GUI 1920×1080 32bpp, multitasking preemptive, filesystem sendiri, dan window manager lengkap.
 
-> Proyek ini adalah OS riil yang berjalan di QEMU — bukan emulasi, bukan simulator — dibangun sepenuhnya dari BIOS boot hingga GUI multi-window.
+> Proyek ini adalah OS riil yang berjalan di QEMU — bukan emulasi, bukan simulator — dibangun sepenuhnya dari BIOS boot hingga GUI multi-window dengan jaringan, threading, dan user accounts.
 
 ---
 
 ## Tangkapan Layar
 
-> *(jalankan `.\build.ps1 run` untuk melihat tampilan)*
+> *(jalankan `.\build.ps1 run` untuk melihat tampilan langsung)*
 
 ---
 
@@ -18,587 +18,227 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 |---|---|
 | Arsitektur | x86_64 — IA-32e Long Mode (64-bit) |
 | Boot | MBR 512-byte → Protected Mode → Long Mode |
-| Resolusi | 1920×1080 @ 32bpp (VBE Linear Framebuffer, ~8.3MB) |
-| Kernel | ~264 KB binary |
-| Memory Map | 4-level paging, identity-mapped 4GB, heap kernel 6MB (0x100000–0x6FFFFF) |
-| Multitasking | Round-robin preemptive, hingga **32** task, PIT IRQ0 @ 1000 Hz |
+| Resolusi | 1920×1080 @ 32bpp (VBE Linear Framebuffer, ~8.3 MB) |
+| Kernel | ~555 KB binary |
+| Memory Map | 4-level paging, identity-mapped 4 GB, heap kernel 6 MB |
+| Multitasking | Priority-based preemptive, hingga **32** task, PIT IRQ0 @ 1000 Hz |
 | Ring | Kernel Ring-0 / User Ring-3 (isolasi penuh per-proses) |
-| Filesystem | MFS3 — 64 file × 64KB, pointer-based, dirty/tmpfs/perms/timestamp, ATA PIO |
-| Syscall | `SYSCALL/SYSRET` (IA32_LSTAR MSR) — **73 syscall** tersedia |
+| Filesystem | MFS3/MFS4 — 64 file × 64 KB, inode layer, symlink, hardlink |
+| Syscall | `SYSCALL/SYSRET` (IA32_LSTAR MSR) — **99 syscall** tersedia |
+| Networking | RTL8139, IPv4/IPv6, TCP/UDP, DHCP, DNS, HTTP, HTTPS/TLS 1.3 |
 | Build | WSL + `x86_64-linux-gnu-gcc` + NASM, output `os.img` binary raw |
 | Emulator | QEMU `qemu-system-x86_64` |
 
 ---
 
-## Fitur yang Sudah Berjalan
+## Fitur
 
-### Kernel Core
+### Boot & Kernel Core
+
 - **Boot 64-bit**: BIOS → Protected Mode → 4-level paging (PML4) → Long Mode
 - **GDT 64-bit**: kernel CS/DS (ring-0), user CS/DS (ring-3), TSS64 (16-byte descriptor)
 - **IDT 64-bit**: 16-byte gate descriptor, exception 0–14, IRQ 0/1/12
-- **Heap kernel**: first-fit allocator dengan coalescing free, interrupt-safe (`pushfq`/`popfq`), 6MB (0x100000–0x6FFFFF)
-- **PMM**: bitmap 16384 frame (64MB), frame 0–767 pre-reserved untuk kernel
+- **Heap kernel**: first-fit allocator + coalescing free, interrupt-safe, 6 MB (0x100000–0x6FFFFF)
+- **PMM**: bitmap 16384 frame (64 MB), frame 0–767 pre-reserved untuk kernel
 - **VMM 4-level**: `vmm_create_page_dir`, `vmm_map_page` (walk PML4→PDPT→PD→PT), `vmm_free_user_memory`
 - **Demand paging**: `#PF` handler — page not-present di user space → `pmm_alloc_frame` + zero-fill + map, retry
+- **Stack guard page**: zona 0x5FE000–0x5FEFFF tidak dipetakan → stack overflow → `task_exit()`
+- **Serial debug**: COM1 output ke QEMU `-serial stdio`; kernel debugger: `dbg regs`, `dbg mem`, `dbg trace`, breakpoint
 
-### Multitasking
-- **Preemptive round-robin** via PIT IRQ0 (1000 Hz, 1 tick = 1 ms)
-- **Context switch 64-bit**: 15 register GPR (rax–r15) disimpan di stack, iretq frame
-- **TSS64**: `rsp0` diperbarui setiap task switch → stack ring-0 per-task yang benar
-- **Ring-3 isolation**: setiap proses memiliki PML4 sendiri + RSP user di 0x600000
+---
+
+### Multitasking & Proses
+
+- **Preemptive priority scheduler**: PIT IRQ0 (1000 Hz); skor = `priority×4 − nice + age_ticks÷8`; aging mencegah starvation
+- **Nice value**: `renice <nice> <pid>` — nilai −20 (tinggi) s/d +19 (rendah); default 0
+- **Context switch 64-bit**: 15 GPR (rax–r15) disimpan di stack, iretq frame; TSS64 rsp0 diperbarui setiap switch
+- **Ring-3 isolation**: setiap proses punya PML4 sendiri + RSP user di 0x600000
 - **ELF64 loader**: `vmm_map_page` per segment, load address 0x400000
-- **task_sleep(ms)**: sleep akurat berbasis tick (TASK_SLEEPING + wake_tick)
+- **fork() + Copy-on-Write**: `vmm_copy_cow()` tandai page RO+COW; write fault → alokasi frame baru + memcpy; `frame_cow_cnt` mencegah double-free
+- **exec_replace()**: muat ELF baru ke PML4 baru, switch CR3, bebaskan PML4 lama, langsung iretq
+- **SMP multi-core**: LAPIC INIT/SIPI, ACPI MADT parser, AP trampoline (real→protected→long mode), LAPIC timer per-AP 10 ms
+- **Per-core scheduler**: BSP ambil task `is_user==1`; AP ambil `is_user==0` (atau work-steal)
+- **Sinyal**: `SIGINT(2)`, `SIGTERM(15)`, `SIGKILL(9)` — `task_send_signal()`, `Ctrl+C` → SIGINT proses foreground
+- **Wait/exit**: `task_wait()`, `waitpid_ex()` — tunggu proses selesai, ambil exit code
+- **Shell**: `ps`, `kill`, `exec`, `setprio`, `renice`, `cpuinfo`, `taskstat`
 
-### Filesystem — MFS3
-- **MFS3**: custom raw filesystem, 64 file × 64KB per file, pointer-based (data di heap)
-- **Fitur lanjutan**: dirty bit + `fs_flush()`, tmpfs flag (ramdisk), permission bits (R/W/X/DIR), timestamp (ctime/mtime)
-- **Subdirektori**: `fs_mkdir()`, `fs_list_dir()`, `fs_get_perms()`, `fs_set_perms()`
-- **ATA PIO**: baca/tulis sector ke disk image (`disk.img`), auto-migrate MFS2→MFS3
-- **Syscall**: `SYS_FS_READ/WRITE/LIST/DELETE/SYNC/TMPWRITE/MKDIR`
+---
 
-### Driver & I/O
-- **VBE** (Bochs/QEMU stdvga): deteksi LFB via PCI BAR0, set mode 1920×1080×32
-- **Keyboard**: PS/2 scancode → ASCII, ring buffer, tab-completion di shell, Ctrl/Alt/CapsLock/F1-F10
-- **Mouse**: PS/2 protokol 3-byte, koordinat relatif + tombol L/R
-- **PIC**: cascade 8259A, remapped IRQ 0–15 ke INT 32–47
-- **PIT**: timer 1000 Hz, `get_ticks()` (millisecond resolution)
-- **ATA**: PIO mode + Bus Master DMA (BM-IDE via PCI BAR4), polling BSY
-- **Serial**: COM1 debug output → QEMU `-serial stdio`
+### Thread
 
-### IPC & Sinkronisasi
-- **Message passing**: `SYS_MSG_SEND` / `SYS_MSG_RECV`
-- **Semaphore (blocking sejati)**: `SYS_SEM_ALLOC/WAIT/POST/FREE` — `sem_wait()` memanggil `task_block()` saat value==0, `sem_post()` memanggil `task_unblock(waiter)`; SEM_MAX=16
-- **Pipe**: anonymous pipe buffer kernel + named pipe (`SYS_PIPE_NAMED`)
-- **Shared memory**: `shm_create/attach/detach`, dipetakan ke VA 0x500000+slot×4096 (`SYS_SHM_CREATE/ATTACH/DETACH`)
+- **Thread sejati**: berbagi `page_dir` dengan proses induk; stack isolasi per-thread di VA `0x700000 + tid×0x5000`
+- **Stack 16 KB per-thread** + guard page pertama (→ `#PF` "THREAD STACK OVERFLOW")
+- **Demand-paged thread stack**: tidak alokasi fisik di awal — tumbuh saat `#PF`
+- **Thread join**: `task_wait(tid)` — tunggu thread selesai
+- **Thread naming**: `SYS_THREAD_SET_NAME` — tampil di `ps` dengan label `[T:pid]`
+- **Thread-local storage**: satu halaman TLS per thread di VA `0x800000 + tid×0x1000`; `FS_BASE` MSR diperbarui setiap context switch
+- **Futex**: `futex_wait(addr, expected)` / `futex_wake(addr, n)` — mutex ringan tanpa syscall saat tidak ada kontestasi (CAS atomik)
+- **Mutex user-space**: `mutex_lock/unlock` via CAS + `futex_wait/wake`; thread-safe malloc pakai mutex ini
+- **Condition variable**: `cv_wait/signal/broadcast`, FIFO ring waiter (max 4), atomik release mutex saat wait
+- **Semaphore kernel**: `SYS_SEM_ALLOC/WAIT/POST/FREE`, blocking sejati (bukan busy-wait), FIFO waiter (max 4)
+- **Syscall**: `SYS_THREAD_CREATE(64)`, `SYS_THREAD_EXIT(65)`, `SYS_THREAD_JOIN(66)`, `SYS_THREAD_SET_NAME(67)`, `SYS_COND_*(68-72)`, `SYS_FUTEX_*(89-90)`, `SYS_GET_TLS(91)`
+
+---
+
+### Memory Management
+
+- **`mmap(n_pages)`**: alokasi halaman anonim zero-fill, bump allocator mulai VA `0x900000`
+- **`munmap(addr, n_pages)`**: `vmm_unmap_page` + `pmm_free_frame` per halaman
+- **`mmap_file(fd, n_pages)`**: map isi file ke VA `0xB00000+`; baca file langsung ke frame fisik
+- **`munmap_file(addr, n_pages)`**: bebaskan mapping file-backed
+- **`SYS_BRK(62)`**: user heap `malloc` via bump allocator (0x400000+)
+- **Shared memory**: `shm_create/attach/detach`, 8 region × 4 KB, VA `0x500000+slot×4096`
+- **Meminfo**: `meminfo` — tampilkan total/used/free PMM frame
+
+---
+
+### Filesystem
+
+- **MFS3**: custom raw filesystem, 64 file × 64 KB, pointer-based, dirty bit, tmpfs, permission R/W/X/DIR, timestamp ctime/mtime, ATA PIO
+- **MFS4 inode layer**: 128 inode in-memory di atas MFS3; tipe FILE/DIR/SYMLINK; `mfs4_symlink`, `mfs4_hardlink`, `mfs4_stat`, `mfs4_listdir`, `mfs4_unlink`
+- **Persist MFS4**: inode table flush ke disk (LBA 513–549), reload saat boot; `sync` menyimpan MFS3+MFS4 sekaligus
+- **Rename**: `mfs4_rename(old, new)` — update inode + file MFS3 via `fs_rename()`
+- **Subdirektori**: `mkdir`, `ls <dir>`, `cd`, `pwd`; akses `dir/file.txt`
+- **EXT2 read-only**: baca superblock/inode/data dari ATA secondary; shell: `ext2ls`, `ext2read <path>`
+- **VFS fd**: fd 0=stdin, 1=stdout, 2=stderr; `VFS_TYPE_FILE/PIPE/NET/TTY/STDIN/STDOUT`; syscall `SYS_OPEN(56)`, `SYS_READ_FD(57)`, `SYS_WRITE_FD(58)`, `SYS_CLOSE_FD(59)`
+- **Non-blocking fd**: `VFS_O_NONBLOCK` — `vfs_read()` return `EAGAIN` jika tidak ada data; `SYS_FCNTL(93)`
+- **poll()**: `SYS_POLL(94)` — `POLLIN/POLLOUT/POLLERR`, timeout ms; `vfs_fd_ready()` per tipe
+- **Shell**: `ls`, `read`, `write`, `del`, `mkdir`, `chmod`, `rename`, `touch`, `cat`, `cp`, `mv`, `sync`, `open`, `fread`, `fwrite`, `fclose`
+
+---
+
+### IPC & Komunikasi Antar Proses
+
+- **Message passing**: `SYS_MSG_SEND(7)` / `SYS_MSG_RECV(8)` — mailbox per-task, payload 56 byte
+- **Message queue (MQ)**: `SYS_MQ_SEND(60)` / `SYS_MQ_RECV(61)` — per-task mailbox 8 slot
+- **Pipe anonymous**: `SYS_PIPE2(77)` — 2 fd (read/write end), blocking, EOF saat writer tutup
+- **Pipe named**: `SYS_PIPE_NAMED(52)` — nama + kernel ring buffer
+- **Shell pipeline** `|`: `prog1 | prog2` — routing stdout prog1 ke stdin prog2 via VFS pipe; EOF propagation
+- **Shell redirect**: `exec prog > file` (stdout ke file), `exec prog < file` (stdin dari file)
+- **Shared memory**: `SYS_SHM_CREATE(53)`, `SYS_SHM_ATTACH(54)`, `SYS_SHM_DETACH(55)`
+
+---
+
+### Virtual Terminals
+
+- **6 terminal virtual** (tty0–tty5): setiap VT menyimpan buffer teks 160×60, warna, dan posisi kursor sendiri
+- **Ctrl+Alt+F1..F6**: beralih ke tty0–tty5 dari keyboard
+- **`vt <n>`**: beralih terminal dari shell (n = 0–5)
+- **Render on switch**: blit buffer teks VT baru ke layar secara langsung
+
+---
 
 ### GUI & Window Manager
-- **Graphics**: `draw_pixel`, `fill_rect`, `draw_line`, font 8×16 pixel (row-doubled)
-- **Terminal console**: 160×60 karakter, font 8×16, latar hitam solid, ANSI escape
-- **GUI mode**: aktifkan via perintah `gui` di shell; `g_gui_mode` flag memisahkan routing keyboard
-- **Window Manager**: hingga 16 window simultan, drag, close, minimize/restore
-- **Drag/resize optimasi**: partial redraw via `wp_blit_region()` + `wm_redraw_region()` — hanya area yang berubah yang digambar ulang, tanpa flicker
+
+- **Graphics primitif**: `draw_pixel`, `fill_rect`, `draw_line`, font 8×16 pixel
+- **Terminal konsol**: 160×60 karakter, font 8×16 (row-doubled), scroll via `g_textbuf`
+- **Wallpaper**: dimuat dari `wallpaper.img` (960×540 BGRA32), di-scale 2× ke 1920×1080; hanya di GUI mode
+- **Window Manager**: hingga 16 window simultan; drag, close, minimize/restore, resize (handle kanan-bawah)
+- **Optimasi rendering**: partial redraw `wp_blit_region()` + `wm_redraw_region()` hanya area berubah; kursor 16×16 single-pass (save+outline+fill); skip `pixel_buf` saat drag
 - **Taskbar**: quick-launch (Paint/Calc/Note/Files/Term), jam real-time HH:MM:SS
-- **Desktop icons**: klik untuk buka aplikasi
-- **Wallpaper**: dimuat dari disk gambar `wallpaper.img` (960×540 BGRA32, di-scale 2× ke 1920×1080), hanya tampil di GUI mode
-- **Kursor mouse**: 16×16 pixel arrow cursor dengan outline
-- **Tema**: Catppuccin Mocha — titlebar `#2D2D2D`, tombol close pink `#F38BA8`, teks `#CDD6F4`
-
-### Networking — Tahap G
-- **RTL8139 driver**: PCI scan (vendor 0x10EC / device 0x8139), I/O port access, TX 4-descriptor round-robin, RX ring 8K (polling, tanpa IRQ)
-- **Ethernet**: bangun/parse frame 14-byte header, ethertype ARP/IPv4
-- **ARP**: request/reply, cache 8 slot IP→MAC, jawab ARP request untuk IP kita
-- **IPv4**: header 20B, TTL=64, checksum 16-bit one's complement
-- **ICMP**: echo request (type 8) / echo reply (type 0), RTT diukur via `get_ticks()` (1ms)
-- **Routing**: subnet check → direct atau via gateway (10.0.2.2)
-- **QEMU SLIRP**: `-netdev user,id=net0 -device rtl8139,netdev=net0`
-  - Guest IP: `10.0.2.15` (hardcoded), Gateway: `10.0.2.2`, DNS: `10.0.2.3`
-- **UDP**: `net_udp_send()` — kirim datagram tanpa koneksi; shell: `udp_send <ip> <port> <pesan>`
-- **TCP stack**: 3-way handshake (SYN→SYN-ACK→ACK), PSH/ACK data, FIN/ACK teardown, RST detection
-  - API: `net_tcp_connect(ip, port)`, `net_tcp_send(id, data, len)`, `net_tcp_recv(id, buf, max)`, `net_tcp_close(id)`
-  - 4 koneksi simultan (`TCP_MAX_CONN=4`), RX ring buffer 1KB per koneksi
-  - Shell: `tcp_get <ip> <port> [path]` — kirim HTTP GET, cetak response ke layar
-  - **Terverifikasi**: HTTP GET ke `10.0.2.2:8080` (Python HTTP server di host) → `HTTP/1.0 200 OK` + body 2403 bytes
-
-- **Per-core scheduler**: setiap CPU punya scheduler sendiri, `cpu_id` per-task (-1=bebas, 0=BSP, 1+=AP)
-- **Work stealing + direct assignment (Tahap M)**: task kernel di-assign ke AP saat dibuat; AP dua-pass: cari direct-assigned → fallback steal
-- **LAPIC Timer per-AP**: INT 0x40, 10ms; kalibrasi PIT oleh BSP, AP pakai hasil langsung
-- **AP background task**: `smp_background_task` — increment `smp_ap_ticks` tiap ~500ms; terverifikasi via `cpuinfo`
-- **Spinlock**: `task_lock` melindungi claim/release cpu_id antar BSP dan AP
-- **Shell**: `ps` kolom CPU, `cpuinfo` ap ticks, `taskstat` distribusi per-CPU
-
-### VFS — Tahap J
-- **File descriptor per-task**: tabel `fd[MAX_TASKS][8]`; fd=0 stdin, fd=1 stdout, fd=2 stderr
-- **Backends**: `VFS_TYPE_STDIN` (keyboard), `VFS_TYPE_STDOUT` (screen), `VFS_TYPE_FILE` (MFS3 dengan offset tracking)
-- **Syscall**: `SYS_OPEN(56)`, `SYS_READ_FD(57)`, `SYS_WRITE_FD(58)`, `SYS_CLOSE_FD(59)`
-- **Integrasi task**: `vfs_init_task` saat `task_create_user`, `vfs_close_all` saat `task_exit`
-- **Shell**: `open <file>`, `fread <fd>`, `fwrite <fd> <teks>`, `fclose <fd>`
-- **lib.h**: `sys_open`, `sys_read_fd`, `sys_write_fd`, `sys_close_fd`
-
-### Guard Page — Tahap K
-- **Stack overflow detection**: zona 0x5FE000-0x5FEFFF tidak pernah dipetakan
-- **Page fault handler**: CR2 di guard zone → cetak "== STACK OVERFLOW ==" layar merah → `task_exit()`
-- **Tanpa pra-alokasi**: demand paging menangani stack normal; guard zone hanya dibiarkan kosong
-
-### Message Queue — Tahap L
-- **Per-task mailbox**: `mailbox[MAX_TASKS][8]` pesan; payload max 56 byte per pesan
-- **API kernel**: `mq_send(dst, data, len, from)`, `mq_recv(dst, buf, max, from_out)`, `mq_pending(pid)`
-- **Syscall**: `SYS_MQ_SEND(60)` (ebx=dst_pid, edx=str), `SYS_MQ_RECV(61)` (ebx=ptr MqRecvResult)
-- **Shell**: `mq_send <pid> <pesan>`, `mq_recv`
-- **lib.h**: `mq_send`, `mq_recv` + struct `MqRecvResult`
-
-### User-space Threading — Tahap N
-- **Thread sejati berbagi address space**: setiap thread pakai `page_dir` yang sama dengan proses induk
-- **Stack isolasi per-thread**: user stack ring-3 di VA `0x700000 + tid×0x5000` (16KB/thread + guard page), kernel stack di slot `stacks_base` masing-masing
-- **Argumen thread via RDI**: slot k=5 (rdi) pada initial iretq frame diisi `arg` — `thread_fn(arg)` langsung bekerja
-- **Thread-safe exit**: `task_exit()` cek `is_thread` — jika 1, skip `vfs_close_all` & `vmm_free_user_memory` (page_dir milik proses)
-- **Join via mekanisme waiter**: `task_wait(tid)` existing dipakai ulang untuk `thread_join`
-- **Syscall**: `SYS_THREAD_CREATE(64)`, `SYS_THREAD_EXIT(65)`, `SYS_THREAD_JOIN(66)`
-- **lib.h API**: `thread_create(fn, arg)`, `thread_exit()`, `thread_join(tid)` — inline SYSCALL
-- **Demo**: `threadtest` — spawn 3 thread paralel, join semua, verifikasi shared counter
-
-### Fondasi Threading — Fondasi O
-- **Thread stack frame leak fix**: `tstack_frame` disimpan di Task struct; `task_exit()` thread path kini memanggil `vmm_unmap_page()` + `pmm_free_frame()` → tidak ada lagi 4KB leak per siklus thread
-- **vmm_unmap_page()** baru: clear PTE + `invlpg` tanpa membebaskan frame (caller menentukan kapan free)
-- **Proteksi parent-exits-before-threads**: saat proses induk `exit()`, semua thread anak di-force-kill terlebih dahulu (free stack frame, clear slot, wake joiner) sebelum `vmm_free_user_memory()` dipanggil — mencegah use-after-free
-- **Semaphore blocking sejati**: `sem_wait()` diganti dari `task_sleep(10)` busy-wait ke `task_block()` sejati; `sem_post()` memanggil `task_unblock(waiter)` — CPU tidak terbuang saat menunggu semaphore
-- **Thread-safe malloc/free**: `lib.h` kini punya mutex `_umtx` (semaphore id, lazy-init); semua operasi `malloc()`/`free()` dibungkus `sem_wait(_umtx)`/`sem_post(_umtx)` — aman untuk multi-thread
-
-### Fondasi P/Q/R — Fondasi Lanjutan (1 April 2026)
-
-#### F-P1 — Thread Stack 16KB + Guard Page per-Thread
-- **Stack 16KB per-thread**: naik dari 4KB; VA slot = `0x700000 + tid×0x5000` (5 halaman)
-- **Guard page per-thread**: halaman pertama tiap slot tidak dipetakan → `#PF` = "THREAD STACK OVERFLOW"
-- **4 frame fisik**: `tstack_frames[4]` di Task struct; dialokasikan `pmm_alloc_frame()` × 4 saat thread dibuat, dibebaskan saat exit
-- **exception_handler**: deteksi CR2 di `[0x700000..0x800000)` dan `(offset % 0x5000) < 0x1000` → layar merah, `task_exit()`
-
-#### F-P2 — Multiple Semaphore Waiters
-- **FIFO ring waiter**: `waiters[SEM_WAITER_MAX=4]` menggantikan satu `waiter` integer → hingga 4 task bisa antri `sem_wait()` secara bersamaan
-- **Urutan adil (FIFO)**: `sem_post()` membangunkan task yang paling lama menunggu
-- **Aman untuk mutex 3+ thread**: racing pada semaphore yang sama tidak lagi menjatuhkan waiter yang antri
-
-#### F-P3 — Thread Naming
-- **`task_set_name(id, name)`**: kernel dapat set nama thread sewaktu-waktu
-- **Syscall `SYS_THREAD_SET_NAME (67)`**: user-space wrapper `thread_set_name(tid, name)` di `lib.h`
-- **Terlihat di `ps` / sysinfo**: nama thread custom muncul di task list
-
-#### F-P4 — Condition Variable
-- **`condvar.h/c`** — baru: `CV_MAX=8` condvar, `CV_WAITER_MAX=4` waiter per condvar, FIFO ring
-- **`cv_wait(id, sem_id)`**: lepas mutex atomik → `task_block()` → reacquire mutex saat dibangunkan
-- **`cv_signal(id)`**: bangunkan 1 waiter FIFO
-- **`cv_broadcast(id)`**: bangunkan semua waiter
-- **Syscall**: `SYS_COND_ALLOC(68)`, `SYS_COND_FREE(69)`, `SYS_COND_WAIT(70)`, `SYS_COND_SIGNAL(71)`, `SYS_COND_BROADCAST(72)`
-- **lib.h**: `cond_alloc()`, `cond_free()`, `cond_wait()`, `cond_signal()`, `cond_broadcast()`
-
-#### F-P5 — MAX_TASKS 32
-- `MAX_TASKS` naik dari 16 → **32** untuk mendukung lebih banyak thread/proses serentak
-
-### Fondasi Q — Proses & Memori Lanjutan (2 April 2026)
-
-#### F-Q1 — fork() + Copy-on-Write (COW)
-- **`fork()`** via `int $0x80`: kernel membaca `child_rip`/`child_rsp` dari iretq frame di kernel stack induk (`kstack_top-40`, `kstack_top-16`) — tidak bergantung pada argumen user-space
-- **`task_create_fork()`**: salin seluruh GPR parent ke kernel stack anak (terutama `rbp` frame pointer); hanya `rax=0` (return value fork di anak)
-- **`vmm_copy_cow()`**: tandai semua page user (≥ 3MB) di parent DAN child menjadi **RO + COW (bit 9)**; `frame_cow_cnt += 2` per frame
-- **`vmm_cow_fault()`**: write ke page COW → alokasi frame baru + `memcpy` + decrement counter; counter=1 → remap RW langsung (proses terakhir)
-- **`vmm_map_page()` fix**: intermediate entries (PML4/PDPT/PD) selalu `P+RW+User`; proteksi akses hanya di **leaf PTE** — wajib untuk COW x86-64
-- **`vmm_free_user_memory()` COW-aware**: cek `frame_cow_cnt` sebelum `pmm_free_frame` — cegah double-free saat child exit
-
-#### F-Q2 — exec_replace()
-- **`exec_replace(name)`**: muat ELF baru ke PML4 baru, switch CR3, bebaskan PML4 lama, lompat langsung ke entry baru via inline `iretq` — tidak pernah kembali
-- **Syscall `SYS_EXEC_REPLACE (74)`**, **lib.h**: `exec_replace(name)`
-
-#### F-Q3 — Demand-paging Thread Stack
-- **`task_create_thread()`**: tidak lagi alokasi 4 frame fisik di awal — `tstack_frames[k]=0`
-- **On-demand**: kernel stack thread dipetakan hanya saat `#PF` pertama (sudah ditangani demand-paging handler yang ada)
-- **`task_exit()` cleanup**: gunakan `vmm_get_phys()` untuk menemukan frame yang ter-demand-page
-
-#### F-Q4 — mmap() / munmap()
-- **`mmap(n_pages)`**: alokasi `n` halaman anonim (zero-fill) mulai VA `0x900000` (bump allocator per-proses)
-- **`munmap(addr, n_pages)`**: `vmm_unmap_page` + `pmm_free_frame` tiap halaman
-- **Syscall `SYS_MMAP (75)`, `SYS_MUNMAP (76)`**, **lib.h**: `mmap()`, `munmap()`
-- **Demo**: `forktest` — fork+waitpid, mmap write/read/munmap, fork+exec_replace(`hello`)
-
-### Fondasi R2 — VFS Pipe/Net/TTY (2 April 2026)
-
-#### F-R2 — VFS Backend Tambahan
-- **`VFS_MAX_FD`** dinaikkan 8 → 16; `VfsFd` memakai `union` untuk semua tipe
-- **`VFS_TYPE_PIPE (4)`**: `vfs_pipe(tid, &fd_r, &fd_w)` — alokasi pipe anonim + 2 fd (read/write end); `vfs_read/write` mendelegasikan ke `pipe_read/pipe_write` (blocking)
-- **`VFS_TYPE_NET (5)`**: `vfs_net_open(tid, ip, port)` wraps `net_tcp_connect()` → fd; read/write via `net_tcp_recv/send`
-- **`VFS_TYPE_TTY (6)`**: `vfs_tty_open(tid)` — alokasi TTY slot dengan pipe sebagai backend
-- **`vfs_redirect_out_pipe / vfs_redirect_in_pipe`**: redirect fd 1/0 ke write/read-end pipe (untuk shell `|`)
-- **`vfs_copy_fds(src, dst)`**: salin seluruh fd table induk ke anak — **bug fix fork**: `task_create_fork()` semula memanggil `vfs_init_task()` (reset fd) sehingga anak tidak mewarisi pipe fd; diganti `vfs_copy_fds()` (Unix semantics)
-- **Syscall**: `SYS_PIPE2(77)`, `SYS_NET_OPEN(78)`, `SYS_TTY_OPEN(79)`, `SYS_PIPE_REDIRECT(80)`
-- **lib.h**: `pipe2()`, `net_open_fd()`, `tty_open()`, `pipe_redirect_out/in()`
-- **Demo**: `pipetest` — `pipe2()`+fork, induk tulis 17 bytes, anak baca → `anak: isi OK`
-
-### Fondasi R3 — MFS4 Inode Layer (2 April 2026)
-
-#### F-R3 — Filesystem Hierarki dengan Inode
-- **`mfs4.h / mfs4.c`**: inode table 128 entri in-memory di atas MFS3
-- **Tipe inode**: `FILE(1)`, `DIR(2)`, `SYMLINK(3)`
-- **`mfs4_init()`**: scan MFS3 via `fs_get_table()` → register semua file/dir ke inode table
-- **`mfs4_resolve(path)`**: ikuti symlink chain (max depth 8), kembalikan path asli
-- **`mfs4_symlink(link, target)`**: buat inode SYMLINK dengan field `target`
-- **`mfs4_hardlink(link, orig)`**: buat inode FILE berbagi `inode_id` dengan original
-- **`mfs4_mkdir(path)`**: panggil `fs_mkdir()` + daftarkan inode DIR
-- **`mfs4_stat(path, out)`**: resolusi symlink + `fs_read_bin` untuk size + perms
-- **`mfs4_listdir(dir, buf, sz)`**: iterasi inode, temukan semua anak langsung dari dir
-- **`mfs4_unlink(path)`**: cek refcount hardlink, `fs_delete()` hanya jika refcount = 0
-- **`fs_get_table()`**: fungsi baru di `fs.c` untuk ekspos tabel MFS3 ke MFS4
-- **Syscall**: `SYS_MFS4_SYMLINK(81)`, `SYS_MFS4_HARDLINK(82)`, `SYS_MFS4_STAT(83)`, `SYS_MFS4_LISTDIR(84)`, `SYS_MFS4_UNLINK(85)`, `SYS_MFS4_MKDIR(86)`
-- **lib.h**: `mfs4_symlink_u`, `mfs4_hardlink_u`, `mfs4_stat_u`, `mfs4_listdir_u`, `mfs4_unlink_u`, `mfs4_mkdir_u`; typedef `UMfs4Stat`
-- **Demo**: `mfs4test` — mkdir, stat, symlink+resolve, hardlink, listdir (15 entries), unlink → semua OK
-- **Keyboard non-blocking CPU**: `vfs_read(fd=0)` kini `task_block()` sampai `keyboard_handler` memanggil `task_unblock(kwaiter)` — CPU bebas untuk task lain saat menunggu input
-- **Pipe blocking sejati**: `pipe_read()` ganti `task_sleep(10)` busy-wait → `task_block()`; `pipe_write()` langsung memanggil `task_unblock(reader_waiter)` setelah menulis
-- **VFS stdin blocking**: `vfs_read(VFS_TYPE_STDIN)` loop `keyboard_set_waiter + task_block()` bukan spin
-
-#### ps Thread Display
-- `ps` kini menampilkan label `[T:pid]` berwarna cyan di depan nama thread
-- Accessor baru: `task_is_thread(id)`, `task_get_parent(id)` di `task.h`/`task.c`
-
-#### Shell I/O Redirect
-- `exec <prog> > <file>` — stdout program ditulis ke file (via `vfs_redirect_out`)
-- `exec <prog> < <file>` — stdin program dibaca dari file (via `vfs_redirect_in`)
-- `SYS_PRINT` kini cek `vfs_stdout_is_file(tid)` — jika fd 1 adalah file, tulis via VFS bukan layar
-- Bisa dikombinasi: `exec prog < input > output`
-
-### Fondasi S — Shell Pipeline `|` (2 April 2026)
-
-#### F-S: Pipeline `prog1 | prog2` via VFS
-- **Parser `|`** di shell: `prog1 | prog2` dan `exec prog1 | exec prog2` keduanya didukung
-- **EOF propagation**: `write_refs` bitmask per pipe; saat prog1 exit → `vfs_close_all()` memanggil `pipe_writer_detach()` → `eof=1` → `pipe_read()` kembali 0 bukan block
-- **`vfs_stdout_is_file()`** diperluas ke `VFS_TYPE_PIPE/NET/TTY` — `SYS_PRINT` kini benar-benar menulis ke pipe jika fd 1 diredirect
-- **`vfs_redirect_out_pipe()`**: memanggil `pipe_writer_attach()` — tidak lagi salin ke fd[2] (stderr tetap ke layar)
-- **`vfs_close` + `vfs_close_all`**: memanggil `pipe_writer_detach()` untuk setiap write-end pipe yang ditutup
-- **New programs**: `ls.c` (fs_list via syscall → stdout), `grep.c` (baca stdin, filter baris berisi "test")
-- **Demo**: `exec ls | grep` → output hanya file yang namanya mengandung "test"
-
-### Fondasi T — Signal & Process Control (2 April 2026)
-
-#### F-T1 — Infrastruktur Sinyal Kernel
-- **Task struct** tambah `uint32_t pending_signals` (bitmask) + `int exit_code`
-- **`task_send_signal(tid, sig)`**: set bit + `task_unblock()` target
-- **`task_check_signals()`**: cek `SIGKILL/SIGTERM/SIGINT` pending → `task_exit_code(128+sig)`; dipanggil di awal setiap syscall dan setelah `task_block()` di `pipe_read()`
-- **Konstanta**: `SIGINT=2`, `SIGKILL=9`, `SIGTERM=15`
-
-#### F-T2 — Deliver Sinyal + Syscall
-- **`SYS_EXIT`** sekarang menerima exit code via `ebx` → `task_exit_code(ebx)`
-- **`SYS_WAITPID`** mengembalikan exit code (sebelumnya selalu 0)
-- **`SYS_SIGKILL_SIG(88)`**: kirim sinyal `edx` ke tid `ebx`
-- **`SYS_SIGACTION(87)`**: stub siap untuk handler user-space
-- **`exit_codes[MAX_TASKS]`**: array terpisah agar exit code tidak hilang saat slot dibersihkan
-
-#### F-T3 — Ctrl+C → SIGINT Foreground
-- **`keyboard_set_fg_pid(pid)`**: shell menyimpan tid foreground sebelum `task_wait()`
-- **`keyboard_handler`**: Ctrl+C (scancode 0x2E) → `task_send_signal(fg_pid, SIGINT)`, tidak masukkan karakter ke buffer
-- **Pipeline `|`**: Ctrl+C dikirim ke prog1 (writer) → EOF otomatis terkirim ke prog2 → keduanya berhenti
-
-#### F-T4 — lib.h API
-- **`exit_code(n)`**: exit dengan kode n; `exit()` delegate ke `exit_code(0)`
-- **`kill(tid, sig)`**: kirim sinyal; `waitpid_ex(tid)`**: tunggu + return exit code
-- **`task_kill(id)`**: rename dari `kill(id)` lama untuk menghindari konflik nama
-
-#### F-T5 — Demo: sigtest
-- Fork + anak sleep 10s + induk kirim SIGTERM 500ms kemudian + `waitpid_ex()` → exit code **143** (128+SIGTERM)
-- Verifikasi: anak mati jauh sebelum 10 detik
+- **Desktop icons**: klik untuk buka aplikasi; overlap check saat redraw icon
+- **Kursor mouse**: PS/2 protokol 3-byte; arrow cursor 16×16 dengan outline, erase langsung dari fb
+- **Tema Catppuccin Mocha**: titlebar `#2D2D2D`, tombol close `#F38BA8`, teks `#CDD6F4`, flat style
+- **Clipboard**: buffer kernel 512 byte; `Ctrl+Y` salin, `Ctrl+V` tempel; tersedia di editor & gui_term
+- **Syscall GUI**: `SYS_WIN_CREATE`, `SYS_WIN_DRAW`, `SYS_WIN_EVENT`, `SYS_WIN_BTN_ADD`, `SYS_DRAW_PIXEL`, `SYS_FILL_RECT`, `SYS_DRAW_STR`, `SYS_MOUSE_GET`
 
 ---
 
-### Fondasi U — Futex + Thread-Local Storage (3 April 2026)
+### Networking
 
-#### F-U1 — Futex Kernel
-- **`SYS_FUTEX_WAIT(89)`**: `if (*(int*)addr == expected)` → masuk `futex_table`, `task_block()`; kembalikan 0; jika nilai sudah berubah → kembalikan -1 tanpa blok
-- **`SYS_FUTEX_WAKE(90)`**: scan `futex_table` untuk `addr`; bangunkan hingga N waiter (`task_unblock()`); kembalikan jumlah yang dibangunkan
-- **`futex_table[32]`**: array kernel `{addr, tid, used}` — maksimal 32 waiter bersamaan
-- **Fast path**: mutex tidak mengalami syscall jika kunci sedang bebas (CAS atomik user-space)
-
-#### F-U2 — Thread-Local Storage (TLS)
-- **Satu halaman TLS per thread** di VA `0x800000 + tid * 0x1000` — tidak overlap thread stack (`0x700000`)
-- **`task_create_thread()`**: alokasi frame fisik via `pmm_alloc_frame()`, peta ke page_dir parent, zero-fill, tulis MSR `IA32_FS_BASE (0xC0000100)` via `WRMSR`
-- **`task_switch()`**: restore MSR `IA32_FS_BASE` saat switch ke thread dengan `tls_frame != 0`
-- **`task_exit_code()`**: unmap + `pmm_free_frame()` TLS saat thread exit
-- **`SYS_GET_TLS(91)`**: kembalikan VA halaman TLS task saat ini
-
-#### F-U3 — lib.h API
-- **`futex_wait(addr, expected)`**: syscall wrapper → 0 jika dibangunkan, -1 jika mismatch
-- **`futex_wake(addr, n)`**: bangunkan hingga n waiter; kembalikan jumlah dibangunkan
-- **`Mutex` struct**: `{ int val; }` — inisialisasi `= {0}`
-- **`mutex_lock(m)`**: CAS loop → jika gagal `futex_wait`
-- **`mutex_unlock(m)`**: store 0 + `__sync_synchronize()` + `futex_wake(&m->val, 1)`
-- **`get_tls()`**: `SYS_GET_TLS` — kembalikan VA TLS task ini
-
-#### F-U4 — Demo: futextest
-- Spawn 4 thread, masing-masing increment shared `counter` 1000× via `mutex_lock/unlock`
-- Setiap thread cetak `TLS_VA` uniknya (membuktikan halaman TLS berbeda per thread)
-- Verifikasi akhir: `counter == 4000` → **LULUS**
+- **RTL8139 driver**: PCI scan (vendor 0x10EC/device 0x8139), I/O port, TX 4-descriptor round-robin, RX ring 8 KB (polling)
+- **Ethernet + ARP**: frame 14-byte, ARP request/reply, cache 8 slot IP→MAC, balas ARP untuk IP kita
+- **IPv4**: header 20 B, TTL=64, checksum one's complement; routing subnet / gateway
+- **DHCP client**: Discover→Offer→Request→ACK; perbarui IP dan gateway otomatis; shell: `dhcp`
+- **ICMP**: echo request/reply, RTT via `get_ticks()`; shell: `ping <ip>`
+- **IPv6**: SLAAC EUI-64 → link-local `fe80::/10`; ICMPv6 echo; shell: `ping6 <addr>`
+- **UDP**: `net_udp_send()`, tanpa koneksi; shell: `udp_send <ip> <port> <pesan>`
+- **TCP stack**: 3-way handshake, PSH/ACK data, FIN/ACK teardown, RST detection
+  - Retransmit timer (RTO 200 ms, max 5 retry → RST)
+  - Out-of-order buffer (1 slot) + duplicate ACK
+  - Keepalive (idle 30 s, 3 probe × 5 s → close)
+  - 4 koneksi simultan (`TCP_MAX_CONN=4`)
+  - TCP listen/accept server-side (`net_tcp_listen`, `net_tcp_accept`)
+- **DNS resolver**: query A record ke 8.8.8.8:53 via UDP, 3 attempt × 1 s; shell: `nslookup <hostname>`
+- **NTP client**: sinkronisasi waktu UTC dari `pool.ntp.org:123`; shell: `ntp`
+- **HTTP client**: `GET` via HTTP/1.0; shell: `tcp_get <ip> <port>`
+- **HTTPS/TLS 1.3**: TLS 1.3 client stub; shell: `https_get <url>`
+- **HTTP server**: TCP listen port 8080; terima koneksi dari host Windows (`curl http://10.0.2.15:8080/`); shell: `httpd start`
+- **WebSocket**: upgrade dari HTTP; shell: `wscat <url>`
+- **VirtIO block**: driver VirtIO disk (MMIO), baca/tulis sektor; shell: `vblk_read`
 
 ---
 
-### Fondasi V — MFS4 Disk Persistence + Rename (3 April 2026)
+### Shell & Utilitas
 
-#### F-V1 — Layout Disk MFS4
-- **LBA 513**: metadata — magic `MFS4` (4 byte) + `next_inode_id` (4 byte)
-- **LBA 514–549**: inode table — 128 × `sizeof(MFS4Inode)` = 18432 bytes = 36 sektor
-- **`mfs4_flush()`**: tulis metadata + inode table ke disk; dipanggil otomatis dari `fs_flush()` (`sync`)
-- **`mfs4_load()`**: baca dari disk; return 0 jika magic cocok, -1 jika kosong/korup
-
-#### F-V2 — Integrasi fs_flush + mfs4_init
-- **`mfs4_init()`**: coba `mfs4_load()` terlebih dulu — jika berhasil, data persisten digunakan langsung; jika gagal (boot pertama), scan MFS3 seperti sebelumnya
-- **`fs_flush()`** di `fs.c`: setelah flush MFS3, panggil `mfs4_flush()` secara atomik
-- **Shell `sync`**: `SYS_FS_SYNC` → `fs_flush()` → simpan MFS3 + MFS4 sekaligus
-
-#### F-V3 — Rename File
-- **`mfs4_rename(old, new)`**: update `nd->path`; untuk FILE juga rename di MFS3 via `fs_rename()`
-- **`fs_rename(old, new)`** baru di `fs.c`: update `files[i].name`, set dirty, `fs_disk_save()`
-- **`SYS_MFS4_RENAME(92)`**: kernel handler — validasi pointer + panggil `mfs4_rename()`
-- **Shell `rename <lama> <baru>`**: command baru; cetak konfirmasi hijau/merah
-- **`mfs4_rename_u(old, new)`** di `lib.h`: wrapper syscall untuk user program
-
----
-
-### Fondasi W — Poll/Select + Non-blocking fd (3 April 2026)
-
-#### F-W1 — Non-blocking fd (VFS_O_NONBLOCK + SYS_FCNTL)
-- **`VFS_O_NONBLOCK (0x08)`**: flag baru di `vfs.h`; `VFS_EAGAIN (-11)` sebagai return code "coba lagi"
-- **`vfs_read()`**: untuk STDIN, PIPE, TTY — jika `VFS_O_NONBLOCK` aktif dan tidak ada data → return `VFS_EAGAIN` tanpa block
-- **`pipe_has_data(id)`**: helper baru di `pipe.h/.c` — cek ring buffer tidak kosong (tanpa blocking)
-- **`vfs_set_flags(tid, fd, flags)`**: fungsi baru di `vfs.c` — set `VfsFd.flags` untuk fd tertentu
-- **`SYS_FCNTL(93)`**: handler kernel — `ebx=fd`, `edx=new_flags` → panggil `vfs_set_flags()`, return 0/-1
-- **`fcntl_setfl(fd, flags)`** di `lib.h`: wrapper inline; `O_NONBLOCK=0x08`, `EAGAIN=11`
-
-#### F-W2 — poll() syscall
-- **`KPollFd { int fd; short events; short revents; }`** di `vfs.h`; `POLLIN=1`, `POLLOUT=2`, `POLLERR=4`
-- **`vfs_fd_ready(tid, fd, events)`**: cek kesiapan per-type — STDIN→`keyboard_has_char()`, PIPE→`pipe_has_data()`, FILE→selalu siap, STDOUT/NET/PIPE_W→selalu POLLOUT
-- **`SYS_POLL(94)`**: `ebx=ptr{KPollFd*,nfds,timeout_ms}` → loop cek kesiapan + `task_sleep(1)` sampai deadline; return count siap / 0 timeout / -1 error
-- **`PollFd` struct + `poll(fds, nfds, timeout_ms)`** di `lib.h`: wrapper inline
-
-#### F-W3 — Demo: polltest
-- **Uji 1**: set `O_NONBLOCK`, baca pipe kosong → `r == -EAGAIN` (verifikasi non-blocking path)
-- **Uji 2**: `poll()` pada pipe read-end, writer thread tidur 200 ms lalu tulis `"hello"` → `POLLIN` terdeteksi dalam 2000 ms timeout
-- **Uji 3**: baca data setelah POLLIN → isi = `"hello"` (verifikasi data integrity)
-- File: `src/programs/polltest.c`
-
-
-### Fondasi X — TCP Reliability + DNS (3 April 2026)
-
-#### F-X1 — TCP Retransmit Timer
-- **TcpConn**: tambah `tx_buf[1400]`, `tx_seq`, `retrans_tick`, `retrans_count`
-- **`net_tcp_send()`**: simpan data ke `tx_buf` sebelum kirim; set `retrans_tick = get_ticks()`
-- **`tcp_rx_process()`**: saat terima ACK penuh → hapus `tx_buf` (clear `tx_len = 0`)
-- **`net_tcp_tick()`**: dipanggil dari `timer_handler()` setiap 10 ms — jika data unacked + RTO (200 ms) terlewat → retransmit; jika `retrans_count > 5` → kirim RST + close
-
-#### F-X2 — Out-of-order Buffer (1 slot)
-- **TcpConn**: tambah `ooo_buf[1400]`, `ooo_seq`, `ooo_len`
-- Segmen OOO (seq ≠ `rcv_nxt`): simpan ke satu slot OOO + kirim duplicate ACK
-- Setelah gap terisi (segmen berikutnya sesuai `rcv_nxt`): gabungkan OOO ke rx ring buffer
-
-#### F-X3 — TCP Keepalive + Idle Timeout
-- **TcpConn**: tambah `last_rx_tick`, `ka_probes`, `ka_next_tick`
-- Idle 30 detik tanpa data masuk → kirim ACK probe (`snd_nxt - 1`)
-- 3 probe tanpa reply → kirim RST + close koneksi (`TCP_KEEPALIVE_IDLE=30000 ms`, `TCP_KEEPALIVE_INTVL=5000 ms`, `TCP_KEEPALIVE_CNT=3`)
-
-#### F-X4 — DNS Resolver
-- **`dns_build_query()`**: bangun paket DNS query RFC 1035 untuk hostname arbitrary
-- **`dns_parse_response()`**: parse UDP DNS response, ekstrak A record (IPv4)
-- **`dns_resolve(hostname, out_ip)`**: kirim UDP query ke 8.8.8.8:53; 3 attempt × 1 s timeout; return 1 + isi `out_ip[4]`, atau 0 jika gagal
-- **Shell**: `nslookup <hostname>` → cetak IP hijau atau pesan error merah
-- File: `src/kernel/net.c`, `src/kernel/net.h`, `src/kernel/shell.c`
-
----
-
-### Fondasi AP — IPv6 + ping6
-
-- **Stateless autoconfiguration (SLAAC)**: EUI-64 dari MAC address → link-local `fe80::/10`
-- **ICMPv6 Echo**: type 128 (request) / type 129 (reply), checksum RFC 2460
-- **Shell**: `ping6 <addr>` — 4 ICMPv6 echo request + RTT tampil hijau/merah
-
----
-
-### Fondasi AQ — TLS Validation
-
-- **TLS stub layer**: validasi handshake ClientHello/ServerHello di atas TCP
-- **Sertifikat x.509**: parsing basic structure (stub, no crypto), log via serial
-
----
-
-### Fondasi AR — EXT2 Read-only
-
-- **EXT2 driver**: baca superblock, group descriptor, inode table dari ATA secondary slave
-- **Operasi**: `ext2_open`, `ext2_read`, `ext2_list` — mount-point `/ext2/`
-- **Shell**: `ext2ls`, `ext2read <path>` — tampilkan isi direktori / baca file EXT2
-
----
-
-### Fondasi AS — Kernel Debugger Serial
-
-- **COM1 debugger**: output register dump, memory dump ke terminal host via `-serial stdio`
-- **Breakpoint**: `dbg break <addr>` — pasang debug trap, cetak state saat hit
-- **Shell**: `dbg regs`, `dbg mem <addr> <len>`, `dbg trace`
-
----
-
-### Fondasi AT — Pengalaman Pengguna & Visual
-
-#### AT1 — Font Terminal 8×16
-- **`draw_char_gfx16(x, y, c, fg, bg)`**: render karakter 8×16 (row-doubled dari bitmap 8×8)
-- **`draw_string_gfx16()`**: string helper
-- **Terminal**: `VGA_COLS=160`, `VGA_ROWS=60`; buffer teks `g_textbuf[60][160]` + `g_fgbuf` untuk scroll yang benar
-- **Scroll**: `memmove` pada g_textbuf + `terminal_redraw()` — tidak ada artefak
-
-#### AT2 — Flat Titlebar Catppuccin
-- **`TITLEBAR_H = 28`** px
-- **Warna**: focused `#2D2D2D`, tombol close `#F38BA8` (pink Catppuccin Mocha), teks judul `#CDD6F4`
-- **Flat style**: tidak ada gradien, solid color
-
-#### AT3 — Resize Handle
-- **Handle 8×8 px** di sudut kanan-bawah setiap window
-- **Drag handle**: klik + drag untuk resize, minimum 100×60 px
-
-#### AT4 — Clipboard Ctrl+Y/V
-- **Clipboard kernel global**: buffer 512 byte, `g_clipboard[]`
-- **Ctrl+Y**: salin seleksi teks di editor ke clipboard
-- **Ctrl+V**: tempel clipboard ke posisi kursor saat ini
-- **Tersedia di**: `notepad`, `gui_term`
-
----
-
-- **LAPIC**: enable via IA32_APIC_BASE MSR + SVR register, baca APIC ID, kirim INIT/SIPI IPI via ICR
-- **ACPI MADT parser**: scan RSDP → RSDT → MADT untuk enumerasi CPU/APIC ID
-- **AP trampoline** di 0x7000: real mode → 32-bit protected → 64-bit long mode
-- **Per-AP stack**: 8KB per AP, dihitung dari LAPIC ID (AP1: 0x9D000, AP2: 0x9B000, ...)
-- **Per-AP IDT**: setiap AP memanggil `idt_reload()` — load IDT BSP yang sudah diisi
-- **Per-AP TSS**: GDT diperluas 8 slot TSS (CPU0=0x30 — CPU7=0xA0); `tss64_ap_init()` isi descriptor + `ltr`
-- **Per-AP LAPIC**: `apic_enable()` dijalankan di setiap AP; AP menerima `sti`
-- **Spinlock atomik**: `spinlock_acquire/release` via `__sync_lock_test_and_set`
-- **Terverifikasi**: `cpu total: 2`, `ap online: 1/1` di QEMU `-smp 2`
-- **Shell**: perintah `cpuinfo` menampilkan daftar CPU + APIC/ACPI ID
-
-### Shell
-- **Command-line shell** interaktif di kernel thread
-- **History**: 8 entri, navigasi dengan ↑/↓
+- **Shell interaktif** berbasis kernel thread; routing input keyboard → `shell_process_char()`
+- **History**: 8 entri, navigasi ↑/↓
 - **Tab-completion**: auto-complete perintah dan nama file
-- **Pipe operator**: `prog1 | prog2` (menggunakan kernel pipe buffer)
 - **Environment variables**: `export KEY=VAL`, ekspansi `$VAR` di input
-- **Direktori**: `cd <dir>`, `pwd`, direktori-aware `ls`/`read`/`write`/`del`
-- **Background exec**: tambah `&` di akhir perintah
-- **Foreground exec (Tahap N-pre)**: tanpa `&` → shell blok sampai program selesai (`task_wait`)
-- **Jaringan**: `ifconfig` (tampilkan MAC/IP/GW), `ping <ip>` (4 ICMP echo requests + RTT), `ping6 <addr>` (ICMPv6), `nslookup <hostname>`
-- **SMP info**: `cpuinfo`, `taskstat`
-- **Memory**: `meminfo` (total/used/free PMM frames)
-- **Threading**: `exec threadtest` — demo 3 thread paralel
-- **GUI mode**: `gui` — inisialisasi window manager + wallpaper, masuk desktop GUI
-- **Built-in commands**: `ps`, `kill`, `ls`, `read`, `write`, `del`, `clear`, `help`, `exec`, `sync`, `mkdir`, `chmod`, `cd`, `pwd`, `export`, `env`, `ifconfig`, `ping`, `ping6`, `nslookup`, `gui`, `cpuinfo`, `taskstat`, `meminfo`, `open`, `fread`, `fwrite`, `fclose`, `mq_send`, `mq_recv`, `rename`, `ext2ls`, `ext2read`, `dbg`, ...
+- **Operator**: `prog &` (background), `prog1 | prog2` (pipeline), `prog > file` / `prog < file` (redirect)
+- **Text editor**: `edit <file>` — editor multi-baris penuh dengan keyboard; `Ctrl+S` simpan, `Ctrl+Y` copy, `Ctrl+V` paste
+- **ACPI shutdown**: `shutdown` — kirim SCI event ke ACPI PM1a_CNT; OS mati bersih di QEMU
+- **Utilitas file**: `ls`, `read`, `write`, `del`, `mkdir`, `chmod`, `rename`, `touch`, `cat`, `cp`, `mv`, `head <n>`, `wc`
+- **Info sistem**: `ps` (tampilkan proses + CPU + thread), `meminfo`, `cpuinfo`, `taskstat`
+- **Jaringan**: `ifconfig`, `ping`, `ping6`, `nslookup`, `dhcp`, `ntp`, `tcp_get`, `udp_send`, `httpd`
+- **Proses**: `exec <prog>`, `kill <pid>`, `setprio <id> <prio>`, `renice <nice> <pid>`, `pipe <p1> <p2>`
+- **Terminal virtual**: `vt <n>` — beralih ke tty n (0–5)
+- **Debugger kernel**: `dbg regs`, `dbg mem <addr> <len>`, `dbg trace`
+- **GUI**: `gui` — masuk mode desktop GUI
 
-### Syscall Interface (user space via `SYSCALL/SYSRET`)
-```
-SYS_PRINT(1)    SYS_GETKEY(2)   SYS_EXIT(3)     SYS_ALLOC(4)    SYS_FREE(5)
-SYS_FS_READ(6)  SYS_FS_WRITE(7) SYS_FS_LIST(8)  SYS_FS_DELETE(9)
-SYS_MSG_SEND    SYS_MSG_RECV    SYS_KILL        SYS_GETPID
-SYS_SEM_*       SYS_PIPE_*      SYS_DEV_*
-SYS_DRAW_PIXEL  SYS_FILL_RECT   SYS_DRAW_LINE   SYS_DRAW_STR
-SYS_WIN_CREATE  SYS_WIN_DRAW    SYS_WIN_EVENT   SYS_WIN_BTN_ADD ...
-SYS_MOUSE_GET   SYS_GET_TICKS   SYS_YIELD       SYS_SLEEP       SYS_EXEC
-SYS_FS_SYNC(49) SYS_FS_TMPWRITE(50) SYS_FS_MKDIR(51) SYS_PIPE_NAMED(52)
-SYS_SHM_CREATE(53) SYS_SHM_ATTACH(54) SYS_SHM_DETACH(55)
-SYS_OPEN(56) SYS_READ_FD(57) SYS_WRITE_FD(58) SYS_CLOSE_FD(59)
-SYS_MQ_SEND(60) SYS_MQ_RECV(61)
-SYS_BRK(62) SYS_WAITPID(63)
-SYS_THREAD_CREATE(64) SYS_THREAD_EXIT(65) SYS_THREAD_JOIN(66)
-SYS_THREAD_SET_NAME(67)
-SYS_COND_ALLOC(68) SYS_COND_FREE(69) SYS_COND_WAIT(70) SYS_COND_SIGNAL(71) SYS_COND_BROADCAST(72)
-SYS_SIGACTION(87) SYS_SIGKILL_SIG(88)
-SYS_FUTEX_WAIT(89) SYS_FUTEX_WAKE(90) SYS_GET_TLS(91)
-SYS_MFS4_RENAME(92)
-SYS_FCNTL(93) SYS_POLL(94)
-```
+---
 
-> **F-X4 helper** (tidak pakai syscall tersendiri — DNS via `net_udp_send/recv` kernel-internal):
-> `dns_resolve(hostname, out_ip)` tersedia di kernel; user space: `nslookup` shell command
+### User Accounts & Keamanan
 
-### Libc Minimal (`lib.h`) — Tahap F2
-- **Variadic**: `va_list`, `va_start`, `va_arg`, `va_end` (GCC builtins)
-- **Format**: `vsprintf`, `sprintf`, `printf` — mendukung `%d %i %u %x %X %s %c %p %%`, flags `-` `0` width, modifier `l`
-- **String extra**: `strcat`, `strstr`, `strtol`, `atoi`
-- **Memory**: `memcpy`, `memset`, `memmove`, `memcmp`
+- **Database pengguna**: `/etc/passwd` format `username:hash32:uid:home\n`; di-persist ke disk MFS3
+- **Hash password**: djb2-32 dari password; disimpan sebagai integer desimal
+- **Login**: `login` — prompt username + password; verifikasi hash; set uid task saat ini
+- **adduser**: `adduser <user> <pass> [uid]` — hanya root (uid=0)
+- **passwd**: `passwd` — ubah password pengguna saat ini (update `/etc/passwd`)
+- **su**: `su <user>` — pindah ke pengguna lain (root bisa ke siapa saja)
+- **whoami**: tampilkan username dan uid task saat ini
+- **uid per-task**: field `uid` di Task struct; diwariskan saat fork/exec
+- **Ring-3 isolation**: setiap proses di PML4 terpisah; kernel tidak dapat diakses dari user space
 
-### Program Bawaan (user space, ELF64)
-| Program | Deskripsi |
+---
+
+### Aplikasi Built-in (User Space ELF64)
+
+| Aplikasi | Deskripsi |
 |---|---|
-| `paint` | Aplikasi gambar dengan mouse, 16 warna |
-| `notepad` | Editor teks sederhana dengan keyboard input |
+| `paint` | Aplikasi gambar mouse — 16 warna, brush, eraser |
+| `notepad` | Editor teks GUI dengan clipboard Ctrl+Y/V |
 | `calc` | Kalkulator ekspresi dasar |
 | `filemanager` | Browser file MFS3 GUI |
 | `gui_term` | Terminal emulator dalam window GUI |
-| `clock` | Widget jam — tampilkan uptime HH:MM:SS (update tiap detik) |
-| `sysinfo` | Panel info sistem — PID, uptime, tick count, arsitektur |
-| `threadtest` | Demo threading — spawn 3 thread paralel, join, verifikasi counter |
-| `futextest` | Demo Fondasi U — 4 thread × 1000 iterasi via mutex futex; verifikasi counter == 4000 |
-| `polltest` | Demo Fondasi W — non-blocking fd: uji -EAGAIN; poll() deteksi POLLIN pipe dalam 2s timeout |
-
-**Shell built-in tambahan (Fondasi X):**
-- `nslookup <hostname>` — resolve DNS A record via 8.8.8.8:53, tampilkan IP atau error
-| `hello` | Hello-world demo user process |
-| `gfxtest` | Demo grafis (pixel, rect, line) |
-| `gui_demo` | Demo window manager |
-| `sender` / `piper` | Demo IPC dan pipe antar proses |
+| `clock` | Widget jam — uptime HH:MM:SS, update setiap detik |
+| `sysinfo` | Panel info sistem — PID, uptime, tick, arsitektur |
+| `threadtest` | Demo threading: spawn 3 thread paralel, join, counter |
+| `futextest` | Demo futex: 4 thread × 1000 iterasi via mutex; counter == 4000 |
+| `polltest` | Demo poll(): non-blocking fd EAGAIN, POLLIN pipe dalam 2 s |
+| `sigtest` | Demo sinyal: fork + SIGTERM + waitpid_ex → exit code 143 |
+| `grep` | Filter baris stdin yang mengandung pola; dipakai di pipeline |
+| `ls` | List file FS ke stdout; dipakai di pipeline `ls \| grep` |
 
 ---
 
-## Struktur Direktori
+### Libc Minimal (`lib.h`)
 
-```
-.
-├── build.ps1                 # Build script utama (PowerShell + WSL)
-├── ROADMAP.txt               # Roadmap pengembangan lengkap
-├── src/
-│   ├── boot/
-│   │   └── boot.asm          # MBR bootloader (512 byte, BIOS INT 13h LBA)
-│   ├── kernel/
-│   │   ├── kernel_entry.asm  # Setup 4-level paging + Long Mode entry [BITS 32→64]
-│   │   ├── linker.ld         # Linker script (ELF64, . = 0x8000)
-│   │   ├── isr.asm           # ISR + SYSCALL entry 64-bit (SAVE_REGS 15 GPR)
-│   │   ├── idt.h / idt.c     # IDT 64-bit (16-byte gate descriptor)
-│   │   ├── tss.h / tss.c     # TSS64 + GDT descriptor 16-byte
-│   │   ├── task.h / task.c   # Multitasking, threading, context-switch, iretq frame
-│   │   │                       #   + is_thread / parent_tid (Tahap N)
-│   │   ├── vmm.h / vmm.c     # PMM bitmap (64MB) + VMM 4-level paging
-│   │   ├── paging.h / paging.c  # Wrapper paging
-│   │   ├── elf_loader.h / elf_loader.c  # ELF64 loader ke per-proses PML4
-│   │   ├── memory.h / memory.c  # Heap kernel (malloc/free first-fit), 6MB
-│   │   ├── kernel.c          # kernel_main(), shell loop, exception handler
-│   │   ├── syscall.h / syscall.c  # Dispatch SYSCALL/SYSRET (55 syscall)
-│   │   ├── shell.h / shell.c # Shell CLI interaktif (cd/pwd/env/export/\$VAR/&)
-│   │   ├── vbe.h / vbe.c     # VBE mode setting + PCI BAR0 discovery
-│   │   ├── graphics.h / graphics.c  # Framebuffer 32bpp primitif
-│   │   ├── window.h / window.c      # Window manager
-│   │   ├── taskbar.h / taskbar.c    # Taskbar
-│   │   ├── keyboard.h / keyboard.c  # PS/2 keyboard + ring buffer
-│   │   ├── mouse.h / mouse.c        # PS/2 mouse
-│   │   ├── timer.h / timer.c        # PIT 1000Hz
-│   │   ├── pic.h / pic.c            # 8259A PIC cascade
-│   │   ├── apic.h / apic.c          # Local APIC (xAPIC) + IPI INIT/SIPI
-│   │   ├── acpi.h / acpi.c          # Parser RSDP/RSDT/MADT (enumerasi CPU)
-│   │   ├── smp.h / smp.c            # SMP bootstrap BSP/AP + status AP online
-│   │   ├── smp_trampoline.asm       # AP trampoline real->protected->long mode
-│   │   ├── spinlock.h               # Primitive spinlock atomic
-│   │   ├── fs.h / fs.c              # Filesystem MFS3 (64×64KB, dirty/tmp/perms)
-│   │   ├── ata.h / ata.c            # ATA PIO + Bus Master DMA driver
-│   │   ├── ipc.h / ipc.c            # Message passing antar proses
-│   │   ├── semaphore.h / semaphore.c  # Semaphore FIFO multi-waiter (hingga 4 antrian)
-│   │   ├── pipe.h / pipe.c          # Anonymous pipe + named pipe (blocking read/write)
-│   │   ├── shm.h / shm.c            # Shared memory (8 region × 4KB)
-│   │   ├── condvar.h / condvar.c    # Condition variable (cv_wait/signal/broadcast)
-│   │   ├── rtl8139.h / rtl8139.c    # RTL8139 NIC driver (PCI, TX/RX polling)
-│   │   ├── net.h / net.c            # Network stack: Ethernet + ARP + IPv4 + ICMP
-│   │   ├── serial.h / serial.c      # COM1 debug output
-│   │   ├── device.h / device.c      # Device framework
-│   │   ├── drv_vga.c / drv_kbd.c    # VGA & keyboard device driver
-│   │   └── *_elf_data.h      # Program user ter-embed sebagai C array
-│   └── programs/
-│       ├── lib.h             # Syscall wrapper + libc minimal + thread API + condvar API
-│       ├── user.ld           # Linker script user (ELF64, . = 0x400000)
-│       ├── paint.c           # Aplikasi paint
-│       ├── notepad.c         # Editor teks
-│       ├── calc.c            # Kalkulator
-│       ├── filemanager.c     # File manager GUI (MFS3)
-│       ├── gui_term.c        # Terminal GUI
-│       ├── clock.c           # Widget jam — uptime HH:MM:SS
-│       ├── sysinfo.c         # Panel info sistem
-│       ├── threadtest.c      # Demo threading: spawn 3 thread paralel
-│       ├── sigtest.c         # Demo sinyal: fork + SIGTERM + waitpid_ex → exit code 143
-│       ├── futextest.c       # Demo Fondasi U: 4 thread × 1000 iterasi via mutex futex
-│       ├── polltest.c        # Demo Fondasi W: non-blocking fd + poll() pada pipe
-│       └── ...               # Program demo lainnya (hello, gfxtest, gui_demo, sender, piper)
-└── build/
-    ├── os.img                # Disk image final (2MB, sektor raw)
-    ├── disk.img              # Disk data sekunder (8MB, filesystem MFS3)
-    └── kernel.bin            # Kernel binary (~264KB)
-```
+- **Variadic**: `va_list`, `va_start`, `va_arg`, `va_end` (GCC builtins)
+- **Format**: `vsprintf`, `sprintf`, `printf` — `%d %i %u %x %X %s %c %p %%`, flags `- 0` width, modifier `l`
+- **String**: `strcat`, `strstr`, `strtol`, `atoi`, `memcpy`, `memset`, `memmove`, `memcmp`
+- **Thread API**: `thread_create/exit/join/set_name`, `mutex_lock/unlock`, `cond_wait/signal/broadcast`, `futex_wait/wake`, `get_tls()`
+- **Process**: `fork()`, `exec_replace()`, `exit_code(n)`, `kill(tid, sig)`, `waitpid_ex(tid)`
+- **Memory**: `mmap(n)`, `munmap(addr, n)`, `mmap_file(fd, n)`, `malloc`, `free`
+- **VFS**: `sys_open`, `sys_read_fd`, `sys_write_fd`, `sys_close_fd`, `pipe2`, `fcntl_setfl`, `poll`
+- **MFS4**: `mfs4_symlink_u`, `mfs4_hardlink_u`, `mfs4_stat_u`, `mfs4_listdir_u`, `mfs4_unlink_u`, `mfs4_rename_u`
 
 ---
 
 ## Cara Build & Jalankan
 
 ### Prasyarat
+
 - **Windows 10/11** dengan WSL (Ubuntu/Debian)
 - **WSL packages**: `nasm`, `x86_64-linux-gnu-gcc`, `x86_64-linux-gnu-binutils`
 - **Windows**: [QEMU for Windows](https://www.qemu.org/download/#windows) — `qemu-system-x86_64.exe`
@@ -616,7 +256,7 @@ sudo apt install nasm gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
 .\build.ps1 build
 ```
 
-Output: `build/os.img` (2MB raw disk image)
+Output: `build/os.img` (2 MB raw disk image), `build/disk.img` (8 MB MFS3 data), `build/wallpaper.img` (960×540 BGRA32)
 
 ### Jalankan
 
@@ -624,20 +264,21 @@ Output: `build/os.img` (2MB raw disk image)
 .\build.ps1 run
 ```
 
-Membuka QEMU dengan `qemu-system-x86_64 -smp 2`, layar 1920×1080. Saat boot, OS masuk ke **mode console** terlebih dahulu (layar hitam, teks putih 160×60).
+Membuka QEMU dengan `-smp 2`, layar 1920×1080. Saat boot, OS masuk ke **mode console** (layar hitam, teks putih 160×60 karakter).
 
 **Urutan boot:**
 1. OS boot → mode console (shell teks, font 8×16)
-2. Ketik `gui` → muat wallpaper, inisialisasi window manager, masuk GUI desktop
+2. Ketik `gui` → muat wallpaper, inisialisasi window manager, masuk desktop GUI
 3. Klik ikon di taskbar/desktop untuk membuka aplikasi
 
 **Pintasan keyboard:**
-- `gui` — masuk mode GUI dari console
-- `Ctrl+Y` — salin teks ke clipboard (di editor teks)
-- `Ctrl+V` — tempel dari clipboard
-- `Ctrl+C` — kirim SIGINT ke program foreground
-
-AP (Application Processor) akan boot otomatis — ketik `cpuinfo` di shell untuk verifikasi.
+| Pintasan | Aksi |
+|---|---|
+| `gui` | Masuk mode GUI dari console |
+| `Ctrl+Alt+F1..F6` | Pindah virtual terminal tty0–tty5 |
+| `Ctrl+C` | Kirim SIGINT ke program foreground |
+| `Ctrl+Y` | Salin teks ke clipboard (di editor) |
+| `Ctrl+V` | Tempel dari clipboard |
 
 ### Clean
 
@@ -647,151 +288,170 @@ AP (Application Processor) akan boot otomatis — ketik `cpuinfo` di shell untuk
 
 ---
 
+## Struktur Direktori
+
+```
+.
+├── build.ps1                 # Build script utama (PowerShell + WSL)
+├── ROADMAP.txt               # Roadmap pengembangan lengkap
+├── src/
+│   ├── boot/
+│   │   └── boot.asm          # MBR bootloader (512 byte, BIOS INT 13h LBA)
+│   ├── kernel/
+│   │   ├── kernel_entry.asm  # Setup 4-level paging + Long Mode [BITS 32→64]
+│   │   ├── linker.ld         # Linker script (ELF64, . = 0x8000)
+│   │   ├── isr.asm           # ISR + SYSCALL entry 64-bit (SAVE_REGS 15 GPR)
+│   │   ├── kernel.c          # kernel_main(), shell loop, exception handler, virtual terminals
+│   │   ├── syscall.h / .c    # Dispatch SYSCALL/SYSRET (99 syscall)
+│   │   ├── shell.c           # Shell CLI interaktif + semua built-in commands
+│   │   ├── task.h / .c       # Multitasking, priority+nice+aging, threading, context-switch
+│   │   ├── vmm.h / .c        # PMM bitmap (64 MB) + VMM 4-level paging + COW
+│   │   ├── memory.h / .c     # Heap kernel (malloc/free first-fit), 6 MB
+│   │   ├── fs.h / .c         # Filesystem MFS3 (64×64 KB, dirty/tmp/perms/timestamp)
+│   │   ├── mfs4.h / .c       # MFS4 inode layer (symlink, hardlink, stat, persist)
+│   │   ├── ata.h / .c        # ATA PIO + Bus Master DMA driver
+│   │   ├── vfs.h / .c        # VFS fd table per-task (FILE/PIPE/NET/TTY/STDIN/STDOUT)
+│   │   ├── keyboard.h / .c   # PS/2 keyboard + ring buffer + keyboard_getchar_block
+│   │   ├── mouse.h / .c      # PS/2 mouse (protokol 3-byte)
+│   │   ├── graphics.h / .c   # Framebuffer 32bpp primitif (fill_rect optimized)
+│   │   ├── window.h / .c     # Window manager (drag/resize/partial-redraw)
+│   │   ├── wallpaper.h / .c  # Wallpaper loader + wp_blit_region optimized
+│   │   ├── net.h / .c        # Network stack: Eth+ARP+IPv4+IPv6+TCP+UDP+DHCP+DNS+NTP
+│   │   ├── rtl8139.h / .c    # RTL8139 NIC driver (PCI, TX/RX polling)
+│   │   ├── acpi.h / .c       # ACPI RSDP/RSDT/MADT parser + shutdown
+│   │   ├── smp.h / .c        # SMP: LAPIC, INIT/SIPI, AP trampoline, per-core scheduler
+│   │   ├── semaphore.h / .c  # Semaphore FIFO multi-waiter (max 4 antrian)
+│   │   ├── pipe.h / .c       # Anonymous + named pipe (blocking, EOF propagation)
+│   │   ├── shm.h / .c        # Shared memory (8 region × 4 KB)
+│   │   ├── condvar.h / .c    # Condition variable (cv_wait/signal/broadcast)
+│   │   ├── serial.h / .c     # COM1 debug output + kernel debugger
+│   │   └── *_elf_data.h      # Program user ter-embed sebagai C array
+│   └── programs/
+│       ├── lib.h             # Syscall wrapper + libc minimal + thread/mutex/cond/futex
+│       ├── user.ld           # Linker script user (ELF64, . = 0x400000)
+│       └── *.c               # Program user (paint, calc, notepad, filemanager, ...)
+└── build/
+    ├── os.img                # Disk image final (2 MB, sektor raw)
+    ├── disk.img              # Disk data MFS3 (8 MB)
+    ├── wallpaper.img         # Wallpaper raw BGRA32 (960×540, 4 MB)
+    └── kernel.bin            # Kernel binary (~555 KB)
+```
+
+---
+
 ## Memory Map
 
 ```
 Alamat Fisik    Ukuran    Isi
-────────────────────────────────────────────────────────────────
-0x00000–0x007FF   2KB     Real Mode IVT + BDA
-0x07C00–0x07DFF 512B     Bootloader MBR (boot.asm)
-0x07000–0x07FFF  4KB     AP trampoline (real->pmode->lmode, di-copy smp_init)
-0x08000–0x2FFFF ~160KB   Kernel binary (kernel_entry + kode C)
-0x30000–0x8FFFF ~384KB   Stack BSP (tumbuh dari 0x90000 ke bawah)
-0x9B000–0x9EFFF  16KB    Stack per-AP (8KB/AP: AP1=0x9D000, AP2=0x9B000)
-0x100000–0x6FFFFF 6MB    Heap kernel (malloc/free)
-0x400000–0x5FDFFF ~1.9MB User heap (malloc via SYS_BRK, per-proses)
-0x500000–0x507FFF 32KB   Shared memory region (8 slot × 4KB, SHM)
-0x5FE000–0x5FEFFF  4KB   Guard page (stack overflow → #PF → task_exit)
-0x5FF000–0x5FFFFF  4KB   User stack proses (demand-paged, RSP = 0x600000)
-0x600000–0x600FFF  4KB   (alias stack slot lama ELF — RSP = 0x601000)
-0x700000–0x70FFFF 64KB   Thread user stacks (1 halaman × 16 slot, 0x700000+id*0x1000)
-0x3000000+        ...    PMM frame pool (0x300000 ke atas dipakai proses)
-
-Boot page tables (sementara, dipakai kernel_entry.asm):
-0x1000  PML4[512]
-0x2000  PDPT[512]    → 4×PD di bawah
-0x3000  PD[0–1GB]    2MB pages, User-accessible (flag 0x87)
-0x4000  PD[1–2GB]    2MB pages, kernel-only (flag 0x83)
-0x5000  PD[2–3GB]    2MB pages, kernel-only
-0x6000  PD[3–4GB]    2MB pages, kernel-only (VBE LFB ~0xE0000000)
+──────────────────────────────────────────────────────
+0x00000–0x007FF   2 KB   Real Mode IVT + BDA
+0x07C00–0x07DFF 512 B    Bootloader MBR
+0x07000–0x07FFF   4 KB   AP trampoline (real→pmode→lmode)
+0x08000–0x2FFFF ~160 KB  Kernel binary
+0x30000–0x8FFFF ~384 KB  Stack BSP (tumbuh dari 0x90000 ke bawah)
+0x9B000–0x9EFFF  16 KB   Stack per-AP (8 KB/AP)
+0x100000–0x6FFFFF  6 MB  Heap kernel (malloc/free)
+0x400000–0x5FDFFF ~1.9MB User heap (via SYS_BRK, per-proses)
+0x500000–0x507FFF  32 KB Shared memory (8 slot × 4 KB)
+0x5FE000–0x5FEFFF   4 KB Guard page (stack overflow → #PF)
+0x5FF000–0x5FFFFF   4 KB User stack proses (demand-paged, RSP = 0x600000)
+0x700000–0x70FFFF  64 KB Thread user stacks (0x700000 + tid×0x5000, 16 KB+guard)
+0x800000–0x80FFFF  64 KB Thread-local storage (0x800000 + tid×0x1000)
+0x900000+          ...   mmap anonim (bump allocator)
+0xB00000+          ...   mmap file-backed (bump allocator)
 ```
 
 ---
 
-## Arsitektur Long Mode
+## Arsitektur Sistem
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  BIOS / SeaBIOS                                      │
-│    INT 13h LBA → load kernel ke 0x8000              │
-└──────────────┬──────────────────────────────────────┘
-               │
-┌──────────────▼──────────────────────────────────────┐
-│  boot.asm  [16-bit Real Mode]                        │
-│    → lgdt (GDT 32-bit flat) → CR0.PE=1              │
-│    → jmp 0x08:pm_entry                              │
-└──────────────┬──────────────────────────────────────┘
-               │
-┌──────────────▼──────────────────────────────────────┐
-│  kernel_entry.asm  [BITS 32 — Protected Mode]        │
-│    1. Zero BSS                                       │
-│    2. Build PML4/PDPT/4×PD @ 0x1000–0x6000          │
-│    3. CR4.PAE=1, CR3=0x1000, EFER.LME=1             │
-│    4. lgdt (GDT64), CR0.PG=1                         │
-│    5. jmp 0x08:long_mode_entry                       │
-└──────────────┬──────────────────────────────────────┘
-               │
-┌──────────────▼──────────────────────────────────────┐
-│  kernel_entry.asm  [BITS 64 — Long Mode]             │
-│    → reload DS/ES/SS=0x10, RSP=0x90000               │
-│    → call kernel_main()                              │
-└──────────────┬──────────────────────────────────────┘
-               │
-┌──────────────▼──────────────────────────────────────┐
-│  kernel.c  kernel_main()                             │
-│    paging_init → vbe_find_lfb → vbe_set_mode         │
-│    graphics_init → shell_init → mem_init → pmm_init  │
-│    ata_init → fs_init → ipc/sem/pipe init            │
-│    dev_register → programs_init                      │
-│    timer_init → pic_init → idt_init                  │
-│    task_init → tss64_init → idt_set_gate_user(0x80)  │
-│    sti → console mode (g_gui_mode=0)                 │
-│    keyboard loop:                                     │
-│      g_gui_mode=0 → shell_process_char()             │
-│      g_gui_mode=1 → wm_key_event()   [setelah `gui`] │
-└─────────────────────────────────────────────────────┘
++-----------------------------------------------------+
+|  BIOS / SeaBIOS                                     |
+|    INT 13h LBA -> load kernel ke 0x8000             |
++------------------+----------------------------------+
+                   |
++------------------v----------------------------------+
+|  boot.asm  [16-bit Real Mode]                       |
+|    lgdt (GDT 32-bit flat) -> CR0.PE=1               |
++------------------+----------------------------------+
+                   |
++------------------v----------------------------------+
+|  kernel_entry.asm  [BITS 32 - Protected Mode]       |
+|    Build PML4/PDPT/4xPD @ 0x1000-0x6000             |
+|    CR4.PAE=1, CR3=0x1000, EFER.LME=1, CR0.PG=1     |
+|    jmp 0x08:long_mode_entry                         |
++------------------+----------------------------------+
+                   |
++------------------v----------------------------------+
+|  kernel_entry.asm  [BITS 64 - Long Mode]            |
+|    reload DS/ES/SS=0x10, RSP=0x90000                |
+|    call kernel_main()                               |
++------------------+----------------------------------+
+                   |
++------------------v----------------------------------+
+|  kernel.c  kernel_main()                            |
+|  paging -> vbe -> graphics -> vt_init -> shell      |
+|  pmm -> vmm -> ata -> fs -> mfs4 -> ipc/sem/pipe    |
+|  dev -> net -> smp -> timer -> pic -> idt -> task   |
+|  sti -> console mode (g_gui_mode=0)                 |
+|  keyboard loop:                                     |
+|    g_gui_mode=0 -> shell_process_char()             |
+|    g_gui_mode=1 -> wm_key_event()  [setelah `gui`] |
++-----------------------------------------------------+
 ```
 
 ---
 
-## Sistem Syscall
+## Syscall Interface
 
-User program memanggil syscall via instruksi `SYSCALL` (IA32_LSTAR MSR, ring-3 → ring-0):
-
-```c
-// lib.h — contoh penggunaan dari user space
-draw_pixel(100, 200, GFX_RED);     // syscall SYS_DRAW_PIXEL
-int w = win_create("Paint", ...);  // syscall SYS_WIN_CREATE
-char c = getkey();                 // syscall SYS_GETKEY
-void *buf = malloc(1024);          // syscall SYS_ALLOC
-sprintf(buf, "tick=%d", ticks);    // lib.h printf/sprintf (F2)
 ```
-
-Register convention:
-```
-RAX = nomor syscall
-RBX = argumen 1 (atau pointer ke struct)
-RDX = argumen 2
-Return value → RAX
+SYS_PRINT(0)       SYS_GETKEY(1)      SYS_EXIT(2)        SYS_ALLOC(3)
+SYS_FREE(4)        SYS_FS_READ(5)     SYS_FS_WRITE(6)    SYS_MSG_SEND(7)
+SYS_MSG_RECV(8)    SYS_KILL(9)        SYS_SEM_ALLOC(10)  SYS_SEM_FREE(11)
+SYS_SEM_WAIT(12)   SYS_SEM_POST(13)   SYS_PIPE_*(14-18)  SYS_DEV_*(19-20)
+SYS_DRAW_PIXEL(22) SYS_FILL_RECT(23)  SYS_DRAW_LINE(24)  SYS_DRAW_STR(25)
+SYS_WIN_*(26-45)   SYS_MOUSE_GET(46)  SYS_GET_TICKS(47)  SYS_YIELD(48)
+SYS_SLEEP(49)      SYS_EXEC(50)       SYS_FS_SYNC(49)    SYS_FS_MKDIR(51)
+SYS_PIPE_NAMED(52) SYS_SHM_*(53-55)   SYS_OPEN(56)       SYS_READ_FD(57)
+SYS_WRITE_FD(58)   SYS_CLOSE_FD(59)   SYS_MQ_SEND(60)    SYS_MQ_RECV(61)
+SYS_BRK(62)        SYS_WAITPID(63)    SYS_THREAD_*(64-67) SYS_COND_*(68-72)
+SYS_EXEC_REPLACE(74) SYS_MMAP(75)    SYS_MUNMAP(76)     SYS_PIPE2(77)
+SYS_NET_OPEN(78)   SYS_TTY_OPEN(79)   SYS_PIPE_REDIRECT(80)
+SYS_MFS4_*(81-86)  SYS_SIGACTION(87)  SYS_SIGKILL_SIG(88)
+SYS_FUTEX_WAIT(89) SYS_FUTEX_WAKE(90) SYS_GET_TLS(91)    SYS_MFS4_RENAME(92)
+SYS_FCNTL(93)      SYS_POLL(94)       SYS_GETARGV(95)
+SYS_CLIP_COPY(96)  SYS_CLIP_PASTE(97) SYS_MMAP_FILE(98)  SYS_MUNMAP_FILE(99)
 ```
 
 ---
 
-## Roadmap
+## Milestone
 
-Lihat [ROADMAP.txt](ROADMAP.txt) untuk roadmap lengkap.
-
-**Milestone yang sudah selesai:**
-
-| Milestone | Tanggal | Catatan |
-|---|---|---|
-| Foundation | Mar 2026 | Heap, multitasking, FS, IPC, GUI, shell |
-| Tahap A — 32bpp True Color | 24 Mar 2026 | Framebuffer 32-bit |
-| Tahap B — 1280×720 | 26 Mar 2026 | HD Ready |
-| Tahap B+ — 1920×1080 | 26 Mar 2026 | Full HD, dual page table VBE |
-| Tahap C — 64-bit Long Mode | 26 Mar 2026 | Rewrite penuh ke x86_64 |
-| Tahap D — Kernel Stability & Driver | 1 Apr 2026 | SYSCALL/SYSRET, PMM, ATA DMA, Serial |
-| Tahap E — Filesystem & I/O Lanjutan | 1 Apr 2026 | MFS3 subdirektori, dirty/tmpfs/perms/timestamp |
-| Tahap F — Userspace & Shell Lanjutan | 1 Apr 2026 | Shell env/pipe/&, libc minimal, ELF64 loader |
-| Tahap G — Networking | 1 Apr 2026 | RTL8139, ARP, IPv4, ICMP, ping/ifconfig |
-| Tahap H — SMP Multi-core | 1 Apr 2026 | LAPIC, ACPI MADT, AP trampoline, `cpuinfo` |
-| Tahap I — Per-Core Scheduler | 1 Apr 2026 | LAPIC timer per-AP, `cpu_id` per-task, `cpuinfo` ap ticks |
-| Tahap J — VFS | 1 Apr 2026 | fd table per-task, stdin/stdout/file, syscall 56-59, shell VFS |
-| Tahap K — Guard Page | 1 Apr 2026 | Stack overflow detection via #PF + CR2 guard zone |
-| Tahap L — Message Queue | 1 Apr 2026 | Per-task mailbox, syscall 60-61, `mq_send`/`mq_recv` |
-| Tahap M — Load-Balanced AP | 1 Apr 2026 | Two-pass scheduler, direct AP assignment, `taskstat` |
-| Fondasi N — Stabilitas Sistem | 1 Apr 2026 | PMM visibility, user heap SYS_BRK, waitpid, slot reuse, user malloc |
-| Tahap N — User-space Threading | 1 Apr 2026 | thread_create/exit/join, shared address space, `threadtest` |
-| Fondasi O — Stabilitas Threading | 1 Apr 2026 | Stack frame leak fix, blocking semaphore, thread-safe malloc, parent-exit guard |
-| Fondasi P+R — Threading Lanjutan | 2 Apr 2026 | Condvar, condtest, ps thread display, shell redirect >, <, SYS_PRINT via VFS |
-| TCP/UDP Stack | 2 Apr 2026 | TCP 3-way handshake, UDP send, tcp_get HTTP client, terverifikasi HTTP GET 2403 bytes |
-| Fondasi Q — Proses & Memori Lanjutan | 2 Apr 2026 | fork()+COW, exec_replace(), demand-paging thread stack, mmap/munmap, vmm_map_page intermediate fix |
-| Fondasi R2 — VFS Pipe/Net/TTY | 2 Apr 2026 | VFS_TYPE_PIPE/NET/TTY, vfs_pipe/net_open/tty_open, vfs_copy_fds (fork fd inheritance fix), pipetest OK |
-| Fondasi R3 — MFS4 Inode Layer | 2 Apr 2026 | symlink, hardlink, stat, listdir, mkdir, unlink via inode table 128 entri di atas MFS3, mfs4test OK |
-| Fondasi S — Shell Pipeline `\|` | 2 Apr 2026 | `prog1 \| prog2`, EOF propagation, ls+grep pipeline, shell redirect `>` `<` |
-| Fondasi T — Signal & Process Control | 2 Apr 2026 | SIGINT/SIGTERM/SIGKILL, Ctrl+C foreground, waitpid exit code, sigtest 143 OK |
-| Fondasi U — Futex + TLS | 3 Apr 2026 | futex_wait/wake, mutex user-space CAS, TLS per-thread via FS_BASE MSR, futextest 4000 OK |
-| Fondasi V — MFS4 Persistence + Rename | 3 Apr 2026 | Inode table flush ke disk (LBA 513–549), rename file, mfs4_load() saat boot |
-| Fondasi W — Poll/Select + Non-blocking | 3 Apr 2026 | O_NONBLOCK, EAGAIN, poll() syscall, polltest POLLIN+EAGAIN OK |
-| Fondasi X — TCP Reliability + DNS | 3 Apr 2026 | TCP retransmit, OOO buffer, keepalive, DNS resolver, nslookup |
-| Fondasi AP — IPv6 + ping6 | — | IPv6 stateless autoconfiguration, ICMPv6 echo, `ping6` shell command |
-| Fondasi AQ — TLS Validation | — | TLS handshake validation layer, sertifikat x.509 stub |
-| Fondasi AR — EXT2 Read-only | — | EXT2 filesystem read-only driver di atas ATA secondary |
-| Fondasi AS — Kernel Debugger Serial | — | Serial COM1 debugger: breakpoint, register dump, memory dump via `dbg` command |
-| Fondasi AT1 — Font 8×16 Terminal | — | `draw_char_gfx16()`, terminal 160×60, ANSI scroll via g_textbuf |
-| Fondasi AT2 — Flat Titlebar Catppuccin | — | Titlebar 28px flat, warna Catppuccin Mocha, `WM_BTN_CLOSE` pink |
-| Fondasi AT3 — Resize Handle | — | Resize handle kanan-bawah 8px, drag untuk resize window |
-| Fondasi AT4 — Clipboard Ctrl+Y/V | — | Clipboard kernel global, Ctrl+Y copy, Ctrl+V paste di editor teks |
+| Tanggal | Fitur yang Ditambahkan |
+|---|---|
+| 24 Mar 2026 | Framebuffer 32bpp True Color |
+| 26 Mar 2026 | Resolusi HD (1280×720) → Full HD (1920×1080) |
+| 26 Mar 2026 | x86_64 Long Mode rewrite penuh |
+| 1 Apr 2026 | SYSCALL/SYSRET, PMM, ATA DMA, Serial debug |
+| 1 Apr 2026 | MFS3 filesystem (subdirektori, dirty, perms, timestamp) |
+| 1 Apr 2026 | Shell interaktif (env/pipe/redirect/&), libc minimal |
+| 1 Apr 2026 | RTL8139, Ethernet, ARP, IPv4, ICMP, ping |
+| 1 Apr 2026 | SMP multi-core: LAPIC, ACPI MADT, AP trampoline |
+| 1 Apr 2026 | Per-core scheduler, VFS fd, guard page, message queue |
+| 1 Apr 2026 | TCP/UDP stack, HTTP GET terverifikasi |
+| 2 Apr 2026 | User-space threading, TLS, futex, condition variable |
+| 2 Apr 2026 | fork+COW, exec_replace, mmap/munmap |
+| 2 Apr 2026 | MFS4 inode (symlink, hardlink, stat, persist ke disk) |
+| 2 Apr 2026 | Shell pipeline, redirect, sinyal SIGINT/TERM/KILL |
+| 3 Apr 2026 | Poll/non-blocking fd, TCP reliability, DNS resolver |
+| 3 Apr 2026 | IPv6+ping6, TLS 1.3 stub, EXT2 read-only, kernel debugger |
+| 3 Apr 2026 | Font 8×16, titlebar Catppuccin, resize handle, clipboard |
+| 3 Apr 2026 | Rendering optimasi (partial redraw, kursor, drag, icon) |
+| 3 Apr 2026 | DHCP client, virtual terminals tty0–tty5 |
+| 3 Apr 2026 | Priority scheduler + nice + aging (starvation prevention) |
+| 3 Apr 2026 | File-backed mmap (mmap_file/munmap_file) |
+| 3 Apr 2026 | User accounts + login (adduser, passwd, su, whoami) |
 
 ---
 

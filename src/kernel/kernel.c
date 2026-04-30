@@ -70,6 +70,47 @@
 #define VGA_COLS 160
 #define VGA_ROWS 60
 
+/* ================================================================
+ * Fondasi AV — Virtual Terminals (tty0–tty5)
+ * Setiap VT menyimpan text buffer, fg buffer, dan posisi kursor.
+ * ================================================================ */
+#define VT_COUNT 6
+
+typedef struct {
+    char     textbuf[VGA_ROWS][VGA_COLS];
+    uint32_t fgbuf  [VGA_ROWS][VGA_COLS];
+    int      cursor_col;
+    int      cursor_row;
+    int      input_start_col;
+    int      input_start_row;
+    uint32_t fg_color;
+    uint32_t bg_color;
+} VtCtx;
+
+static VtCtx vt_ctx[VT_COUNT];
+int g_active_vt = 0;
+
+/* Inisialisasi semua VT dengan warna default */
+static void vt_init_all(void) {
+    int i, r, c;
+    for (i = 0; i < VT_COUNT; i++) {
+        for (r = 0; r < VGA_ROWS; r++)
+            for (c = 0; c < VGA_COLS; c++) {
+                vt_ctx[i].textbuf[r][c] = 0;
+                vt_ctx[i].fgbuf[r][c]   = GFX_LGRAY;
+            }
+        vt_ctx[i].cursor_col       = 0;
+        vt_ctx[i].cursor_row       = 0;
+        vt_ctx[i].input_start_col  = 0;
+        vt_ctx[i].input_start_row  = 0;
+        vt_ctx[i].fg_color         = GFX_LGRAY;
+        vt_ctx[i].bg_color         = GFX_BLACK;
+    }
+}
+
+/* Forward declaration */
+void vt_switch(int n);
+
 /* posisi kursor teks saat ini (dalam satuan sel karakter 8x8) */
 int cursor_col = 0;
 int cursor_row = 0;
@@ -90,7 +131,6 @@ uint32_t bg_color = GFX_BLACK;  /* warna background sel */
 /* ---- text cell buffer (untuk redraw di atas wallpaper) ---- */
 static char     g_textbuf[VGA_ROWS][VGA_COLS];
 static uint32_t g_fgbuf  [VGA_ROWS][VGA_COLS];
-
 void vga_put_char_at(int col, int row, char c, uint32_t color);
 
 void set_color(uint32_t fg, uint32_t bg) {
@@ -211,6 +251,45 @@ static void terminal_redraw(void) {
             if (g_textbuf[r][c])
                 draw_char_gfx16(c * 8, r * 16, g_textbuf[r][c],
                                 g_fgbuf[r][c], bg_color);
+}
+
+/* ================================================================
+ * Fondasi AV — vt_switch: pindah ke terminal virtual nomor n
+ * Simpan state aktif ke vt_ctx[g_active_vt], restore vt_ctx[n].
+ * ================================================================ */
+void vt_switch(int n) {
+    int r, c;
+    if (n < 0 || n >= VT_COUNT || n == g_active_vt || g_gui_mode) return;
+
+    /* Simpan state VT aktif */
+    for (r = 0; r < VGA_ROWS; r++)
+        for (c = 0; c < VGA_COLS; c++) {
+            vt_ctx[g_active_vt].textbuf[r][c] = g_textbuf[r][c];
+            vt_ctx[g_active_vt].fgbuf[r][c]   = g_fgbuf[r][c];
+        }
+    vt_ctx[g_active_vt].cursor_col      = cursor_col;
+    vt_ctx[g_active_vt].cursor_row      = cursor_row;
+    vt_ctx[g_active_vt].input_start_col = input_start_col;
+    vt_ctx[g_active_vt].input_start_row = input_start_row;
+    vt_ctx[g_active_vt].fg_color        = fg_color;
+    vt_ctx[g_active_vt].bg_color        = bg_color;
+
+    /* Restore VT n */
+    g_active_vt = n;
+    for (r = 0; r < VGA_ROWS; r++)
+        for (c = 0; c < VGA_COLS; c++) {
+            g_textbuf[r][c] = vt_ctx[n].textbuf[r][c];
+            g_fgbuf[r][c]   = vt_ctx[n].fgbuf[r][c];
+        }
+    cursor_col      = vt_ctx[n].cursor_col;
+    cursor_row      = vt_ctx[n].cursor_row;
+    input_start_col = vt_ctx[n].input_start_col;
+    input_start_row = vt_ctx[n].input_start_row;
+    fg_color        = vt_ctx[n].fg_color;
+    bg_color        = vt_ctx[n].bg_color;
+
+    /* Redraw dari buffer VT baru */
+    terminal_redraw();
 }
 
 /*fungsi: hapus seluruh layar*/
@@ -592,6 +671,7 @@ void kernel_main(){
     vbe_set_mode(1920, 1080, 32);
     graphics_set_fb(lfb_addr);
     graphics_init();
+    vt_init_all();   /* AV: inisialisasi semua virtual terminal */
     clear_screen();
     print("=================================");
     print("\n   Selamat datang di Oria OS!   \n");

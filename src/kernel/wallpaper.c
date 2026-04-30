@@ -165,12 +165,23 @@ void wp_blit_region(int dx, int dy, int dw, int dh) {
     for (sy = dy; sy < dy + dh; sy++) {
         /* Baris cache = sy/2 (tiap cache row diulang 2× vertikal) */
         uint32_t *cache_row = g_wp_cache + (uint32_t)(sy >> 1) * (uint32_t)WP_SRC_W;
-        uint32_t  fb_row    = (uint32_t)sy * 1920u;
-        int sx;
-        for (sx = dx; sx < dx + dw; sx++) {
-            /* Kolom cache = sx/2 (tiap cache col diulang 2× horizontal) */
-            fb[fb_row + (uint32_t)sx] = cache_row[sx >> 1];
+        volatile uint32_t *fb_row = fb + (uint32_t)(sy * 1920u);
+        int sx = dx;
+        /* Tangani piksel pertama jika indeks ganjil */
+        if (sx & 1) {
+            fb_row[sx] = cache_row[sx >> 1];
+            sx++;
         }
+        /* Proses 2 piksel FB sekaligus dari 1 piksel cache (2× scale) */
+        int end2 = dx + dw - 1;
+        for (; sx < end2; sx += 2) {
+            uint32_t c = cache_row[sx >> 1];
+            fb_row[sx]     = c;
+            fb_row[sx + 1] = c;
+        }
+        /* Tangani piksel terakhir jika jumlah piksel ganjil */
+        if (sx < dx + dw)
+            fb_row[sx] = cache_row[sx >> 1];
     }
 }
 

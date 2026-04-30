@@ -92,4 +92,13 @@ void net_tcp_unlisten(int listen_id);
  * Return 0 sukses, -1 NIC tidak ada. */
 int  net_ping6(const uint8_t dst_ip6[16], int count);
 
+/* ================================================================
+ * Fondasi AU — DHCP Client
+ * ================================================================ */
+/* Jalankan DHCP Discover→Offer→Request→ACK, perbarui IP/gateway.
+ * Return 1 sukses, 0 gagal/timeout. */
+int  dhcp_request(void);
+/* Salin IP saat ini ke out_ip (4 byte). */
+void net_get_ip(uint8_t out_ip[4]);
+
 #endif

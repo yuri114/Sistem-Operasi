@@ -24,6 +24,7 @@
 void print_char(char c);
 void keyboard_handler();
 char keyboard_getchar();
+char keyboard_getchar_block(); /* blocking: tunggu hingga ada karakter */
 int  keyboard_has_char();      /* 1 jika ada karakter di buffer */
 void keyboard_set_waiter(int tid); /* set tid yang menunggu karakter */
 

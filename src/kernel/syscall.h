@@ -136,6 +136,10 @@
 #define SYS_CLIP_COPY     96  // salin string ke clipboard: ebx=str_ptr (max 511 char)
 #define SYS_CLIP_PASTE    97  // baca clipboard: ebx=buf_ptr, edx=max_len → return len
 
+/* Fondasi AX — file-backed mmap */
+#define SYS_MMAP_FILE     98  // mmap file: ebx=fd, edx=n_pages → VA awal, 0=gagal
+#define SYS_MUNMAP_FILE   99  // munmap file: ebx=va, edx=n_pages → 0
+
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);
 

@@ -1795,6 +1795,33 @@ static void shell_execute() {
             set_color(GFX_WHITE, GFX_BLACK);
         }
     }
+    /* ================================================================
+     * Fondasi AW — renice <nice> <pid>  : ubah nice value task
+     * ================================================================ */
+    else if (str_starts_with(input_buffer, "renice ")) {
+        const char *p = input_buffer + 7;
+        /* nice value bisa negatif */
+        int sign = 1;
+        if (*p == '-') { sign = -1; p++; }
+        else if (*p == '+') p++;
+        int nv = 0;
+        while (*p >= '0' && *p <= '9') { nv = nv * 10 + (*p - '0'); p++; }
+        nv *= sign;
+        while (*p == ' ') p++;
+        int pid = 0;
+        while (*p >= '0' && *p <= '9') { pid = pid * 10 + (*p - '0'); p++; }
+        if (!task_set_nice(pid, nv)) {
+            set_color(GFX_LRED, GFX_BLACK);
+            print("renice: proses tidak ditemukan\n");
+            set_color(GFX_WHITE, GFX_BLACK);
+        } else {
+            set_color(GFX_LGREEN, GFX_BLACK);
+            print("renice: proses "); char buf[8]; itoa(pid, buf); print(buf);
+            print(" nice="); itoa((uint32_t)(nv < 0 ? (uint32_t)(-nv) : (uint32_t)nv), buf);
+            if (nv < 0) { print("-"); } print(buf); print("\n");
+            set_color(GFX_WHITE, GFX_BLACK);
+        }
+    }
     else if(str_starts_with(input_buffer, "pipe ")) {
         /* Sintaks: pipe <prog1> <prog2> */
         const char *rest = input_buffer + 5;
@@ -1873,6 +1900,29 @@ static void shell_execute() {
     }
     else if (str_compare(input_buffer, "ifconfig")) {
         net_ifconfig();
+    }
+    /* ================================================================
+     * Fondasi AU — dhcp: jalankan DHCP untuk mendapat IP otomatis
+     * ================================================================ */
+    else if (str_compare(input_buffer, "dhcp")) {
+        if (!dhcp_request()) last_exit_code = 1;
+    }
+    /* ================================================================
+     * Fondasi AV — vt <n>: pindah ke virtual terminal n (0..5)
+     * ================================================================ */
+    else if (str_starts_with(input_buffer, "vt ")) {
+        extern void vt_switch(int n);
+        extern int  g_active_vt;
+        int n = input_buffer[3] - '0';
+        if (n < 0 || n > 5) {
+            set_color(GFX_LRED, GFX_BLACK);
+            print("vt: nomor terminal 0..5\n");
+            set_color(GFX_WHITE, GFX_BLACK);
+        } else if (n == g_active_vt) {
+            print("vt: sudah di tty"); char buf[4]; itoa((uint32_t)n, buf); print(buf); print("\n");
+        } else {
+            vt_switch(n);
+        }
     }
     else if (str_compare(input_buffer, "ping")) {
         print("gunakan ping <ip>   contoh: ping 10.0.2.2\n");
@@ -2810,6 +2860,281 @@ static void shell_execute() {
         ed_load(fn);
         editor_active = 1;
         ed_render_all();
+    }
+    /* ================================================================
+     * Fondasi AY — User Accounts: login, whoami, passwd, adduser, su
+     * Format /etc/passwd: username:hash32:uid:home\n
+     * hash32: djb2-32 dari password, ditulis desimal.
+     * ================================================================ */
+    else if (str_compare(input_buffer, "whoami")) {
+        int tid = task_get_current();
+        int uid = task_get_uid(tid);
+        /* Cari username di /etc/passwd berdasar uid */
+        const char *data = fs_read("etc/passwd");
+        if (data && uid >= 0) {
+            /* Cari baris dengan uid cocok */
+            const char *p = data;
+            int found = 0;
+            while (*p) {
+                /* parse: user:hash:uid:home */
+                char uname[32]; int ui = 0;
+                while (*p && *p != ':' && ui < 31) uname[ui++] = *p++;
+                uname[ui] = '\0';
+                if (*p == ':') p++;  /* skip hash */
+                while (*p && *p != ':') p++;
+                if (*p == ':') p++;
+                /* parse uid field */
+                int fuid = 0;
+                while (*p >= '0' && *p <= '9') { fuid = fuid * 10 + (*p - '0'); p++; }
+                while (*p && *p != '\n') p++;  /* skip rest */
+                if (*p == '\n') p++;
+                if (fuid == uid) {
+                    print(uname); print(" (uid=");
+                    char nb[8]; itoa((uint32_t)uid, nb); print(nb); print(")\n");
+                    found = 1; break;
+                }
+            }
+            if (!found) { print("root (uid=0)\n"); }
+        } else {
+            print("root (uid=0)\n");
+        }
+    }
+    else if (str_compare(input_buffer, "login")) {
+        /* Prompt username dan password, verifikasi, set uid */
+        set_color(GFX_LGRAY, GFX_BLACK);
+        print("Username: ");
+        char luser[32]; int li = 0;
+        /* Blocking input loop */
+        while (1) {
+            char c = keyboard_getchar_block();
+            if (c == '\n') break;
+            if (c == '\b') { if (li > 0) { li--; backspace_char(); } continue; }
+            if (li < 31) { luser[li++] = c; print_char(c); }
+        }
+        luser[li] = '\0'; print("\n");
+        print("Password: ");
+        char lpass[64]; int lpi = 0;
+        while (1) {
+            char c = keyboard_getchar_block();
+            if (c == '\n') break;
+            if (c == '\b') { if (lpi > 0) lpi--; continue; }
+            if (lpi < 63) lpass[lpi++] = c;
+        }
+        lpass[lpi] = '\0'; print("\n");
+        /* djb2-32 hash */
+        uint32_t hash = 5381;
+        int hi;
+        for (hi = 0; lpass[hi]; hi++)
+            hash = ((hash << 5) + hash) + (uint8_t)lpass[hi];
+        /* Cari di /etc/passwd */
+        const char *data = fs_read("etc/passwd");
+        int login_ok = 0;
+        int found_uid = 0;
+        if (data) {
+            const char *p = data;
+            while (*p) {
+                char uname[32]; int ui2 = 0;
+                while (*p && *p != ':' && ui2 < 31) uname[ui2++] = *p++;
+                uname[ui2] = '\0';
+                if (*p == ':') p++;
+                /* parse hash */
+                uint32_t fhash = 0;
+                while (*p >= '0' && *p <= '9') { fhash = fhash * 10 + (uint32_t)(*p - '0'); p++; }
+                if (*p == ':') p++;
+                /* parse uid */
+                int fuid2 = 0;
+                while (*p >= '0' && *p <= '9') { fuid2 = fuid2 * 10 + (*p - '0'); p++; }
+                while (*p && *p != '\n') p++;
+                if (*p == '\n') p++;
+                if (str_compare(uname, luser) && fhash == hash) {
+                    login_ok = 1; found_uid = fuid2; break;
+                }
+            }
+        }
+        if (login_ok) {
+            task_set_uid(task_get_current(), found_uid);
+            set_color(GFX_LGREEN, GFX_BLACK);
+            print("Login berhasil sebagai "); print(luser); print("\n");
+            set_color(GFX_WHITE, GFX_BLACK);
+        } else {
+            set_color(GFX_LRED, GFX_BLACK);
+            print("Login gagal: username atau password salah\n");
+            set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+        }
+    }
+    else if (str_starts_with(input_buffer, "adduser ")) {
+        int tid = task_get_current();
+        if (task_get_uid(tid) != 0) {
+            set_color(GFX_LRED, GFX_BLACK);
+            print("adduser: perlu hak root (uid=0)\n");
+            set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+        } else {
+            /* adduser <username> <password> [uid] */
+            const char *p = input_buffer + 8;
+            char auname[32]; int ai = 0;
+            while (*p && *p != ' ' && ai < 31) auname[ai++] = *p++;
+            auname[ai] = '\0';
+            while (*p == ' ') p++;
+            char apass[64]; int api = 0;
+            while (*p && *p != ' ' && api < 63) apass[api++] = *p++;
+            apass[api] = '\0';
+            while (*p == ' ') p++;
+            int auid = 1000;
+            if (*p >= '0' && *p <= '9') {
+                auid = 0;
+                while (*p >= '0' && *p <= '9') { auid = auid * 10 + (*p - '0'); p++; }
+            }
+            /* hash password */
+            uint32_t ahash = 5381;
+            int ahi;
+            for (ahi = 0; apass[ahi]; ahi++)
+                ahash = ((ahash << 5) + ahash) + (uint8_t)apass[ahi];
+            /* Pastikan etc/passwd ada, baca isi lama */
+            const char *existing = fs_read("etc/passwd");
+            char newbuf[1024]; int nb2i = 0;
+            if (existing) {
+                const char *ex = existing;
+                while (*ex && nb2i < 900) newbuf[nb2i++] = *ex++;
+            }
+            /* Tambahkan baris baru: uname:hash:uid:home\n */
+            const char *np = auname;
+            while (*np && nb2i < 1020) newbuf[nb2i++] = *np++;
+            newbuf[nb2i++] = ':';
+            char hbuf[12]; itoa(ahash, hbuf);
+            const char *hn = hbuf;
+            while (*hn && nb2i < 1020) newbuf[nb2i++] = *hn++;
+            newbuf[nb2i++] = ':';
+            char ubuf[8]; itoa((uint32_t)auid, ubuf);
+            const char *un = ubuf;
+            while (*un && nb2i < 1020) newbuf[nb2i++] = *un++;
+            newbuf[nb2i++] = ':';
+            newbuf[nb2i++] = '/'; newbuf[nb2i++] = 'h'; newbuf[nb2i++] = 'o'; newbuf[nb2i++] = 'm'; newbuf[nb2i++] = 'e';
+            newbuf[nb2i++] = '\n'; newbuf[nb2i] = '\0';
+            if (fs_write("etc/passwd", newbuf)) {
+                set_color(GFX_LGREEN, GFX_BLACK);
+                print("adduser: pengguna "); print(auname); print(" dibuat (uid=");
+                char ub2[8]; itoa((uint32_t)auid, ub2); print(ub2); print(")\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+            } else {
+                set_color(GFX_LRED, GFX_BLACK);
+                print("adduser: gagal menulis etc/passwd\n");
+                set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+            }
+        }
+    }
+    else if (str_compare(input_buffer, "passwd")) {
+        set_color(GFX_LGRAY, GFX_BLACK);
+        print("Password baru: ");
+        char npass[64]; int npi = 0;
+        while (1) {
+            char c = keyboard_getchar_block();
+            if (c == '\n') break;
+            if (c == '\b') { if (npi > 0) npi--; continue; }
+            if (npi < 63) npass[npi++] = c;
+        }
+        npass[npi] = '\0'; print("\n");
+        int cur_uid = task_get_uid(task_get_current());
+        uint32_t nhash = 5381;
+        int nhi;
+        for (nhi = 0; npass[nhi]; nhi++)
+            nhash = ((nhash << 5) + nhash) + (uint8_t)npass[nhi];
+        /* Baca /etc/passwd, update baris uid-nya */
+        const char *data = fs_read("etc/passwd");
+        if (!data) {
+            set_color(GFX_LRED, GFX_BLACK);
+            print("passwd: tidak dapat membaca etc/passwd\n");
+            set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+        } else {
+            char outbuf[1024]; int obi = 0;
+            const char *p = data; int updated = 0;
+            while (*p && obi < 950) {
+                /* Baca satu baris */
+                char line[128]; int li2 = 0;
+                while (*p && *p != '\n' && li2 < 127) line[li2++] = *p++;
+                line[li2] = '\0';
+                if (*p == '\n') p++;
+                /* Parse uid field (posisi ke-3 setelah 2 ':') */
+                char *lp = line; int colon = 0;
+                char *uid_start = 0;
+                char *uname_start = line;
+                while (*lp) { if (*lp == ':') { colon++; if (colon == 2) uid_start = lp+1; } lp++; }
+                int line_uid = -1;
+                if (uid_start) {
+                    line_uid = 0;
+                    char *up = uid_start;
+                    while (*up >= '0' && *up <= '9') { line_uid = line_uid * 10 + (*up - '0'); up++; }
+                }
+                if (!updated && line_uid == cur_uid) {
+                    /* Bangun ulang baris dengan hash baru */
+                    /* Tulis username */
+                    char *wp = line;
+                    while (*wp && *wp != ':' && obi < 950) outbuf[obi++] = *wp++;
+                    if (*wp == ':') { outbuf[obi++] = ':'; wp++; }
+                    /* Skip hash lama, tulis hash baru */
+                    while (*wp && *wp != ':') wp++;
+                    char nhbuf[12]; itoa(nhash, nhbuf);
+                    const char *nhn = nhbuf;
+                    while (*nhn && obi < 950) outbuf[obi++] = *nhn++;
+                    /* Salin sisa (uid:home) */
+                    while (*wp && obi < 950) outbuf[obi++] = *wp++;
+                    outbuf[obi++] = '\n'; updated = 1;
+                } else {
+                    /* Salin apa adanya */
+                    char *wp = line;
+                    while (*wp && obi < 950) outbuf[obi++] = *wp++;
+                    outbuf[obi++] = '\n';
+                }
+            }
+            outbuf[obi] = '\0';
+            if (updated && fs_write("etc/passwd", outbuf)) {
+                set_color(GFX_LGREEN, GFX_BLACK);
+                print("passwd: password berhasil diubah\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+            } else {
+                set_color(GFX_LRED, GFX_BLACK);
+                print("passwd: gagal menyimpan\n");
+                set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+            }
+        }
+    }
+    else if (str_starts_with(input_buffer, "su ")) {
+        /* su <username>: ganti user (hanya root yang bisa, atau ke dirinya sendiri) */
+        const char *su_user = input_buffer + 3;
+        while (*su_user == ' ') su_user++;
+        int cur_uid = task_get_uid(task_get_current());
+        const char *data = fs_read("etc/passwd");
+        int su_uid = -1;
+        if (data) {
+            const char *p = data;
+            while (*p) {
+                char uname[32]; int ui = 0;
+                while (*p && *p != ':' && ui < 31) uname[ui++] = *p++;
+                uname[ui] = '\0';
+                /* skip hash */
+                while (*p && *p != ':') p++;
+                if (*p == ':') p++;
+                /* parse uid */
+                int fuid3 = 0;
+                while (*p >= '0' && *p <= '9') { fuid3 = fuid3 * 10 + (*p - '0'); p++; }
+                while (*p && *p != '\n') p++;
+                if (*p == '\n') p++;
+                if (str_compare(uname, su_user)) { su_uid = fuid3; break; }
+            }
+        }
+        if (su_uid < 0) {
+            set_color(GFX_LRED, GFX_BLACK);
+            print("su: pengguna tidak ditemukan\n");
+            set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+        } else if (cur_uid != 0 && cur_uid != su_uid) {
+            set_color(GFX_LRED, GFX_BLACK);
+            print("su: perlu hak root untuk berpindah pengguna\n");
+            set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+        } else {
+            task_set_uid(task_get_current(), su_uid);
+            set_color(GFX_LGREEN, GFX_BLACK);
+            print("su: sekarang sebagai "); print(su_user); print("\n");
+            set_color(GFX_WHITE, GFX_BLACK);
+        }
     }
     else {
         /* Cek apakah ada operator ' | ' (pipe inline) */

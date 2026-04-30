@@ -20,13 +20,13 @@ extern void     itoa(uint32_t n, char *buf);
 extern uint32_t get_ticks(void);
 extern void     set_color(uint32_t fg, uint32_t bg);
 
-/* ---- Konfigurasi jaringan statis ---- */
+/* ---- Konfigurasi jaringan statis (dapat diperbarui DHCP) ---- */
 static uint8_t my_mac[6];
-static const uint8_t MY_IP[4]    = {10, 0, 2, 15};
+static uint8_t MY_IP[4]   = {10, 0, 2, 15};  /* diperbarui DHCP jika berhasil */
 
 /* Fondasi AP forward declaration */
 static void ip6_make_link_local(void);
-static const uint8_t GW_IP[4]    = {10, 0, 2,  2};
+static uint8_t GW_IP[4]          = {10, 0, 2,  2};  /* diperbarui DHCP jika berhasil */
 static const uint8_t BCAST_MAC[6]= {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 
 /* ---- ARP cache (IP→MAC, 8 slot) ---- */
@@ -1835,4 +1835,249 @@ int net_ping6(const uint8_t dst_ip6[16], int count) {
         next_seq:;
     }
     return 0;
+}
+
+/* ================================================================
+ * Fondasi AU — DHCP Client (RFC 2131)
+ * Discover → Offer → Request → ACK via UDP broadcast.
+ * Memperbarui MY_IP dan GW_IP bila berhasil.
+ * Return 1 sukses, 0 gagal/timeout.
+ * ================================================================ */
+
+/* Helper: memset sederhana */
+static void dhcp_memset(uint8_t *dst, uint8_t v, int n) {
+    int i; for (i = 0; i < n; i++) dst[i] = v;
+}
+
+/* Tulis 32-bit big-endian ke p */
+static void put_be32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
+    p[2] = (uint8_t)(v >>  8); p[3] = (uint8_t)v;
+}
+static uint32_t get_be32(const uint8_t *p) {
+    return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|(uint32_t)p[3];
+}
+
+/* Tulis header UDP/IP/Ethernet ke pkt_buf, kembali offset DHCP payload (42) */
+#define DHCP_SRC_PORT 68
+#define DHCP_DST_PORT 67
+#define DHCP_PKT_SIZE 300  /* Ethernet+IP+UDP+DHCP minimal */
+
+/* Build DHCP Discover atau Request di dalam dhcp_payload[236+options] */
+static int dhcp_build(uint8_t *buf, int maxlen, uint8_t msg_type,
+                      uint32_t xid,
+                      const uint8_t offer_ip[4],  /* NULL = Discover */
+                      const uint8_t server_ip[4]) /* NULL = Discover */
+{
+    static const uint8_t BCAST4[4] = {255,255,255,255};
+    static const uint8_t ZERO4[4]  = {0,0,0,0};
+
+    /* Ethernet */
+    mc(buf,    BCAST_MAC, 6);
+    mc(buf+6,  my_mac, 6);
+    buf[12] = 0x08; buf[13] = 0x00;  /* EtherType IPv4 */
+
+    /* IP header (no options, 20 bytes) */
+    buf[14] = 0x45; buf[15] = 0;    /* VHL, TOS */
+    /* total length: IP(20)+UDP(8)+DHCP(min 300) filled later */
+    buf[16] = 0x01; buf[17] = 0x24; /* 292 total length placeholder */
+    buf[18] = 0;    buf[19] = 0;    /* ID */
+    buf[20] = 0;    buf[21] = 0;    /* flags+frag offset */
+    buf[22] = 64;   buf[23] = 17;   /* TTL=64, proto=UDP */
+    buf[24] = 0;    buf[25] = 0;    /* checksum (filled later) */
+    mc(buf+26, ZERO4, 4);           /* src = 0.0.0.0 */
+    mc(buf+30, BCAST4, 4);          /* dst = 255.255.255.255 */
+
+    /* UDP header */
+    buf[34] = 0; buf[35] = DHCP_SRC_PORT;  /* src port 68 */
+    buf[36] = 0; buf[37] = DHCP_DST_PORT;  /* dst port 67 */
+    buf[38] = 0; buf[39] = 0;              /* length (filled later) */
+    buf[40] = 0; buf[41] = 0;              /* checksum 0 = no checksum */
+
+    /* DHCP payload starts at offset 42 */
+    uint8_t *d = buf + 42;
+    dhcp_memset(d, 0, 300);
+    d[0] = 1;            /* op = BOOTREQUEST */
+    d[1] = 1;            /* htype = Ethernet */
+    d[2] = 6;            /* hlen = 6 */
+    d[3] = 0;            /* hops */
+    put_be32(d+4, xid);  /* xid */
+    mc(d+28, my_mac, 6); /* chaddr */
+    /* Magic cookie */
+    d[236] = 99; d[237] = 130; d[238] = 83; d[239] = 99;
+    /* Options */
+    int opt = 240;
+    /* Option 53: DHCP Message Type */
+    d[opt++] = 53; d[opt++] = 1; d[opt++] = msg_type;
+    /* Option 61: Client Identifier (Ethernet MAC) */
+    d[opt++] = 61; d[opt++] = 7; d[opt++] = 1;
+    mc(d+opt, my_mac, 6); opt += 6;
+    if (msg_type == 3 && offer_ip && server_ip) {
+        /* Option 50: Requested IP Address */
+        d[opt++] = 50; d[opt++] = 4; mc(d+opt, offer_ip, 4); opt += 4;
+        /* Option 54: DHCP Server Identifier */
+        d[opt++] = 54; d[opt++] = 4; mc(d+opt, server_ip, 4); opt += 4;
+    }
+    /* Option 55: Parameter Request List */
+    d[opt++] = 55; d[opt++] = 4;
+    d[opt++] = 1;  /* subnet mask */
+    d[opt++] = 3;  /* router */
+    d[opt++] = 6;  /* DNS */
+    d[opt++] = 51; /* lease time */
+    /* End option */
+    d[opt++] = 255;
+
+    int dhcp_len = 236 + opt - 240 + 4; /* 236 fixed + options */
+    int udp_len  = 8 + dhcp_len;
+    int ip_len   = 20 + udp_len;
+    int tot_len  = 14 + ip_len;
+
+    /* Fix lengths */
+    buf[16] = (uint8_t)(ip_len >> 8);
+    buf[17] = (uint8_t)ip_len;
+    buf[38] = (uint8_t)(udp_len >> 8);
+    buf[39] = (uint8_t)udp_len;
+
+    /* IP checksum */
+    uint32_t s = 0;
+    int ii;
+    for (ii = 14; ii < 34; ii += 2)
+        s += (uint32_t)((buf[ii]<<8)|buf[ii+1]);
+    while (s >> 16) s = (s & 0xFFFF) + (s >> 16);
+    s = ~s & 0xFFFF;
+    buf[24] = (uint8_t)(s >> 8); buf[25] = (uint8_t)s;
+
+    return tot_len;
+}
+
+/* Parse DHCP option field, return pointer to value or NULL */
+static const uint8_t *dhcp_opt(const uint8_t *opt, int optlen, uint8_t code, int *vlen) {
+    int i = 0;
+    while (i < optlen) {
+        if (opt[i] == 255) break;
+        if (opt[i] == 0)   { i++; continue; }  /* pad */
+        if (i + 1 >= optlen) break;
+        uint8_t len = opt[i+1];
+        if (opt[i] == code) { if (vlen) *vlen = len; return opt + i + 2; }
+        i += 2 + len;
+    }
+    return (const uint8_t*)0;
+}
+
+static void print_ip_raw(const uint8_t ip[4]) {
+    char nb[12];
+    itoa(ip[0], nb); print(nb); print(".");
+    itoa(ip[1], nb); print(nb); print(".");
+    itoa(ip[2], nb); print(nb); print(".");
+    itoa(ip[3], nb); print(nb);
+}
+
+int dhcp_request(void) {
+    if (!rtl8139_present()) {
+        print("dhcp: NIC tidak tersedia\n");
+        return 0;
+    }
+
+    /* Gunakan XID unik dari MAC byte terakhir */
+    uint32_t xid = 0xD0C50000u | ((uint32_t)my_mac[4] << 8) | my_mac[5];
+
+    /* Kirim DHCP Discover */
+    int plen = dhcp_build(pkt_buf, sizeof(pkt_buf), 1 /*DISCOVER*/, xid, 0, 0);
+    rtl8139_send(pkt_buf, (uint16_t)plen);
+
+    /* Tunggu DHCP Offer (timeout 3 detik) */
+    uint8_t offer_ip[4] = {0,0,0,0};
+    uint8_t server_ip[4] = {0,0,0,0};
+    uint8_t rbuf[1514];
+    uint16_t rlen;
+    uint32_t deadline = get_ticks() + 300;  /* 3 detik @100Hz */
+    int got_offer = 0;
+
+    while (get_ticks() < deadline && !got_offer) {
+        if (rtl8139_recv(rbuf, &rlen) != 0) continue;
+        if (rlen < 42 + 240 + 5) continue;
+        /* IPv4 UDP? */
+        if (rbuf[12] != 0x08 || rbuf[13] != 0x00) continue;
+        if (rbuf[23] != 17) continue;  /* UDP */
+        /* src port 67, dst port 68 */
+        if (rbuf[34] != 0 || rbuf[35] != 67) continue;
+        if (rbuf[36] != 0 || rbuf[37] != 68) continue;
+        /* DHCP op=2 (reply), magic cookie */
+        uint8_t *d = rbuf + 42;
+        if (d[0] != 2) continue;
+        if (get_be32(d+4) != xid) continue;  /* wrong XID */
+        if (d[236]!=99||d[237]!=130||d[238]!=83||d[239]!=99) continue;
+        /* Check msg type = 2 (OFFER) */
+        int vl = 0;
+        const uint8_t *mt = dhcp_opt(d+240, rlen-42-240, 53, &vl);
+        if (!mt || mt[0] != 2) continue;
+        /* Got offer — extract offered IP and server ID */
+        mc(offer_ip, d+16, 4);
+        const uint8_t *sid = dhcp_opt(d+240, rlen-42-240, 54, &vl);
+        if (sid && vl == 4) mc(server_ip, sid, 4);
+        else mc(server_ip, rbuf+26, 4);  /* fallback: source IP */
+        got_offer = 1;
+    }
+
+    if (!got_offer) {
+        set_color(0x00FF5555, 0);
+        print("dhcp: tidak ada offer (timeout)\n");
+        set_color(0x00FFFFFF, 0);
+        return 0;
+    }
+
+    /* Kirim DHCP Request */
+    plen = dhcp_build(pkt_buf, sizeof(pkt_buf), 3 /*REQUEST*/, xid, offer_ip, server_ip);
+    rtl8139_send(pkt_buf, (uint16_t)plen);
+
+    /* Tunggu DHCP ACK (timeout 3 detik) */
+    deadline = get_ticks() + 300;
+    int got_ack = 0;
+    uint8_t ack_gw[4]  = {0,0,0,0};
+    uint8_t ack_dns[4] = {0,0,0,0};
+
+    while (get_ticks() < deadline && !got_ack) {
+        if (rtl8139_recv(rbuf, &rlen) != 0) continue;
+        if (rlen < 42 + 240 + 5) continue;
+        if (rbuf[12] != 0x08 || rbuf[13] != 0x00) continue;
+        if (rbuf[23] != 17) continue;
+        if (rbuf[34] != 0 || rbuf[35] != 67) continue;
+        if (rbuf[36] != 0 || rbuf[37] != 68) continue;
+        uint8_t *d = rbuf + 42;
+        if (d[0] != 2) continue;
+        if (get_be32(d+4) != xid) continue;
+        if (d[236]!=99||d[237]!=130||d[238]!=83||d[239]!=99) continue;
+        int vl = 0;
+        const uint8_t *mt = dhcp_opt(d+240, rlen-42-240, 53, &vl);
+        if (!mt || mt[0] != 5) continue;  /* 5 = ACK */
+        /* Extract gateway (option 3) and DNS (option 6) */
+        const uint8_t *rt = dhcp_opt(d+240, rlen-42-240,  3, &vl);
+        if (rt && vl >= 4) mc(ack_gw, rt, 4);
+        const uint8_t *dns = dhcp_opt(d+240, rlen-42-240, 6, &vl);
+        if (dns && vl >= 4) mc(ack_dns, dns, 4);
+        got_ack = 1;
+    }
+
+    if (!got_ack) {
+        set_color(0x00FF5555, 0);
+        print("dhcp: tidak ada ACK (timeout)\n");
+        set_color(0x00FFFFFF, 0);
+        return 0;
+    }
+
+    /* Terapkan konfigurasi */
+    mc(MY_IP, offer_ip, 4);
+    if (ack_gw[0]) mc(GW_IP, ack_gw, 4);
+
+    set_color(0x0055FF55, 0);
+    print("dhcp: IP    = "); print_ip_raw(MY_IP);  print("\n");
+    print("dhcp: GW    = "); print_ip_raw(GW_IP);  print("\n");
+    if (ack_dns[0]) { print("dhcp: DNS   = "); print_ip_raw(ack_dns); print("\n"); }
+    set_color(0x00FFFFFF, 0);
+    return 1;
+}
+
+/* Salin IP saat ini ke out_ip */
+void net_get_ip(uint8_t out_ip[4]) {
+    mc(out_ip, MY_IP, 4);
 }

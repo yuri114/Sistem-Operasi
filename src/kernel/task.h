@@ -33,6 +33,11 @@ typedef struct {
     /* Fondasi AA — argv: serialized null-terminated strings "arg0\0arg1\0..." */
     int       arg_argc;
     char      arg_buf[512];
+    /* Fondasi AW — nice value (-20..+19, default 0) dan aging counter */
+    int8_t    nice;       /* -20 = prioritas tertinggi, +19 = terendah */
+    uint32_t  age_ticks;  /* berapa kali dilewati, direset saat dijadwalkan */
+    /* Fondasi AY — uid pengguna yang menjalankan task ini (0=root) */
+    int       uid;
 } Task;
 
 /* F-T: konstanta sinyal standar */
@@ -76,6 +81,10 @@ int         task_get_cpu(int id); /* kembalikan cpu_id task */
 int         task_kill(int id);
 int         task_get_priority(int id);
 int         task_set_priority(int id, int prio);
+int         task_get_nice(int id);
+int         task_set_nice(int id, int nice_val);
+int         task_get_uid(int id);
+void        task_set_uid(int id, int uid);
 void        task_set_pipe(int id, int pipe_id);
 int         task_get_current_pipe();
 uint64_t    task_get_rsp0(int id);

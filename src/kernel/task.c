@@ -281,19 +281,36 @@ void task_switch() {
     /* Cari task berikutnya dengan spinlock agar tidak race dengan AP */
     spinlock_acquire(&task_lock);
 
-    int next = (current_task + 1) % MAX_TASKS;
+    /* AW: priority-based selection dengan aging.
+     * effective_priority = (priority * 4) - nice + (age_ticks / 8)
+     * Lebih tinggi = lebih diutamakan.                              */
+    int best = -1;
+    int best_score = -9999;
     int i;
     for (i = 0; i < MAX_TASKS; i++) {
-        /* Jika ada AP, BSP hanya ambil task is_user==1 (shell/ring-3).
-         * Task is_user==0 (kernel task) dibiarkan bebas untuk AP. */
-        if (tasks[next].used &&
-            tasks[next].status == TASK_RUNNING &&
-            tasks[next].cpu_id == -1 &&
-            (!has_ap || tasks[next].is_user == 1)) break;
-        next = (next + 1) % MAX_TASKS;
+        if (!tasks[i].used) continue;
+        if (tasks[i].status != TASK_RUNNING) continue;
+        if (tasks[i].cpu_id != -1) continue;
+        if (i == current_task) continue;
+        if (has_ap && tasks[i].is_user == 0) continue;
+        int score = (int)tasks[i].priority * 4 - (int)tasks[i].nice
+                    + (int)(tasks[i].age_ticks >> 3);
+        if (score > best_score) { best_score = score; best = i; }
     }
 
-    if (!tasks[next].used || tasks[next].status != TASK_RUNNING ||
+    /* Increment age_ticks for all eligible tasks that were NOT chosen */
+    for (i = 0; i < MAX_TASKS; i++) {
+        if (!tasks[i].used) continue;
+        if (tasks[i].status != TASK_RUNNING) continue;
+        if (tasks[i].cpu_id != -1) continue;
+        if (i == best) continue;
+        if (i == current_task) continue;
+        if (tasks[i].age_ticks < 0xFFFFFFFFu) tasks[i].age_ticks++;
+    }
+
+    int next = best;
+
+    if (next < 0 || !tasks[next].used || tasks[next].status != TASK_RUNNING ||
         tasks[next].cpu_id != -1 || next == current_task) {
         spinlock_release(&task_lock);
         return;
@@ -302,6 +319,7 @@ void task_switch() {
     /* Lepas task lama (kembalikan ke pool), klaim task baru untuk BSP */
     tasks[current_task].cpu_id = (int8_t)-1;
     tasks[next].cpu_id         = (int8_t)0;
+    tasks[next].age_ticks      = 0;  /* AW: reset aging counter */
 
     spinlock_release(&task_lock);
 
@@ -583,6 +601,31 @@ int task_set_priority(int id, int prio) {
     tasks[id].priority = (uint8_t)prio;
     tasks[id].ticks    = (uint8_t)prio;
     return 1;
+}
+
+/* AW: nice value getter/setter */
+int task_get_nice(int id) {
+    if (id < 0 || id >= MAX_TASKS || !tasks[id].used) return 0;
+    return (int)tasks[id].nice;
+}
+
+int task_set_nice(int id, int nice_val) {
+    if (id < 0 || id >= MAX_TASKS || !tasks[id].used) return 0;
+    if (nice_val < -20) nice_val = -20;
+    if (nice_val >  19) nice_val =  19;
+    tasks[id].nice = (int8_t)nice_val;
+    return 1;
+}
+
+/* AY: uid getter/setter */
+int task_get_uid(int id) {
+    if (id < 0 || id >= MAX_TASKS || !tasks[id].used) return -1;
+    return tasks[id].uid;
+}
+
+void task_set_uid(int id, int uid) {
+    if (id < 0 || id >= MAX_TASKS) return;
+    tasks[id].uid = uid;
 }
 
 void task_set_pipe(int id, int pipe_id) {

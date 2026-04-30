@@ -45,12 +45,21 @@ void fill_screen(uint32_t color) {
         fb[i] = color;
 }
 
-/* Isi persegi panjang (x, y, w, h) dengan satu warna. */
+/* Isi persegi panjang (x, y, w, h) dengan satu warna.
+ * Clip dilakukan sekali di luar loop — tidak ada bounds check per piksel. */
 void fill_rect(int x, int y, int w, int h, uint32_t color) {
-    int px, py;
-    for (py = y; py < y + h; py++)
-        for (px = x; px < x + w; px++)
-            draw_pixel(px, py, color);
+    if (x < 0)              { w += x; x = 0; }
+    if (y < 0)              { h += y; y = 0; }
+    if (x + w > (int)SCREEN_W) w = (int)SCREEN_W - x;
+    if (y + h > (int)SCREEN_H) h = (int)SCREEN_H - y;
+    if (w <= 0 || h <= 0) return;
+    int py;
+    for (py = y; py < y + h; py++) {
+        volatile uint32_t *row = fb + (unsigned)(py * SCREEN_W + x);
+        int px;
+        for (px = 0; px < w; px++)
+            row[px] = color;
+    }
 }
 
 /* Gambar garis dari (x1,y1) ke (x2,y2) — algoritma Bresenham. */

@@ -126,7 +126,21 @@ void keyboard_handler() {
     if (sc == 0x0F) { key_push(KEY_TAB); wake = kwaiter; kwaiter = -1; if (wake >= 0) task_unblock(wake); return; }
 
     /* F1-F10: scancode 0x3B-0x44 */
-    if (sc >= 0x3B && sc <= 0x44) { key_push((char)(KEY_F1 + (sc - 0x3B))); wake = kwaiter; kwaiter = -1; if (wake >= 0) task_unblock(wake); return; }
+    if (sc >= 0x3B && sc <= 0x44) {
+        /* Fondasi AV: Ctrl+Alt+F1..F6 → VT switch */
+        if (ctrl_pressed && alt_pressed) {
+            int vtn = sc - 0x3B;  /* 0-based VT number */
+            if (vtn < 6) {
+                extern void vt_switch(int n);
+                vt_switch(vtn);
+                return;
+            }
+        }
+        key_push((char)(KEY_F1 + (sc - 0x3B)));
+        wake = kwaiter; kwaiter = -1;
+        if (wake >= 0) task_unblock(wake);
+        return;
+    }
 
     if      (sc == 0x0E) key_push('\b');    /* Backspace */
     else if (sc == 0x1C) key_push('\n');    /* Enter     */
@@ -159,3 +173,12 @@ void keyboard_handler() {
     if (wake >= 0) task_unblock(wake);
 }
 
+/* Blocking getchar: tunggu sampai ada karakter di buffer */
+char keyboard_getchar_block() {
+    char c;
+    while (1) {
+        c = keyboard_getchar();
+        if (c) return c;
+        task_yield();
+    }
+}
