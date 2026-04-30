@@ -357,6 +357,38 @@ static void wm_redraw_all(void) {
     taskbar_draw();  /* gambar taskbar di atas segalanya */
 }
 
+/* ------------------------------------------------------------------ */
+/* Partial redraw untuk area yang ditinggalkan window saat drag/resize */
+/* 1. Restore wallpaper di region (rx,ry,rw,rh)                        */
+/* 2. Redraw ikon desktop yang overlap                                  */
+/* 3. Redraw window lain yang overlap (z-order di bawah window bergerak)*/
+/* 4. Redraw taskbar jika region menyentuh area taskbar                 */
+/* ------------------------------------------------------------------ */
+static void wm_redraw_region(int id, int rx, int ry, int rw, int rh) {
+    if (wp_is_loaded()) {
+        wp_blit_region(rx, ry, rw, rh);
+    } else {
+        fill_rect(rx, ry, rw, rh, WM_DESKTOP_BG);
+    }
+    draw_desktop_icons();
+    /* Redraw window lain yang berada di bawah id dan overlap region */
+    for (int i = 0; i < z_count; i++) {
+        int zid = z_order[i];
+        if (zid == id) break;   /* stop saat sampai window yang bergerak */
+        WinSlot *zw = &windows[zid];
+        if (!zw->alive || zw->minimized) continue;
+        if (zw->x < rx + rw && zw->x + zw->w > rx &&
+            zw->y < ry + rh && zw->y + zw->h > ry) {
+            wm_draw_window(zid);
+        }
+    }
+    /* Taskbar */
+    if (ry + rh > SCREEN_H - TASKBAR_H_PX)
+        taskbar_draw();
+    /* Gambar window yang bergerak di posisi baru */
+    wm_draw_window(id);
+}
+
 /* ============================================================
  * Hit testing
  * ============================================================ */
@@ -615,9 +647,20 @@ void wm_mouse_event(int nx, int ny, uint8_t new_btn, uint8_t old_btn) {
             if (nh < min_h) nh = min_h;
             if (w->x + nw > SCREEN_W) nw = SCREEN_W - w->x;
             if (w->y + nh > SCREEN_H - TASKBAR_H_PX) nh = SCREEN_H - TASKBAR_H_PX - w->y;
-            if (nw != w->w || nh != w->h) { w->w = nw; w->h = nh; redraw = 1; }
+            if (nw != w->w || nh != w->h) {
+                int old_x = w->x, old_y = w->y;
+                int old_w = w->w, old_h = w->h;
+                w->w = nw; w->h = nh;
+                /* Partial redraw: union area lama dan baru */
+                int rw = old_w > nw ? old_w : nw;
+                int rh = old_h > nh ? old_h : nh;
+                wm_redraw_region(resize_id, old_x, old_y, rw, rh);
+            }
         } else {
+            int old_id = resize_id;
             resize_id = -1;
+            wm_redraw_all();   /* full cleanup saat release */
+            (void)old_id;
         }
     }
 
@@ -631,9 +674,15 @@ void wm_mouse_event(int nx, int ny, uint8_t new_btn, uint8_t old_btn) {
             if (nx_w + w->w > SCREEN_W) nx_w = SCREEN_W - w->w;
             if (ny_w + w->h > SCREEN_H - TASKBAR_H_PX) ny_w = SCREEN_H - TASKBAR_H_PX - w->h;
             if (ny_w < 0) ny_w = 0;
-            if (nx_w != w->x || ny_w != w->y) { w->x = nx_w; w->y = ny_w; redraw = 1; }
+            if (nx_w != w->x || ny_w != w->y) {
+                int old_x = w->x, old_y = w->y;
+                w->x = nx_w; w->y = ny_w;
+                /* Partial redraw: restore area lama, gambar di posisi baru */
+                wm_redraw_region(drag_id, old_x, old_y, w->w, w->h);
+            }
         } else {
             drag_id = -1;
+            wm_redraw_all();   /* full cleanup saat release */
         }
     }
 

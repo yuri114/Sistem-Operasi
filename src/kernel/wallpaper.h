@@ -16,6 +16,11 @@
  * Return 1 jika berhasil, 0 jika drive tidak ada / error. */
 int wp_blit(void);
 
+/* Blit hanya area persegi panjang (dx,dy)+(dw×dh) dari cache ke framebuffer.
+ * Sangat cepat — tidak baca disk, hanya copy dari RAM cache.
+ * Dipakai saat drag window untuk menghindari full-screen redraw. */
+void wp_blit_region(int dx, int dy, int dw, int dh);
+
 /* Return 1 jika wallpaper sudah berhasil di-load */
 int wp_is_loaded(void);
 

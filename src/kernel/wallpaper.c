@@ -126,21 +126,51 @@ static uint8_t g_sect_buf[512];
 
 /* ------------------------------------------------------------------ */
 /* Blit cache ke framebuffer — hanya memory copy, sangat cepat        */
+/* Tidak ada modulo/divisi: pakai x/y counter langsung                */
 /* ------------------------------------------------------------------ */
 static void wp_blit_cache(void) {
     extern uint32_t gfx_lfb_addr;
     volatile uint32_t *fb = (volatile uint32_t *)(uintptr_t)gfx_lfb_addr;
-    uint32_t total_px = (uint32_t)WP_SRC_W * WP_SRC_H;
-    uint32_t px;
-    for (px = 0; px < total_px; px++) {
-        uint32_t color = g_wp_cache[px];
-        uint32_t sx    = px % (uint32_t)WP_SRC_W;
-        uint32_t sy    = px / (uint32_t)WP_SRC_W;
-        uint32_t base  = (sy * 2u) * 1920u + (sx * 2u);
-        fb[base]            = color;
-        fb[base + 1]        = color;
-        fb[base + 1920]     = color;
-        fb[base + 1920 + 1] = color;
+    uint32_t *cache = g_wp_cache;
+    uint32_t sy;
+    for (sy = 0; sy < (uint32_t)WP_SRC_H; sy++) {
+        uint32_t fb_row = sy * 2u * 1920u;
+        uint32_t sx;
+        for (sx = 0; sx < (uint32_t)WP_SRC_W; sx++) {
+            uint32_t color = *cache++;
+            uint32_t base  = fb_row + sx * 2u;
+            fb[base]            = color;
+            fb[base + 1]        = color;
+            fb[base + 1920]     = color;
+            fb[base + 1920 + 1] = color;
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* wp_blit_region — blit hanya sebagian layar dari cache               */
+/* Koordinat dalam piksel layar (1920×1080).                           */
+/* ------------------------------------------------------------------ */
+void wp_blit_region(int dx, int dy, int dw, int dh) {
+    if (!g_wp_loaded || !g_wp_cache) return;
+    extern uint32_t gfx_lfb_addr;
+    volatile uint32_t *fb = (volatile uint32_t *)(uintptr_t)gfx_lfb_addr;
+    /* Clamp ke batas layar */
+    if (dx < 0)        { dw += dx; dx = 0; }
+    if (dy < 0)        { dh += dy; dy = 0; }
+    if (dx + dw > 1920) dw = 1920 - dx;
+    if (dy + dh > 1080) dh = 1080 - dy;
+    if (dw <= 0 || dh <= 0) return;
+    int sy;
+    for (sy = dy; sy < dy + dh; sy++) {
+        /* Baris cache = sy/2 (tiap cache row diulang 2× vertikal) */
+        uint32_t *cache_row = g_wp_cache + (uint32_t)(sy >> 1) * (uint32_t)WP_SRC_W;
+        uint32_t  fb_row    = (uint32_t)sy * 1920u;
+        int sx;
+        for (sx = dx; sx < dx + dw; sx++) {
+            /* Kolom cache = sx/2 (tiap cache col diulang 2× horizontal) */
+            fb[fb_row + (uint32_t)sx] = cache_row[sx >> 1];
+        }
     }
 }
 

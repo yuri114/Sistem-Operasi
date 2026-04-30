@@ -72,10 +72,16 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **Shared memory**: `shm_create/attach/detach`, dipetakan ke VA 0x500000+slot×4096 (`SYS_SHM_CREATE/ATTACH/DETACH`)
 
 ### GUI & Window Manager
-- **Graphics**: `draw_pixel`, `fill_rect`, `draw_line`, font 8×8 pixel
+- **Graphics**: `draw_pixel`, `fill_rect`, `draw_line`, font 8×16 pixel (row-doubled)
+- **Terminal console**: 160×60 karakter, font 8×16, latar hitam solid, ANSI escape
+- **GUI mode**: aktifkan via perintah `gui` di shell; `g_gui_mode` flag memisahkan routing keyboard
 - **Window Manager**: hingga 16 window simultan, drag, close, minimize/restore
-- **Taskbar**: task list, klik untuk focus/restore window
-- **Klip mouse**: tracking posisi, kursor paint sederhana
+- **Drag/resize optimasi**: partial redraw via `wp_blit_region()` + `wm_redraw_region()` — hanya area yang berubah yang digambar ulang, tanpa flicker
+- **Taskbar**: quick-launch (Paint/Calc/Note/Files/Term), jam real-time HH:MM:SS
+- **Desktop icons**: klik untuk buka aplikasi
+- **Wallpaper**: dimuat dari disk gambar `wallpaper.img` (960×540 BGRA32, di-scale 2× ke 1920×1080), hanya tampil di GUI mode
+- **Kursor mouse**: 16×16 pixel arrow cursor dengan outline
+- **Tema**: Catppuccin Mocha — titlebar `#2D2D2D`, tombol close pink `#F38BA8`, teks `#CDD6F4`
 
 ### Networking — Tahap G
 - **RTL8139 driver**: PCI scan (vendor 0x10EC / device 0x8139), I/O port access, TX 4-descriptor round-robin, RX ring 8K (polling, tanpa IRQ)
@@ -377,6 +383,64 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **Shell**: `nslookup <hostname>` → cetak IP hijau atau pesan error merah
 - File: `src/kernel/net.c`, `src/kernel/net.h`, `src/kernel/shell.c`
 
+---
+
+### Fondasi AP — IPv6 + ping6
+
+- **Stateless autoconfiguration (SLAAC)**: EUI-64 dari MAC address → link-local `fe80::/10`
+- **ICMPv6 Echo**: type 128 (request) / type 129 (reply), checksum RFC 2460
+- **Shell**: `ping6 <addr>` — 4 ICMPv6 echo request + RTT tampil hijau/merah
+
+---
+
+### Fondasi AQ — TLS Validation
+
+- **TLS stub layer**: validasi handshake ClientHello/ServerHello di atas TCP
+- **Sertifikat x.509**: parsing basic structure (stub, no crypto), log via serial
+
+---
+
+### Fondasi AR — EXT2 Read-only
+
+- **EXT2 driver**: baca superblock, group descriptor, inode table dari ATA secondary slave
+- **Operasi**: `ext2_open`, `ext2_read`, `ext2_list` — mount-point `/ext2/`
+- **Shell**: `ext2ls`, `ext2read <path>` — tampilkan isi direktori / baca file EXT2
+
+---
+
+### Fondasi AS — Kernel Debugger Serial
+
+- **COM1 debugger**: output register dump, memory dump ke terminal host via `-serial stdio`
+- **Breakpoint**: `dbg break <addr>` — pasang debug trap, cetak state saat hit
+- **Shell**: `dbg regs`, `dbg mem <addr> <len>`, `dbg trace`
+
+---
+
+### Fondasi AT — Pengalaman Pengguna & Visual
+
+#### AT1 — Font Terminal 8×16
+- **`draw_char_gfx16(x, y, c, fg, bg)`**: render karakter 8×16 (row-doubled dari bitmap 8×8)
+- **`draw_string_gfx16()`**: string helper
+- **Terminal**: `VGA_COLS=160`, `VGA_ROWS=60`; buffer teks `g_textbuf[60][160]` + `g_fgbuf` untuk scroll yang benar
+- **Scroll**: `memmove` pada g_textbuf + `terminal_redraw()` — tidak ada artefak
+
+#### AT2 — Flat Titlebar Catppuccin
+- **`TITLEBAR_H = 28`** px
+- **Warna**: focused `#2D2D2D`, tombol close `#F38BA8` (pink Catppuccin Mocha), teks judul `#CDD6F4`
+- **Flat style**: tidak ada gradien, solid color
+
+#### AT3 — Resize Handle
+- **Handle 8×8 px** di sudut kanan-bawah setiap window
+- **Drag handle**: klik + drag untuk resize, minimum 100×60 px
+
+#### AT4 — Clipboard Ctrl+Y/V
+- **Clipboard kernel global**: buffer 512 byte, `g_clipboard[]`
+- **Ctrl+Y**: salin seleksi teks di editor ke clipboard
+- **Ctrl+V**: tempel clipboard ke posisi kursor saat ini
+- **Tersedia di**: `notepad`, `gui_term`
+
+---
+
 - **LAPIC**: enable via IA32_APIC_BASE MSR + SVR register, baca APIC ID, kirim INIT/SIPI IPI via ICR
 - **ACPI MADT parser**: scan RSDP → RSDT → MADT untuk enumerasi CPU/APIC ID
 - **AP trampoline** di 0x7000: real mode → 32-bit protected → 64-bit long mode
@@ -397,11 +461,12 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **Direktori**: `cd <dir>`, `pwd`, direktori-aware `ls`/`read`/`write`/`del`
 - **Background exec**: tambah `&` di akhir perintah
 - **Foreground exec (Tahap N-pre)**: tanpa `&` → shell blok sampai program selesai (`task_wait`)
-- **Jaringan**: `ifconfig` (tampilkan MAC/IP/GW), `ping <ip>` (4 ICMP echo requests + RTT)
+- **Jaringan**: `ifconfig` (tampilkan MAC/IP/GW), `ping <ip>` (4 ICMP echo requests + RTT), `ping6 <addr>` (ICMPv6), `nslookup <hostname>`
 - **SMP info**: `cpuinfo`, `taskstat`
 - **Memory**: `meminfo` (total/used/free PMM frames)
 - **Threading**: `exec threadtest` — demo 3 thread paralel
-- **Built-in commands**: `ps`, `kill`, `ls`, `read`, `write`, `del`, `clear`, `help`, `exec`, `sync`, `mkdir`, `chmod`, `cd`, `pwd`, `export`, `env`, `ifconfig`, `ping`, `cpuinfo`, `taskstat`, `meminfo`, `open`, `fread`, `fwrite`, `fclose`, `mq_send`, `mq_recv`, ...
+- **GUI mode**: `gui` — inisialisasi window manager + wallpaper, masuk desktop GUI
+- **Built-in commands**: `ps`, `kill`, `ls`, `read`, `write`, `del`, `clear`, `help`, `exec`, `sync`, `mkdir`, `chmod`, `cd`, `pwd`, `export`, `env`, `ifconfig`, `ping`, `ping6`, `nslookup`, `gui`, `cpuinfo`, `taskstat`, `meminfo`, `open`, `fread`, `fwrite`, `fclose`, `mq_send`, `mq_recv`, `rename`, `ext2ls`, `ext2read`, `dbg`, ...
 
 ### Syscall Interface (user space via `SYSCALL/SYSRET`)
 ```
@@ -559,7 +624,19 @@ Output: `build/os.img` (2MB raw disk image)
 .\build.ps1 run
 ```
 
-Membuka QEMU dengan `qemu-system-x86_64 -smp 2`, layar 1920×1080, GUI langsung muncul.
+Membuka QEMU dengan `qemu-system-x86_64 -smp 2`, layar 1920×1080. Saat boot, OS masuk ke **mode console** terlebih dahulu (layar hitam, teks putih 160×60).
+
+**Urutan boot:**
+1. OS boot → mode console (shell teks, font 8×16)
+2. Ketik `gui` → muat wallpaper, inisialisasi window manager, masuk GUI desktop
+3. Klik ikon di taskbar/desktop untuk membuka aplikasi
+
+**Pintasan keyboard:**
+- `gui` — masuk mode GUI dari console
+- `Ctrl+Y` — salin teks ke clipboard (di editor teks)
+- `Ctrl+V` — tempel dari clipboard
+- `Ctrl+C` — kirim SIGINT ke program foreground
+
 AP (Application Processor) akan boot otomatis — ketik `cpuinfo` di shell untuk verifikasi.
 
 ### Clean
@@ -638,7 +715,10 @@ Boot page tables (sementara, dipakai kernel_entry.asm):
 │    dev_register → programs_init                      │
 │    timer_init → pic_init → idt_init                  │
 │    task_init → tss64_init → idt_set_gate_user(0x80)  │
-│    sti → shell polling loop                          │
+│    sti → console mode (g_gui_mode=0)                 │
+│    keyboard loop:                                     │
+│      g_gui_mode=0 → shell_process_char()             │
+│      g_gui_mode=1 → wm_key_event()   [setelah `gui`] │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -698,6 +778,20 @@ Lihat [ROADMAP.txt](ROADMAP.txt) untuk roadmap lengkap.
 | Fondasi Q — Proses & Memori Lanjutan | 2 Apr 2026 | fork()+COW, exec_replace(), demand-paging thread stack, mmap/munmap, vmm_map_page intermediate fix |
 | Fondasi R2 — VFS Pipe/Net/TTY | 2 Apr 2026 | VFS_TYPE_PIPE/NET/TTY, vfs_pipe/net_open/tty_open, vfs_copy_fds (fork fd inheritance fix), pipetest OK |
 | Fondasi R3 — MFS4 Inode Layer | 2 Apr 2026 | symlink, hardlink, stat, listdir, mkdir, unlink via inode table 128 entri di atas MFS3, mfs4test OK |
+| Fondasi S — Shell Pipeline `\|` | 2 Apr 2026 | `prog1 \| prog2`, EOF propagation, ls+grep pipeline, shell redirect `>` `<` |
+| Fondasi T — Signal & Process Control | 2 Apr 2026 | SIGINT/SIGTERM/SIGKILL, Ctrl+C foreground, waitpid exit code, sigtest 143 OK |
+| Fondasi U — Futex + TLS | 3 Apr 2026 | futex_wait/wake, mutex user-space CAS, TLS per-thread via FS_BASE MSR, futextest 4000 OK |
+| Fondasi V — MFS4 Persistence + Rename | 3 Apr 2026 | Inode table flush ke disk (LBA 513–549), rename file, mfs4_load() saat boot |
+| Fondasi W — Poll/Select + Non-blocking | 3 Apr 2026 | O_NONBLOCK, EAGAIN, poll() syscall, polltest POLLIN+EAGAIN OK |
+| Fondasi X — TCP Reliability + DNS | 3 Apr 2026 | TCP retransmit, OOO buffer, keepalive, DNS resolver, nslookup |
+| Fondasi AP — IPv6 + ping6 | — | IPv6 stateless autoconfiguration, ICMPv6 echo, `ping6` shell command |
+| Fondasi AQ — TLS Validation | — | TLS handshake validation layer, sertifikat x.509 stub |
+| Fondasi AR — EXT2 Read-only | — | EXT2 filesystem read-only driver di atas ATA secondary |
+| Fondasi AS — Kernel Debugger Serial | — | Serial COM1 debugger: breakpoint, register dump, memory dump via `dbg` command |
+| Fondasi AT1 — Font 8×16 Terminal | — | `draw_char_gfx16()`, terminal 160×60, ANSI scroll via g_textbuf |
+| Fondasi AT2 — Flat Titlebar Catppuccin | — | Titlebar 28px flat, warna Catppuccin Mocha, `WM_BTN_CLOSE` pink |
+| Fondasi AT3 — Resize Handle | — | Resize handle kanan-bawah 8px, drag untuk resize window |
+| Fondasi AT4 — Clipboard Ctrl+Y/V | — | Clipboard kernel global, Ctrl+Y copy, Ctrl+V paste di editor teks |
 
 ---
 
