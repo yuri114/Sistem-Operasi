@@ -9,7 +9,7 @@
 #define VFS_H
 #include <stdint.h>
 
-#define VFS_MAX_FD    16   /* max fd per task (naik dari 8)           */
+#define VFS_MAX_FD    32   /* max fd per task                         */
 #define VFS_FD_STDIN  0    /* standard input  (keyboard)              */
 #define VFS_FD_STDOUT 1    /* standard output (screen)                */
 #define VFS_FD_STDERR 2    /* standard error  (= stdout for now)      */
@@ -23,6 +23,11 @@
 #define VFS_TYPE_NET    5  /* TCP socket via net_tcp_*                */
 #define VFS_TYPE_TTY    6  /* pseudo-terminal (gui_term / pipe shell) */
 #define VFS_TYPE_PROC   7  /* Fondasi AH: virtual /proc file         */
+#define VFS_TYPE_DEV    8  /* virtual /dev: null, zero, random       */
+
+/* Subtype untuk VFS_TYPE_DEV */
+#define VFS_DEV_NULL    0
+#define VFS_DEV_ZERO    1
 
 /* Flag open */
 #define VFS_O_RDONLY    0x01

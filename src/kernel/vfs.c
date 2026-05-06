@@ -228,6 +228,26 @@ int vfs_open(int task_id, const char *path, int flags)
         return -1;
     }
 
+    /* /dev virtual filesystem: /dev/null, /dev/zero */
+    if (path[0]=='/' && path[1]=='d' && path[2]=='e' && path[3]=='v' && path[4]=='/') {
+        const char *dev = path + 5;
+        int dev_sub = -1;
+        if (dev[0]=='n'&&dev[1]=='u'&&dev[2]=='l'&&dev[3]=='l'&&dev[4]=='\0') dev_sub = VFS_DEV_NULL;
+        else if (dev[0]=='z'&&dev[1]=='e'&&dev[2]=='r'&&dev[3]=='o'&&dev[4]=='\0') dev_sub = VFS_DEV_ZERO;
+        if (dev_sub < 0) return -1;
+        for (j = 3; j < VFS_MAX_FD; j++) {
+            if (!fd_table[task_id][j].used) {
+                fd_table[task_id][j].used   = 1;
+                fd_table[task_id][j].type   = VFS_TYPE_DEV;
+                fd_table[task_id][j].flags  = (uint8_t)flags;
+                fd_table[task_id][j].offset = (uint32_t)dev_sub;
+                fd_table[task_id][j].name[0] = '\0';
+                return j;
+            }
+        }
+        return -1;
+    }
+
     for (j = 3; j < VFS_MAX_FD; j++) {
         if (!fd_table[task_id][j].used) {
             /* Jika CREATE: buat file kosong jika belum ada */
@@ -395,6 +415,17 @@ int vfs_read(int task_id, int fd, char *buf, int len)
         return len;
     }
 
+    /* /dev virtual filesystem read */
+    if (f->type == VFS_TYPE_DEV) {
+        int dev_sub = (int)f->offset; /* offset repurposed as subtype here */
+        if (dev_sub == VFS_DEV_NULL) return 0;   /* /dev/null: always EOF */
+        if (dev_sub == VFS_DEV_ZERO) {            /* /dev/zero: fill zeros */
+            for (k = 0; k < len; k++) buf[k] = 0;
+            return len;
+        }
+        return 0;
+    }
+
     /* Fondasi AH: /proc virtual filesystem read */
     if (f->type == VFS_TYPE_PROC) {
         if (f->offset == 0) {
@@ -507,6 +538,9 @@ int vfs_write(int task_id, int fd, const char *buf, int len)
         print(tmp2);
         return n;
     }
+
+    /* /dev/null: discard semua */
+    if (f->type == VFS_TYPE_DEV) return len;
 
     if (f->type == VFS_TYPE_FILE) {
         if (!(f->flags & (VFS_O_WRONLY | VFS_O_RDWR))) return -1;

@@ -124,6 +124,16 @@ static char env_keys[ENV_MAX][24];
 static char env_vals[ENV_MAX][64];
 static int  env_count = 0;
 
+/* Alias table */
+#define ALIAS_MAX 16
+static char alias_names[ALIAS_MAX][32];
+static char alias_vals[ALIAS_MAX][128];
+static int  alias_count = 0;
+
+/* set -e / set -x flags */
+static int g_set_e = 0;  /* 1 = exit on error */
+static int g_set_x = 0;  /* 1 = trace each command */
+
 static int str_compare(const char *a, const char *b) {
     int i = 0;
     while (a[i] != '\0' && b[i] != '\0') {
@@ -209,6 +219,107 @@ static const char *make_path(const char *name, char *buf, int bufsz) {
     while (name[ni] && di < bufsz - 1) buf[di++] = name[ni++];
     buf[di] = '\0';
     return buf;
+}
+
+/* Glob: cocokkan nama file terhadap pola dengan * dan ? */
+static int glob_match(const char *pat, const char *str) {
+    while (*pat && *str) {
+        if (*pat == '*') {
+            pat++;
+            if (!*pat) return 1; /* trailing * matches everything */
+            while (*str) {
+                if (glob_match(pat, str)) return 1;
+                str++;
+            }
+            return 0;
+        } else if (*pat == '?') {
+            pat++; str++;
+        } else {
+            if (*pat != *str) return 0;
+            pat++; str++;
+        }
+    }
+    while (*pat == '*') pat++;
+    return (*pat == '\0' && *str == '\0');
+}
+
+/* Glob expansion: ganti token yang mengandung * atau ? dengan daftar file yang cocok */
+static void shell_glob_expand(void) {
+    /* Cek apakah input mengandung glob karakter di posisi argument (bukan cmd) */
+    const char *p = input_buffer;
+    /* Lewati kata pertama (command) */
+    while (*p && *p != ' ') p++;
+    if (!*p) return; /* tidak ada argumen */
+    /* Cek apakah ada * atau ? di bagian argumen */
+    int has_glob = 0;
+    const char *q = p;
+    while (*q) { if (*q == '*' || *q == '?') { has_glob = 1; break; } q++; }
+    if (!has_glob) return;
+
+    /* Ambil daftar file di direktori saat ini */
+    static char glob_flist[4096];
+    int fc = fs_list_buf(glob_flist, 4095);
+    if (fc <= 0) return;
+
+    /* Susun output buffer: command + expanded args */
+    static char glob_out[512];
+    int oi = 0;
+    /* Salin command */
+    const char *bp = input_buffer;
+    while (*bp && *bp != ' ' && oi < 510) glob_out[oi++] = *bp++;
+
+    /* Proses tiap token argumen */
+    while (*bp == ' ' && oi < 510) glob_out[oi++] = *bp++;
+    /* Reset dan proses token per token */
+    oi = 0;
+    /* Copy command first */
+    bp = input_buffer;
+    while (*bp && *bp != ' ' && oi < 510) glob_out[oi++] = *bp++;
+
+    /* Process argument tokens */
+    while (*bp) {
+        /* Skip spaces */
+        while (*bp == ' ') bp++;
+        if (!*bp) break;
+        /* Extract token */
+        char tok[128]; int ti = 0;
+        while (*bp && *bp != ' ' && ti < 127) tok[ti++] = *bp++;
+        tok[ti] = '\0';
+        /* Check if token has glob */
+        int thas = 0;
+        for (int ci = 0; ci < ti; ci++) if (tok[ci] == '*' || tok[ci] == '?') { thas = 1; break; }
+        if (!thas) {
+            /* No glob: append as-is */
+            if (oi < 509) glob_out[oi++] = ' ';
+            for (int ci = 0; tok[ci] && oi < 509; ci++) glob_out[oi++] = tok[ci];
+        } else {
+            /* Expand glob against file list */
+            int matched = 0;
+            const char *fp = glob_flist;
+            for (int fi = 0; fi < fc; fi++) {
+                /* Extract filename (newline-separated) */
+                char fname[128]; int fni = 0;
+                while (*fp && *fp != '\n' && fni < 127) fname[fni++] = *fp++;
+                fname[fni] = '\0';
+                if (*fp == '\n') fp++;
+                if (glob_match(tok, fname)) {
+                    matched++;
+                    if (oi < 509) glob_out[oi++] = ' ';
+                    for (int ci = 0; fname[ci] && oi < 509; ci++) glob_out[oi++] = fname[ci];
+                }
+            }
+            if (!matched) {
+                /* No match: keep literal token */
+                if (oi < 509) glob_out[oi++] = ' ';
+                for (int ci = 0; tok[ci] && oi < 509; ci++) glob_out[oi++] = tok[ci];
+            }
+        }
+    }
+    glob_out[oi] = '\0';
+    /* Copy back to input_buffer */
+    int ii2 = 0;
+    while (glob_out[ii2] && ii2 < 255) { input_buffer[ii2] = glob_out[ii2]; ii2++; }
+    input_buffer[ii2] = '\0';
 }
 
 /* F1 — Ekspansi $VAR dalam input_buffer in-place */
@@ -943,6 +1054,8 @@ static int sc_exec_block(int from, int to) {
 
         /* normal command: copy to input_buffer and execute */
         sc_exec_line(line);
+        /* set -e: aborti script jika exit code != 0 */
+        if (g_set_e && last_exit_code != 0) return i + 1;
         i++;
     }
     return i;
@@ -1132,6 +1245,46 @@ static void shell_execute() {
 
     /* F1: ekspansi $VAR */
     shell_expand_vars();
+
+    /* Alias expansion: cek kata pertama input_buffer terhadap alias table */
+    {
+        /* isolasi kata pertama */
+        char first[32]; int fi2 = 0;
+        while (input_buffer[fi2] && input_buffer[fi2] != ' ' && fi2 < 31)
+            first[fi2] = input_buffer[fi2], fi2++;
+        first[fi2] = '\0';
+        int ai;
+        for (ai = 0; ai < alias_count; ai++) {
+            if (str_compare(alias_names[ai], first)) {
+                /* ganti kata pertama dgn nilai alias, concat sisa args */
+                char rest[256]; int ri = 0;
+                const char *p = input_buffer + fi2;
+                while (*p) rest[ri++] = *p++;
+                rest[ri] = '\0';
+                char newbuf[256]; int ni = 0;
+                const char *av = alias_vals[ai];
+                while (*av && ni < 254) newbuf[ni++] = *av++;
+                int j = 0;
+                while (rest[j] && ni < 254) newbuf[ni++] = rest[j++];
+                newbuf[ni] = '\0';
+                int k = 0;
+                while (newbuf[k] && k < 255) { input_buffer[k] = newbuf[k]; k++; }
+                input_buffer[k] = '\0';
+                input_len = k;
+                break;
+            }
+        }
+    }
+
+    /* Glob expansion: expand * dan ? dalam argument */
+    shell_glob_expand();
+
+    /* set -x: cetak command sebelum eksekusi */
+    if (g_set_x) {
+        set_color(GFX_LCYAN, GFX_BLACK);
+        print("+ "); print(input_buffer); print("\n");
+        set_color(GFX_WHITE, GFX_BLACK);
+    }
 
     /* F1: strip trailing '&' → background exec flag.
      * Hati-hati: jangan strip jika '&' adalah bagian dari '&&' operator. */
@@ -1849,6 +2002,108 @@ static void shell_execute() {
                 print(env_keys[e]); print("="); print(env_vals[e]); print("\n");
             }
         }
+    }
+    /* --- which <cmd>: cek apakah program ada di filesystem --- */
+    else if (str_starts_with(input_buffer, "which ")) {
+        const char *cmd = input_buffer + 6;
+        while (*cmd == ' ') cmd++;
+        uint32_t sz; int found_w = 0;
+        /* cek di root dan current_dir */
+        char wpath[64];
+        /* coba nama langsung */
+        if (fs_read_bin(cmd, &sz)) { print(cmd); print("\n"); found_w = 1; }
+        if (!found_w && current_dir[0]) {
+            int wi = 0;
+            while (current_dir[wi] && wi < 60) wpath[wi] = current_dir[wi], wi++;
+            wpath[wi++] = '/';
+            int ci2 = 0;
+            while (cmd[ci2] && wi < 63) wpath[wi++] = cmd[ci2++];
+            wpath[wi] = '\0';
+            if (fs_read_bin(wpath, &sz)) { print(wpath); print("\n"); found_w = 1; }
+        }
+        if (!found_w) {
+            set_color(GFX_LRED, GFX_BLACK);
+            print(cmd); print(": not found\n");
+            set_color(GFX_WHITE, GFX_BLACK);
+            last_exit_code = 1;
+        }
+    }
+    /* --- alias [name=value]: tampilkan atau set alias --- */
+    else if (str_compare(input_buffer, "alias")) {
+        if (alias_count == 0) { print("(tidak ada alias)\n"); }
+        else {
+            int ai;
+            for (ai = 0; ai < alias_count; ai++) {
+                print("alias "); print(alias_names[ai]); print("='"); print(alias_vals[ai]); print("'\n");
+            }
+        }
+    }
+    else if (str_starts_with(input_buffer, "alias ")) {
+        const char *rest = input_buffer + 6;
+        while (*rest == ' ') rest++;
+        int eq = 0;
+        while (rest[eq] && rest[eq] != '=') eq++;
+        if (!rest[eq]) { print("alias: format: alias name=value\n"); }
+        else {
+            char aname[32]; int ani = 0;
+            while (ani < eq && ani < 31) { aname[ani] = rest[ani]; ani++; }
+            aname[ani] = '\0';
+            const char *aval = rest + eq + 1;
+            if (*aval == '\'' || *aval == '"') aval++;
+            /* cari existing */
+            int ai, found_a = 0;
+            for (ai = 0; ai < alias_count; ai++) {
+                if (str_compare(alias_names[ai], aname)) {
+                    int vi = 0;
+                    while (aval[vi] && aval[vi] != '\'' && aval[vi] != '"' && vi < 127)
+                        alias_vals[ai][vi] = aval[vi], vi++;
+                    alias_vals[ai][vi] = '\0';
+                    found_a = 1; break;
+                }
+            }
+            if (!found_a && alias_count < ALIAS_MAX) {
+                int ni = 0;
+                while (aname[ni] && ni < 31) alias_names[alias_count][ni] = aname[ni], ni++;
+                alias_names[alias_count][ni] = '\0';
+                int vi = 0;
+                while (aval[vi] && aval[vi] != '\'' && aval[vi] != '"' && vi < 127)
+                    alias_vals[alias_count][vi] = aval[vi], vi++;
+                alias_vals[alias_count][vi] = '\0';
+                alias_count++;
+            } else if (!found_a) {
+                print("alias: tabel penuh\n");
+            }
+        }
+    }
+    /* --- unalias <name>: hapus alias --- */
+    else if (str_starts_with(input_buffer, "unalias ")) {
+        const char *name = input_buffer + 8;
+        while (*name == ' ') name++;
+        int ai, found_u = 0;
+        for (ai = 0; ai < alias_count; ai++) {
+            if (str_compare(alias_names[ai], name)) {
+                /* shift down */
+                int j;
+                for (j = ai; j < alias_count - 1; j++) {
+                    int k2;
+                    for (k2 = 0; k2 < 32;  k2++) alias_names[j][k2] = alias_names[j+1][k2];
+                    for (k2 = 0; k2 < 128; k2++) alias_vals[j][k2]  = alias_vals[j+1][k2];
+                }
+                alias_count--;
+                found_u = 1; break;
+            }
+        }
+        if (!found_u) { print("unalias: "); print(name); print(": tidak ada alias\n"); }
+    }
+    /* --- set -e / set -x / set +e / set +x --- */
+    else if (str_starts_with(input_buffer, "set ")) {
+        const char *flag = input_buffer + 4;
+        while (*flag == ' ') flag++;
+        if (flag[0] == '-' && flag[1] == 'e') { g_set_e = 1; }
+        else if (flag[0] == '+' && flag[1] == 'e') { g_set_e = 0; }
+        else if (flag[0] == '-' && flag[1] == 'x') { g_set_x = 1; }
+        else if (flag[0] == '+' && flag[1] == 'x') { g_set_x = 0; }
+        else { print("set: flag tidak dikenal (gunakan -e +e -x +x)\n"); }
     }
     else if(str_compare(input_buffer, "export")) {
         print("gunakan export KEY=VALUE\n");

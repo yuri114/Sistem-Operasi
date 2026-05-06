@@ -80,6 +80,7 @@ int task_create(void (*entry)()) {
     tasks[id].pipe_id   = -1;
     tasks[id].waiter    = -1;
     tasks[id].heap_end  = 0;  /* kernel task: tidak punya user heap */
+    tasks[id].fpu_valid = 0;
     /* Tahap M: load balance — kernel task di-assign langsung ke AP jika ada */
     tasks[id].cpu_id    = has_ap ? (int8_t)1 : (int8_t)-1;
     tasks[id].is_user   = 0;   /* ring-0 kernel task */
@@ -127,6 +128,7 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
     tasks[id].waiter    = -1;
     tasks[id].heap_end  = 0x400000ULL;
     tasks[id].is_user   = 1;
+    tasks[id].fpu_valid = 0;
     tasks[id].is_thread = 0;
     tasks[id].parent_tid = -1;
     str_copy_n(tasks[id].name, name ? name : "?", 32);
@@ -211,6 +213,7 @@ int task_create_thread(uint64_t entry, uint64_t arg, int parent_tid) {
     tasks[id].is_user    = 1;
     tasks[id].is_thread  = 1;
     tasks[id].parent_tid = parent_tid;
+    tasks[id].fpu_valid  = 0;
     str_copy_n(tasks[id].name, "thread", 32);
 
     /* F-Q3: Demand paging untuk thread stack.
@@ -325,6 +328,18 @@ void task_switch() {
 
     current_rsp  = &tasks[current_task].rsp;
     next_rsp     = &tasks[next].rsp;
+
+    /* x87/SSE state: simpan state task lama, restore state task baru */
+    int old_task = current_task;
+    __asm__ volatile ("fxsave %0" : "=m"(tasks[old_task].fpu_state));
+    tasks[old_task].fpu_valid = 1;
+    if (tasks[next].fpu_valid) {
+        __asm__ volatile ("fxrstor %0" :: "m"(tasks[next].fpu_state));
+    } else {
+        /* Inisialisasi FPU bersih untuk task baru */
+        __asm__ volatile ("fninit");
+    }
+
     current_task = next;
 
     uint64_t kstack_top = (uint64_t)(stacks_base + (uint64_t)next * STACK_SIZE + STACK_SIZE);

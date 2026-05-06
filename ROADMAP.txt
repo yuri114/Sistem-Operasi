@@ -21,7 +21,7 @@ BOOT & CPU
   [x] SMP bootstrap: ACPI MADT -> INIT/SIPI -> AP online (QEMU -smp 2)
   [x] Per-AP LAPIC timer (INT 0x40, 10ms, dikalibrasi dari BSP)
   [x] CPU feature detection via CPUID
-  [ ] x87/SSE state save/restore saat context switch
+  [x] x87/SSE state save/restore saat context switch (FXSAVE/FXRSTOR di task_switch)
   [ ] NMI handler
   [ ] ACPI power management (S3/S4 suspend)
 
@@ -210,7 +210,7 @@ Built-in commands
   [x] write <file> <teks>
   [x] del <file>, rename <lama> <baru>
   [x] cat [file...], cp <src> <dst>, mv <src> <dst>
-  [x] wc [file], head [-n N] [file], tail [-n N] [file]
+  [x] wc [file], head [-n N] [file], tail [-n N] [file], less/more [file] — pager
   [x] find <dir> <pola>, stat <file>, touch <file>
   [x] df         — slot file MFS4 yang dipakai/bebas
   [x] du [path]  — total ukuran file di path
@@ -232,10 +232,10 @@ Built-in commands
   [x] edit <file> — text editor nano-like
   [x] sh [script.sh] — jalankan script shell
   [x] jobs, fg %N, bg %N — job control
-  [ ] which <cmd>
-  [ ] alias / unalias
+  [x] which <cmd>
+  [x] alias / unalias
   [x] top         — realtime process monitor (refresh 1s, keluar tombol apa pun)
-  [ ] set -e / set -x untuk debug script
+  [x] set -e / set -x untuk debug script
 
 Shell features
   [x] Pipeline multi-stage: prog1 | prog2 | ... | prog6
@@ -252,7 +252,7 @@ Shell features
   [x] Script: if/else/fi, while/do/done, for/in/do/done
   [x] Script: $1..$9 argumen, komentar #
   [ ] Here-doc (<<EOF)
-  [ ] Glob pattern *, ? dalam ls/find
+  [x] Glob pattern *, ? dalam argument expansion
   [ ] Subshell $(...) command substitution
   [ ] Brace expansion {a,b,c}
 

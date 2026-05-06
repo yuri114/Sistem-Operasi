@@ -643,6 +643,33 @@ static inline int scanf(const char *fmt, ...) {
 }
 
 // ============================================================
+// time / gettimeofday — waktu berdasarkan kernel ticks (100 Hz)
+// ============================================================
+
+// Kembalikan detik sejak boot (resolusi 10ms)
+static inline long time(long *t) {
+    long secs = (long)syscall0(SYS_GET_TICKS) / 100;
+    if (t) *t = secs;
+    return secs;
+}
+
+typedef struct { long tv_sec; long tv_usec; } timeval_t;
+static inline int gettimeofday(timeval_t *tv) {
+    if (!tv) return -1;
+    long ticks = (long)syscall0(SYS_GET_TICKS);
+    tv->tv_sec  = ticks / 100;
+    tv->tv_usec = (ticks % 100) * 10000;
+    return 0;
+}
+
+// ============================================================
+// errno — kode error terakhir (per-program, global sederhana)
+// ============================================================
+static int _errno_val = 0;
+static inline int *__errno_loc(void) { return &_errno_val; }
+#define errno (*__errno_loc())
+
+// ============================================================
 // File I/O — akses filesystem kernel lewat syscall
 // ============================================================
 

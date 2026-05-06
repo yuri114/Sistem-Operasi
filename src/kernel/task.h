@@ -38,6 +38,9 @@ typedef struct {
     uint32_t  age_ticks;  /* berapa kali dilewati, direset saat dijadwalkan */
     /* Fondasi AY — uid pengguna yang menjalankan task ini (0=root) */
     int       uid;
+    /* x87/SSE state: 512 byte, harus 16-byte aligned (FXSAVE/FXRSTOR) */
+    uint8_t   fpu_state[512] __attribute__((aligned(16)));
+    uint8_t   fpu_valid;      /* 1 jika fpu_state sudah diisi (pernah di-switch) */
 } Task;
 
 /* F-T: konstanta sinyal standar */
