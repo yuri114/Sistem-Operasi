@@ -50,6 +50,46 @@ static int input_len = 0;
 /* Exit code dari perintah terakhir — digunakan oleh operator && / || */
 static int last_exit_code = 0;
 
+/* ================================================================
+ * Job control — background jobs table
+ * ================================================================ */
+#define MAX_JOBS 8
+typedef struct { int id; int tid; char cmd[64]; int done; } ShJob;
+static ShJob _jobs[MAX_JOBS];
+static int   _job_count = 0;
+static int   _job_next_id = 1;
+
+/* Tambahkan job baru ke tabel, kembalikan job_id (1-based), atau -1 penuh */
+static int jobs_add(int tid, const char *cmd) {
+    if (_job_count >= MAX_JOBS) return -1;
+    int i;
+    for (i = 0; i < MAX_JOBS; i++) {
+        if (_jobs[i].id == 0) {
+            _jobs[i].id   = _job_next_id++;
+            _jobs[i].tid  = tid;
+            _jobs[i].done = 0;
+            int k = 0;
+            while (cmd[k] && k < 63) { _jobs[i].cmd[k] = cmd[k]; k++; }
+            _jobs[i].cmd[k] = '\0';
+            _job_count++;
+            return _jobs[i].id;
+        }
+    }
+    return -1;
+}
+
+/* Hapus job dari tabel berdasarkan job_id */
+static void jobs_remove(int job_id) {
+    int i;
+    for (i = 0; i < MAX_JOBS; i++) {
+        if (_jobs[i].id == job_id) {
+            _jobs[i].id = 0;
+            _job_count--;
+            return;
+        }
+    }
+}
+
 /* History ring buffer */
 #define HISTORY_SIZE 32
 static char history[HISTORY_SIZE][256];
@@ -1883,8 +1923,10 @@ static void shell_execute() {
                 print("exec: file tidak ditemukan: "); print(ec.prog); print("\n");
             } else if (tid >= 0) {
                 if (bg) {
+                    int jid = jobs_add(tid, ec.prog);
                     char tbuf[8]; itoa((uint32_t)tid, tbuf);
-                    print("["); print(tbuf); print("] "); print(ec.prog); print(" &\n");
+                    print("["); char jbuf[8]; itoa((uint32_t)jid, jbuf); print(jbuf); print("] ");
+                    print(tbuf); print(" "); print(ec.prog); print(" &\n");
                 } else {
                     keyboard_set_fg_pid(tid);
                     task_wait(tid);
@@ -1936,6 +1978,110 @@ static void shell_execute() {
             print(task_get_name(i));
             print("\n");
         }
+    }
+    /* --- top: live process viewer, refresh tiap ~1s, keluar dgn tombol apa pun --- */
+    else if (str_compare(input_buffer, "top")) {
+        set_color(GFX_LCYAN, GFX_BLACK);
+        print("top: tekan sembarang tombol untuk keluar\n");
+        set_color(GFX_WHITE, GFX_BLACK);
+        task_sleep(500); /* beri waktu user baca pesan */
+        while (1) {
+            /* cek tombol dulu sebelum refresh */
+            if (keyboard_getchar() != 0) break;
+            clear_screen();
+            int cur = task_get_current();
+            set_color(GFX_YELLOW, GFX_BLACK);
+            print("top - Oria OS  |  tekan tombol untuk keluar\n");
+            print("ID  PRIO  STATUS     CPU  NAMA\n");
+            print("--- ----- ---------- ---- ----------------\n");
+            set_color(GFX_WHITE, GFX_BLACK);
+            int i;
+            for (i = 0; i < task_get_max(); i++) {
+                if (!task_is_used(i)) continue;
+                char tbuf[8];
+                itoa(i, tbuf); print(tbuf); print("   ");
+                int prio = task_get_priority(i);
+                if (prio == 3)      set_color(GFX_LGREEN, GFX_BLACK);
+                else if (prio == 2) set_color(GFX_YELLOW, GFX_BLACK);
+                else                set_color(GFX_LGRAY, GFX_BLACK);
+                itoa(prio, tbuf); print(tbuf); print("     ");
+                int st = task_get_status(i);
+                if (i == cur) {
+                    set_color(GFX_LGREEN, GFX_BLACK); print("running    ");
+                } else if (st == TASK_SLEEPING) {
+                    set_color(GFX_LBLUE, GFX_BLACK); print("sleeping   ");
+                } else if (st == TASK_BLOCKED) {
+                    set_color(GFX_LRED, GFX_BLACK);  print("blocked    ");
+                } else {
+                    set_color(GFX_LGRAY, GFX_BLACK);  print("ready      ");
+                }
+                set_color(GFX_WHITE, GFX_BLACK);
+                int cpu_id = task_get_cpu(i);
+                if (cpu_id < 0) print("free ");
+                else { itoa((uint32_t)cpu_id, tbuf); print("cpu"); print(tbuf); print(" "); }
+                if (task_is_thread(i)) {
+                    set_color(GFX_LCYAN, GFX_BLACK);
+                    print("[T:"); itoa((uint32_t)task_get_parent(i), tbuf); print(tbuf); print("] ");
+                    set_color(GFX_WHITE, GFX_BLACK);
+                }
+                print(task_get_name(i)); print("\n");
+            }
+            task_sleep(1000);
+        }
+        clear_screen();
+    }
+    /* --- job control: jobs / fg %N / bg %N --- */
+    else if (str_compare(input_buffer, "jobs")) {
+        if (_job_count == 0) {
+            print("jobs: tidak ada background job\n");
+        } else {
+            int i;
+            for (i = 0; i < MAX_JOBS; i++) {
+                if (_jobs[i].id == 0) continue;
+                char jbuf[8]; itoa((uint32_t)_jobs[i].id, jbuf);
+                char tbuf[8]; itoa((uint32_t)_jobs[i].tid, tbuf);
+                print("["); print(jbuf); print("] tid="); print(tbuf);
+                print(" "); print(_jobs[i].cmd); print("\n");
+            }
+        }
+    }
+    else if (str_starts_with(input_buffer, "fg ")) {
+        const char *p = input_buffer + 3;
+        if (*p == '%') p++;
+        int jid = 0;
+        while (*p >= '0' && *p <= '9') { jid = jid * 10 + (*p - '0'); p++; }
+        int found = 0;
+        int i;
+        for (i = 0; i < MAX_JOBS; i++) {
+            if (_jobs[i].id == jid) {
+                found = 1;
+                print("fg: "); print(_jobs[i].cmd); print("\n");
+                keyboard_set_fg_pid(_jobs[i].tid);
+                task_wait(_jobs[i].tid);
+                last_exit_code = task_get_exit_code(_jobs[i].tid);
+                keyboard_set_fg_pid(-1);
+                jobs_remove(jid);
+                break;
+            }
+        }
+        if (!found) { print("fg: job tidak ditemukan: %"); char jbuf[8]; itoa((uint32_t)jid, jbuf); print(jbuf); print("\n"); }
+    }
+    else if (str_starts_with(input_buffer, "bg ")) {
+        const char *p = input_buffer + 3;
+        if (*p == '%') p++;
+        int jid = 0;
+        while (*p >= '0' && *p <= '9') { jid = jid * 10 + (*p - '0'); p++; }
+        int found = 0;
+        int i;
+        for (i = 0; i < MAX_JOBS; i++) {
+            if (_jobs[i].id == jid) {
+                found = 1;
+                char jbuf[8]; itoa((uint32_t)jid, jbuf);
+                print("["); print(jbuf); print("] "); print(_jobs[i].cmd); print(" (berjalan di background)\n");
+                break;
+            }
+        }
+        if (!found) { print("bg: job tidak ditemukan: %"); char jbuf[8]; itoa((uint32_t)jid, jbuf); print(jbuf); print("\n"); }
     }
     else if(str_starts_with(input_buffer, "kill ")) {
         /* Format: kill [-N] <id>
@@ -3501,8 +3647,10 @@ static void shell_execute() {
                     last_exit_code = 127;
                 } else if (ae_tid >= 0) {
                     if (bg) {
+                        int jid = jobs_add(ae_tid, ae.prog);
                         char tbuf[8]; itoa((uint32_t)ae_tid, tbuf);
-                        print("["); print(tbuf); print("] "); print(ae.prog); print(" &\n");
+                        print("["); char jbuf[8]; itoa((uint32_t)jid, jbuf); print(jbuf); print("] ");
+                        print(tbuf); print(" "); print(ae.prog); print(" &\n");
                     } else {
                         keyboard_set_fg_pid(ae_tid);
                         task_wait(ae_tid);

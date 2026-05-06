@@ -44,6 +44,7 @@
 #include "cat_elf_data.h"
 #include "wc_elf_data.h"
 #include "head_elf_data.h"
+#include "tail_elf_data.h"
 #include "cp_elf_data.h"
 #include "mv_elf_data.h"
 #include "edit_elf_data.h"
@@ -507,6 +508,7 @@ void programs_init() {
     fs_write_bin("cat",           build_cat_elf,           build_cat_elf_len);
     fs_write_bin("wc",            build_wc_elf,            build_wc_elf_len);
     fs_write_bin("head",          build_head_elf,          build_head_elf_len);
+    fs_write_bin("tail",          build_tail_elf,          build_tail_elf_len);
     fs_write_bin("cp",            build_cp_elf,            build_cp_elf_len);
     fs_write_bin("mv",            build_mv_elf,            build_mv_elf_len);
     fs_write_bin("edit",          build_edit_elf,          build_edit_elf_len);

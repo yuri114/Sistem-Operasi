@@ -98,6 +98,42 @@ static void proc_generate(const char *path) {
     /* /proc (directory listing) */
     else if (path[0]=='\0' || (path[0]=='.'&&path[1]=='\0')) {
         proc_puts("ps\nmeminfo\nuptime\ncpuinfo\ndmesg\n");
+        /* list numeric PIDs */
+        int i;
+        for (i = 0; i < task_get_max(); i++) {
+            if (!task_is_used(i)) continue;
+            proc_putn((uint32_t)i); proc_puts("\n");
+        }
+    }
+    /* /proc/<pid>/status  or  /proc/<pid> */
+    else if (path[0] >= '0' && path[0] <= '9') {
+        /* parse PID */
+        int pid = 0;
+        const char *p = path;
+        while (*p >= '0' && *p <= '9') { pid = pid * 10 + (*p - '0'); p++; }
+        /* skip optional '/status' */
+        if (*p == '/') p++;
+        /* accept "status" or empty suffix */
+        if (!task_is_used(pid)) {
+            proc_puts("proc: PID tidak ada: ");
+            proc_putn((uint32_t)pid);
+            proc_puts("\n");
+        } else {
+            const char *st_name;
+            int st = task_get_status(pid);
+            if (pid == task_get_current()) st_name = "R (running)";
+            else if (st == TASK_SLEEPING)  st_name = "S (sleeping)";
+            else if (st == TASK_BLOCKED)   st_name = "D (blocked)";
+            else                            st_name = "R (ready)";
+            proc_puts("Name:\t");
+            const char *nm = task_get_name(pid);
+            if (nm) proc_puts(nm);
+            proc_puts("\n");
+            proc_puts("Pid:\t"); proc_putn((uint32_t)pid); proc_puts("\n");
+            proc_puts("State:\t"); proc_puts(st_name); proc_puts("\n");
+            proc_puts("PPid:\t"); proc_putn((uint32_t)task_get_parent(pid)); proc_puts("\n");
+            proc_puts("Priority:\t"); proc_putn((uint32_t)task_get_priority(pid)); proc_puts("\n");
+        }
     }
     else {
         proc_puts("proc: unknown entry /proc/");

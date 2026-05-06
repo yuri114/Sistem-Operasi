@@ -513,6 +513,136 @@ static inline void print_int(unsigned int n) {
 }
 
 // ============================================================
+// qsort — urutkan array in-place (insertion sort, O(n^2), cukup untuk OS ini)
+// base: pointer ke elemen pertama
+// nmemb: jumlah elemen
+// size: ukuran tiap elemen dalam byte
+// compar: fungsi pembanding, return <0/0/>0
+// ============================================================
+static inline void qsort(void *base, unsigned int nmemb, unsigned int size,
+                         int (*compar)(const void *, const void *)) {
+    unsigned char *arr = (unsigned char *)base;
+    unsigned char tmp[256];
+    unsigned int i, j;
+    if (size > sizeof(tmp)) return; /* elemen terlalu besar */
+    for (i = 1; i < nmemb; i++) {
+        /* simpan arr[i] ke tmp */
+        unsigned int k;
+        for (k = 0; k < size; k++) tmp[k] = arr[i * size + k];
+        j = i;
+        while (j > 0 && compar(arr + (j - 1) * size, tmp) > 0) {
+            for (k = 0; k < size; k++)
+                arr[j * size + k] = arr[(j - 1) * size + k];
+            j--;
+        }
+        for (k = 0; k < size; k++) arr[j * size + k] = tmp[k];
+    }
+}
+
+// bsearch — cari elemen dalam array terurut (binary search)
+// Kembalikan pointer ke elemen yang cocok, atau NULL jika tidak ditemukan
+static inline void *bsearch(const void *key, const void *base,
+                            unsigned int nmemb, unsigned int size,
+                            int (*compar)(const void *, const void *)) {
+    const unsigned char *arr = (const unsigned char *)base;
+    unsigned int lo = 0, hi = nmemb;
+    while (lo < hi) {
+        unsigned int mid = lo + (hi - lo) / 2;
+        int c = compar(key, arr + mid * size);
+        if (c == 0) return (void *)(arr + mid * size);
+        else if (c < 0) hi = mid;
+        else lo = mid + 1;
+    }
+    return (void *)0;
+}
+
+// ============================================================
+// scanf — baca input terformat dari keyboard (stdin)
+// Format: %d (int), %u (unsigned), %s (string no-space), %c (char)
+// Kembalikan jumlah item yang berhasil dibaca
+// ============================================================
+static inline int scanf(const char *fmt, ...) {
+    /* Baca satu baris dari stdin dulu */
+    char linebuf[256];
+    int li = 0;
+    while (li < 255) {
+        char c = (char)syscall0(SYS_GETKEY);
+        if (c == '\n' || c == '\r') { print("\n"); break; }
+        if (c == '\b') {
+            if (li > 0) {
+                li--;
+                print("\b \b");
+            }
+            continue;
+        }
+        if (c == 0) continue;
+        linebuf[li++] = c;
+        /* echo karakter */
+        char ec[2]; ec[0] = c; ec[1] = 0; print(ec);
+    }
+    linebuf[li] = '\0';
+
+    /* Parse format string */
+    __builtin_va_list ap;
+    __builtin_va_start(ap, fmt);
+    int count = 0;
+    const char *p = fmt;
+    const char *s = linebuf;
+    /* skip whitespace di input */
+    while (*s == ' ' || *s == '\t') s++;
+    while (*p && *s) {
+        if (*p == '%') {
+            p++;
+            if (*p == 'd' || *p == 'i') {
+                int *dst = __builtin_va_arg(ap, int *);
+                int neg = 0, val = 0;
+                if (*s == '-') { neg = 1; s++; }
+                while (*s >= '0' && *s <= '9') { val = val * 10 + (*s - '0'); s++; }
+                *dst = neg ? -val : val;
+                count++;
+            } else if (*p == 'u') {
+                unsigned int *dst = __builtin_va_arg(ap, unsigned int *);
+                unsigned int val = 0;
+                while (*s >= '0' && *s <= '9') { val = val * 10 + (*s - '0'); s++; }
+                *dst = val;
+                count++;
+            } else if (*p == 'x' || *p == 'X') {
+                unsigned int *dst = __builtin_va_arg(ap, unsigned int *);
+                unsigned int val = 0;
+                while (1) {
+                    if (*s >= '0' && *s <= '9') val = val * 16 + (*s - '0');
+                    else if (*s >= 'a' && *s <= 'f') val = val * 16 + (*s - 'a' + 10);
+                    else if (*s >= 'A' && *s <= 'F') val = val * 16 + (*s - 'A' + 10);
+                    else break;
+                    s++;
+                }
+                *dst = val;
+                count++;
+            } else if (*p == 's') {
+                char *dst = __builtin_va_arg(ap, char *);
+                int n = 0;
+                while (*s && *s != ' ' && *s != '\t' && *s != '\n') dst[n++] = *s++;
+                dst[n] = '\0';
+                count++;
+            } else if (*p == 'c') {
+                char *dst = __builtin_va_arg(ap, char *);
+                *dst = *s++;
+                count++;
+            }
+            p++;
+        } else if (*p == ' ' || *p == '\t') {
+            while (*s == ' ' || *s == '\t') s++;
+            p++;
+        } else {
+            if (*p == *s) { p++; s++; }
+            else break;
+        }
+    }
+    __builtin_va_end(ap);
+    return count;
+}
+
+// ============================================================
 // File I/O — akses filesystem kernel lewat syscall
 // ============================================================
 

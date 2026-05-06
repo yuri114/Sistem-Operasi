@@ -61,7 +61,7 @@ MULTITASKING
   [ ] Zombie cleanup (child exit, parent tidak wait -> slot leak)
   [ ] setuid / setgid
   [ ] Proses group / session (setsid, tcsetpgrp)
-  [ ] Job control: fg/bg/jobs (tabel job belum ada di shell)
+  [x] Job control: fg/bg/jobs (tabel job, jobs_add/remove, fg %N wait, bg %N)
   [ ] POSIX signal mask (sigprocmask, sigpending)
   [ ] Real-time priority class
 
@@ -165,7 +165,8 @@ VFS (Virtual Filesystem)
   [x] poll() syscall (POLLIN/POLLOUT/POLLERR, timeout)
   [x] /proc virtual: ps, meminfo, uptime, cpuinfo (real data), dmesg
   [ ] /dev virtual filesystem
-  [ ] /proc/<pid>/ per-proses (maps, fd, status)
+  [x] /proc/<pid>/status — Name, Pid, State, PPid, Priority
+  [ ] /proc/<pid>/maps, /proc/<pid>/fd
   [ ] inotify / file watch API
   [ ] VFS_MAX_FD > 8
 
@@ -230,10 +231,10 @@ Built-in commands
   [x] whoami, login, adduser, passwd, su
   [x] edit <file> — text editor nano-like
   [x] sh [script.sh] — jalankan script shell
-  [ ] jobs, fg %N, bg %N — job control
+  [x] jobs, fg %N, bg %N — job control
   [ ] which <cmd>
   [ ] alias / unalias
-  [ ] top         — realtime process monitor
+  [x] top         — realtime process monitor (refresh 1s, keluar tombol apa pun)
   [ ] set -e / set -x untuk debug script
 
 Shell features
@@ -283,8 +284,8 @@ Shell features
   [x] net_tcp_connect/send/recv/close
   [x] clipboard_copy / clipboard_paste
   [x] tls_get (FS MSR TLS base)
-  [ ] scanf / sscanf
-  [ ] qsort / bsearch
+  [x] scanf / sscanf (format: %d %u %x %s %c)
+  [x] qsort / bsearch
   [ ] time() / gettimeofday()
   [ ] errno global per-thread
   [ ] FILE* stdio (fopen/fread/fwrite/fclose/fseek)
@@ -301,8 +302,7 @@ User programs (ELF64, di-embed di kernel image)
   [x] threadtest, condtest, forktest — demo threading/sync
   [x] pipetest, polltest, futextest  — demo IPC/poll/futex
   [x] mfs4test, sigtest              — demo MFS4 + signal
-  [x] grep, sort, cat, wc, head, cp, mv, ls, edit — tools Unix
-  [ ] tail (ELF) — saat ini hanya built-in shell
+  [x] grep, sort, tail, cat, wc, head, cp, mv, ls, edit — tools Unix
   [ ] awk, sed, less/more, zip/gzip
 
 
