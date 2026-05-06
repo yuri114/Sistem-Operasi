@@ -24,7 +24,7 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 | Multitasking | Priority-based preemptive, hingga **32** task, PIT IRQ0 @ 1000 Hz |
 | Ring | Kernel Ring-0 / User Ring-3 (isolasi penuh per-proses) |
 | Filesystem | MFS3/MFS4 — 64 file × 64 KB, inode layer, symlink, hardlink |
-| Syscall | `SYSCALL/SYSRET` (IA32_LSTAR MSR) — **99 syscall** tersedia |
+| Syscall | `SYSCALL/SYSRET` (IA32_LSTAR MSR) — **109 syscall** tersedia |
 | Networking | RTL8139, IPv4/IPv6, TCP/UDP, DHCP, DNS, HTTP, HTTPS/TLS 1.3 |
 | Build | WSL + `x86_64-linux-gnu-gcc` + NASM, output `os.img` binary raw |
 | Emulator | QEMU `qemu-system-x86_64` |
@@ -59,6 +59,7 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **SMP multi-core**: LAPIC INIT/SIPI, ACPI MADT parser, AP trampoline (real→protected→long mode), LAPIC timer per-AP 10 ms
 - **Per-core scheduler**: BSP ambil task `is_user==1`; AP ambil `is_user==0` (atau work-steal)
 - **Sinyal**: `SIGINT(2)`, `SIGTERM(15)`, `SIGKILL(9)` — `task_send_signal()`, `Ctrl+C` → SIGINT proses foreground
+- **POSIX signal mask**: `sigprocmask(SIG_BLOCK/SIG_UNBLOCK/SIG_SETMASK, mask)` — blokir pengiriman sinyal per-proses; SIGKILL tidak bisa diblokir
 - **Wait/exit**: `task_wait()`, `waitpid_ex()` — tunggu proses selesai, ambil exit code
 - **Shell**: `ps`, `kill`, `exec`, `setprio`, `renice`, `cpuinfo`, `taskstat`
 
@@ -89,6 +90,7 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **`SYS_BRK(62)`**: user heap `malloc` via bump allocator (0x400000+)
 - **Shared memory**: `shm_create/attach/detach`, 8 region × 4 KB, VA `0x500000+slot×4096`
 - **Meminfo**: `meminfo` — tampilkan total/used/free PMM frame
+- **Resource limits (rlimit)**: batas memori heap (KB) dan jumlah fd per-proses; `task_set_rlimit()` / `task_get_rlimit()`; shell: `ulimit -v <KB>`, `ulimit -n <num>`
 
 ---
 
@@ -175,6 +177,7 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **History**: 8 entri, navigasi ↑/↓
 - **Tab-completion**: auto-complete perintah dan nama file
 - **Environment variables**: `export KEY=VAL`, ekspansi `$VAR` di input
+- **Arithmetic expansion**: `$(( expr ))` — evaluasi ekspresi integer (+, -, *, /, %, variabel `$VAR`, tanda kurung); contoh: `echo $((2+3*4))`
 - **Operator**: `prog &` (background), `prog1 | prog2` (pipeline), `prog > file` / `prog < file` (redirect)
 - **Text editor**: `edit <file>` — editor multi-baris penuh dengan keyboard; `Ctrl+S` simpan, `Ctrl+Y` copy, `Ctrl+V` paste
 - **ACPI shutdown**: `shutdown` — kirim SCI event ke ACPI PM1a_CNT; OS mati bersih di QEMU
@@ -182,6 +185,7 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **Info sistem**: `ps` (tampilkan proses + CPU + thread), `meminfo`, `cpuinfo`, `taskstat`
 - **Jaringan**: `ifconfig`, `ping`, `ping6`, `nslookup`, `dhcp`, `ntp`, `tcp_get`, `udp_send`, `httpd`
 - **Proses**: `exec <prog>`, `kill <pid>`, `setprio <id> <prio>`, `renice <nice> <pid>`, `pipe <p1> <p2>`
+- **Resource limits**: `ulimit` — tampilkan limit; `ulimit -v <KB>` set batas memori heap; `ulimit -n <num>` set batas fd
 - **Terminal virtual**: `vt <n>` — beralih ke tty n (0–5)
 - **Debugger kernel**: `dbg regs`, `dbg mem <addr> <len>`, `dbg trace`
 - **GUI**: `gui` — masuk mode desktop GUI
@@ -200,9 +204,21 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **uid per-task**: field `uid` di Task struct; diwariskan saat fork/exec
 - **Ring-3 isolation**: setiap proses di PML4 terpisah; kernel tidak dapat diakses dari user space
 
----
+### Scripting Shell
 
-### Aplikasi Built-in (User Space ELF64)
+- **Shell script**: jalankan `.sh` — `sh <file>`, atau `exec <file>`
+- **Kontrol alir**: `if/then/else/fi`, `for VAR in ...; do/done`, `while COND; do/done`
+- **Test expression**: `[ -f FILE ]`, `[ -z VAR ]`, `[ A = B ]`, `[ A != B ]`
+- **Variabel**: `VAR=val`, `$VAR`, `export VAR`
+- **Arithmetic expansion**: `$(( expr ))` — integer dengan +−*/% dan variabel `$VAR`
+- **Subshell capture**: `$(command)` — ganti dengan output perintah
+- **Brace expansion**: `{a,b,c}` → `a b c`
+- **Glob expansion**: `*.txt`, `file?.c` — cocokkan nama file
+- **Here-doc**: `cmd <<EOF ... EOF`
+- **Fungsi shell**: definisi `function nama { ... }` atau `nama() { ... }`; panggil dengan nama fungsi; mendukung rekursi dan pemanggilan dari body fungsi lain
+- **set -e / set -x**: hentikan saat error / trace setiap command
+
+---
 
 | Aplikasi | Deskripsi |
 |---|---|
@@ -229,6 +245,8 @@ Sistem operasi *from-scratch* berbasis x86_64 yang ditulis dalam Assembly (NASM)
 - **String**: `strcat`, `strstr`, `strtol`, `atoi`, `memcpy`, `memset`, `memmove`, `memcmp`
 - **Thread API**: `thread_create/exit/join/set_name`, `mutex_lock/unlock`, `cond_wait/signal/broadcast`, `futex_wait/wake`, `get_tls()`
 - **Process**: `fork()`, `exec_replace()`, `exit_code(n)`, `kill(tid, sig)`, `waitpid_ex(tid)`
+- **Signals**: `sigprocmask_set(how, mask)` — blokir/buka blokir sinyal (SIG_BLOCK/UNBLOCK/SETMASK)
+- **Resource limits**: `setrlimit_r(RLimit*)`, `getrlimit_r(RLimit*)` — set/get batas memori (KB) dan fd
 - **Memory**: `mmap(n)`, `munmap(addr, n)`, `mmap_file(fd, n)`, `malloc`, `free`
 - **VFS**: `sys_open`, `sys_read_fd`, `sys_write_fd`, `sys_close_fd`, `pipe2`, `fcntl_setfl`, `poll`
 - **MFS4**: `mfs4_symlink_u`, `mfs4_hardlink_u`, `mfs4_stat_u`, `mfs4_listdir_u`, `mfs4_unlink_u`, `mfs4_rename_u`
@@ -422,6 +440,9 @@ SYS_MFS4_*(81-86)  SYS_SIGACTION(87)  SYS_SIGKILL_SIG(88)
 SYS_FUTEX_WAIT(89) SYS_FUTEX_WAKE(90) SYS_GET_TLS(91)    SYS_MFS4_RENAME(92)
 SYS_FCNTL(93)      SYS_POLL(94)       SYS_GETARGV(95)
 SYS_CLIP_COPY(96)  SYS_CLIP_PASTE(97) SYS_MMAP_FILE(98)  SYS_MUNMAP_FILE(99)
+SYS_FORK(100)      SYS_NET_LISTEN(101) SYS_NET_ACCEPT(102) SYS_NET_UNLISTEN(103)
+SYS_SETITIMER(104) SYS_GFX_FLIP(105)  SYS_TIME(106)
+SYS_SIGPROCMASK(107) SYS_SETRLIMIT(108) SYS_GETRLIMIT(109)
 ```
 
 ---
@@ -452,6 +473,10 @@ SYS_CLIP_COPY(96)  SYS_CLIP_PASTE(97) SYS_MMAP_FILE(98)  SYS_MUNMAP_FILE(99)
 | 3 Apr 2026 | Priority scheduler + nice + aging (starvation prevention) |
 | 3 Apr 2026 | File-backed mmap (mmap_file/munmap_file) |
 | 3 Apr 2026 | User accounts + login (adduser, passwd, su, whoami) |
+| 7 Mei 2026 | **Tier 1**: POSIX signal mask (`sigprocmask` SYS 107) |
+| 7 Mei 2026 | **Tier 1**: Arithmetic expansion `$(( expr ))` di shell |
+| 7 Mei 2026 | **Tier 1**: ulimit / rlimit per-proses (SYS 108-109) |
+| 7 Mei 2026 | **Tier 1**: Fungsi shell `function name { }` dalam script |
 
 ---
 

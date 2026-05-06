@@ -1081,6 +1081,36 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         return (uint64_t)secs;
     }
 
+    // SYS_SIGPROCMASK(107): ebx=how (SIG_BLOCK/UNBLOCK/SETMASK), edx=mask → old_mask
+    if (eax == SYS_SIGPROCMASK) {
+        int tid = task_get_current();
+        uint32_t old  = task_get_signal_mask(tid);
+        uint32_t mask = (uint32_t)edx;
+        int how = (int)ebx;
+        if (how == SIG_BLOCK)        task_set_signal_mask(tid, old | mask);
+        else if (how == SIG_UNBLOCK) task_set_signal_mask(tid, old & ~mask);
+        else                         task_set_signal_mask(tid, mask);  /* SIG_SETMASK */
+        return (uint64_t)old;
+    }
+
+    // SYS_SETRLIMIT(108): ebx=ptr{uint32_t mem_kb; uint16_t fds} → 0
+    if (eax == SYS_SETRLIMIT) {
+        if (!ebx || !is_user_ptr(ebx)) return (uint64_t)-1;
+        typedef struct { uint32_t mem_kb; uint16_t fds; } RLArgs;
+        RLArgs *a = (RLArgs *)(uintptr_t)ebx;
+        task_set_rlimit(task_get_current(), a->mem_kb, a->fds);
+        return 0;
+    }
+
+    // SYS_GETRLIMIT(109): ebx=ptr{uint32_t mem_kb; uint16_t fds} (output) → 0
+    if (eax == SYS_GETRLIMIT) {
+        if (!ebx || !is_user_ptr(ebx)) return (uint64_t)-1;
+        typedef struct { uint32_t mem_kb; uint16_t fds; } RLArgs;
+        RLArgs *a = (RLArgs *)(uintptr_t)ebx;
+        task_get_rlimit(task_get_current(), &a->mem_kb, &a->fds);
+        return 0;
+    }
+
     return (uint64_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal
 }
 

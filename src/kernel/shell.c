@@ -442,6 +442,145 @@ static int shell_heredoc_detect(void) {
     return (di > 0) ? 1 : 0;
 }
 
+/* ================================================================
+ * Arithmetic expansion: ganti $(( expr )) dengan hasil integer.
+ * Mendukung: +  -  *  /  %  dan tanda kurung.
+ * Variabel $VAR atau VAR diekspansi sebelum evaluasi.
+ * ================================================================ */
+
+/* Evaluasi ekspresi aritmetika sederhana (rekursif descent).
+ * p = pointer ke string ekspresi, diupdate ke posisi setelah token terakhir. */
+static long arith_expr(const char **p);
+
+static long arith_primary(const char **p) {
+    const char *s = *p;
+    while (*s == ' ') s++;
+    /* tanda kurung */
+    if (*s == '(') {
+        s++; /* lewati ( */
+        long v = arith_expr(&s);
+        while (*s == ' ') s++;
+        if (*s == ')') s++; /* lewati ) */
+        *p = s;
+        return v;
+    }
+    /* unary minus */
+    if (*s == '-') {
+        s++;
+        *p = s;
+        return -arith_primary(p);
+    }
+    /* variabel: $VAR atau langsung nama */
+    if (*s == '$') s++;
+    if ((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || *s == '_') {
+        char vname[24]; int vi = 0;
+        while (((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') ||
+                (*s >= '0' && *s <= '9') || *s == '_') && vi < 23)
+            vname[vi++] = *s++;
+        vname[vi] = '\0';
+        *p = s;
+        int e;
+        for (e = 0; e < env_count; e++)
+            if (str_compare(env_keys[e], vname)) {
+                long v = 0; int neg = 0;
+                const char *n = env_vals[e];
+                if (*n == '-') { neg = 1; n++; }
+                while (*n >= '0' && *n <= '9') v = v * 10 + (*n++ - '0');
+                return neg ? -v : v;
+            }
+        return 0;
+    }
+    /* angka */
+    long v = 0;
+    while (*s >= '0' && *s <= '9') v = v * 10 + (*s++ - '0');
+    *p = s;
+    return v;
+}
+
+static long arith_term(const char **p) {
+    long v = arith_primary(p);
+    while (1) {
+        const char *s = *p;
+        while (*s == ' ') s++;
+        if (*s == '*') { s++; *p = s; v *= arith_primary(p); }
+        else if (*s == '/') {
+            s++; *p = s;
+            long b = arith_primary(p);
+            v = b ? v / b : 0;
+        }
+        else if (*s == '%') {
+            s++; *p = s;
+            long b = arith_primary(p);
+            v = b ? v % b : 0;
+        }
+        else break;
+    }
+    return v;
+}
+
+static long arith_expr(const char **p) {
+    long v = arith_term(p);
+    while (1) {
+        const char *s = *p;
+        while (*s == ' ') s++;
+        if (*s == '+') { s++; *p = s; v += arith_term(p); }
+        else if (*s == '-') { s++; *p = s; v -= arith_term(p); }
+        else break;
+    }
+    return v;
+}
+
+/* Ganti semua $((expr)) dalam input_buffer dengan nilai integer. */
+static void shell_expand_arith(void) {
+    /* Cek ada $(( */
+    int found = 0, ii = 0;
+    while (input_buffer[ii]) {
+        if (input_buffer[ii] == '$' && input_buffer[ii+1] == '(' &&
+            input_buffer[ii+2] == '(') { found = 1; break; }
+        ii++;
+    }
+    if (!found) return;
+
+    static char arith_out[512];
+    int oi = 0, i = 0;
+
+    while (input_buffer[i] && oi < 510) {
+        if (input_buffer[i] == '$' && input_buffer[i+1] == '(' &&
+            input_buffer[i+2] == '(') {
+            i += 3; /* lewati $(( */
+            /* Ekstrak isi ekspresi sampai )) */
+            char expr[128]; int ci = 0;
+            while (input_buffer[i] && ci < 126) {
+                if (input_buffer[i] == ')' && input_buffer[i+1] == ')') {
+                    i += 2; break;
+                }
+                expr[ci++] = input_buffer[i++];
+            }
+            expr[ci] = '\0';
+            /* Evaluasi */
+            const char *ep = expr;
+            long result = arith_expr(&ep);
+            /* Konversi ke string dan append ke output */
+            char rbuf[24]; int ri = 0;
+            long r = result;
+            if (r < 0) { arith_out[oi++] = '-'; r = -r; }
+            if (r == 0) { arith_out[oi++] = '0'; }
+            else {
+                char tmp[20]; int ti = 0;
+                while (r > 0) { tmp[ti++] = (char)('0' + r % 10); r /= 10; }
+                while (ti > 0 && oi < 510) arith_out[oi++] = tmp[--ti];
+            }
+            (void)rbuf; (void)ri;
+        } else {
+            arith_out[oi++] = input_buffer[i++];
+        }
+    }
+    arith_out[oi] = '\0';
+    int k;
+    for (k = 0; k <= oi && k < 255; k++) input_buffer[k] = arith_out[k];
+    input_buffer[k] = '\0';
+}
+
 /* Subshell expansion: ganti $(...) dengan output dari command.
  * Implementasi: redirect stdout inner command ke temp file, baca hasilnya. */
 static void shell_expand_subshell(void) {
@@ -1006,6 +1145,45 @@ static int   sc_argc   = 0;
 static char  sc_arg_buf[512];
 static char *sc_argv[10];
 
+/* Tier-1: Shell function table — didefinisikan setelah SC_LINE_LEN dan sc_lines */
+#define MAX_SHELL_FUNCS  16
+#define FUNC_NAME_LEN    32
+#define FUNC_BODY_MAX    48
+typedef struct {
+    char name[FUNC_NAME_LEN];
+    char body[FUNC_BODY_MAX][SC_LINE_LEN];
+    int  nlines;
+} ShellFunc;
+static ShellFunc shell_funcs[MAX_SHELL_FUNCS];
+static int       shell_func_count = 0;
+
+static int shell_func_find(const char *name) {
+    int i;
+    for (i = 0; i < shell_func_count; i++)
+        if (str_compare(shell_funcs[i].name, name)) return i;
+    return -1;
+}
+
+static void shell_func_define(const char *name, int body_from, int body_to) {
+    int idx = shell_func_find(name);
+    if (idx < 0) {
+        if (shell_func_count >= MAX_SHELL_FUNCS) return;
+        idx = shell_func_count++;
+    }
+    int ni = 0;
+    while (name[ni] && ni < FUNC_NAME_LEN - 1) shell_funcs[idx].name[ni] = name[ni], ni++;
+    shell_funcs[idx].name[ni] = '\0';
+    int k, li = 0;
+    for (k = body_from; k < body_to && li < FUNC_BODY_MAX; k++) {
+        int j = 0;
+        while (sc_lines[k][j] && j < SC_LINE_LEN - 1)
+            shell_funcs[idx].body[li][j] = sc_lines[k][j], j++;
+        shell_funcs[idx].body[li][j] = '\0';
+        li++;
+    }
+    shell_funcs[idx].nlines = li;
+}
+
 /* Helper: set shell env variable */
 static void sc_setvar(const char *key, const char *val) {
     int i;
@@ -1234,6 +1412,62 @@ static int sc_exec_block(int from, int to) {
         if (str_compare(line,"then")||str_compare(line,"else")||str_compare(line,"fi")||
             str_compare(line,"do")  ||str_compare(line,"done")) { i++; continue; }
 
+        /* Tier-1: definisi fungsi shell — "function NAME {" atau "NAME() {" atau "NAME()" */
+        {
+            int is_fn = 0;
+            char fn_name[FUNC_NAME_LEN];
+            int ni = 0;
+            const char *fp = line;
+            if (str_starts_with(line, "function ")) {
+                fp = line + 9;
+                while (*fp == ' ') fp++;
+                is_fn = 1;
+            }
+            /* Ambil nama */
+            if (is_fn || (fp[0] && fp[0] != '=' && fp[0] != ' ')) {
+                int k2 = 0;
+                /* Nama berakhir di '(', ' ', '{', atau '\0' */
+                while (fp[k2] && fp[k2] != '(' && fp[k2] != ' ' && fp[k2] != '{' && k2 < FUNC_NAME_LEN - 1)
+                    fn_name[k2++] = fp[k2];
+                fn_name[k2] = '\0';
+                /* Cek apakah diikuti () dan/atau { */
+                const char *after = fp + k2;
+                while (*after == ' ') after++;
+                int has_paren = 0, has_brace_on_line = 0;
+                if (after[0] == '(' && after[1] == ')') { has_paren = 1; after += 2; }
+                while (*after == ' ') after++;
+                if (*after == '{') { has_brace_on_line = 1; }
+                if ((is_fn || has_paren) && k2 > 0) {
+                    /* Ini definisi fungsi */
+                    int body_from, body_to, j2;
+                    /* Jika { tidak pada baris ini, cari di baris berikutnya */
+                    if (!has_brace_on_line) {
+                        j2 = i + 1;
+                        if (j2 < to) {
+                            const char *nl = sc_lines[j2];
+                            while (*nl == ' ') nl++;
+                            if (*nl == '{') { body_from = j2 + 1; }
+                            else { body_from = j2; }
+                        } else { body_from = j2; }
+                    } else {
+                        body_from = i + 1;
+                    }
+                    /* Cari } penutup */
+                    body_to = body_from;
+                    for (j2 = body_from; j2 < to; j2++) {
+                        const char *bl = sc_lines[j2];
+                        while (*bl == ' ') bl++;
+                        if (*bl == '}') { body_to = j2; break; }
+                        body_to = j2 + 1;
+                    }
+                    shell_func_define(fn_name, body_from, body_to);
+                    /* Lanjut ke baris setelah } */
+                    i = body_to + 1;
+                    continue;
+                }
+            }
+        }
+
         /* VAR=value (no spaces, = not first char) */
         {
             int eq = -1, ai2;
@@ -1265,6 +1499,36 @@ static int sc_exec_block(int from, int to) {
 }
 
 static int sc_exec_line(const char *line) {
+    /* Tier-1: cek apakah nama command cocok dengan fungsi shell yang terdefinisi */
+    {
+        char cmd_name[FUNC_NAME_LEN]; int ci = 0;
+        const char *p = line;
+        while (*p == ' ') p++;
+        while (*p && *p != ' ' && ci < FUNC_NAME_LEN - 1) cmd_name[ci++] = *p++;
+        cmd_name[ci] = '\0';
+        int fidx = shell_func_find(cmd_name);
+        if (fidx >= 0) {
+            /* Simpan sc_lines dan sc_nlines sementara */
+            static char saved_lines[SC_MAX_LINES][SC_LINE_LEN];
+            int saved_nlines = sc_nlines;
+            int k, j;
+            for (k = 0; k < sc_nlines && k < SC_MAX_LINES; k++) {
+                for (j = 0; j < SC_LINE_LEN; j++) saved_lines[k][j] = sc_lines[k][j];
+            }
+            /* Isi sc_lines dengan body fungsi */
+            sc_nlines = shell_funcs[fidx].nlines;
+            for (k = 0; k < sc_nlines; k++) {
+                for (j = 0; j < SC_LINE_LEN; j++) sc_lines[k][j] = shell_funcs[fidx].body[k][j];
+            }
+            sc_exec_block(0, sc_nlines);
+            /* Pulihkan sc_lines */
+            sc_nlines = saved_nlines;
+            for (k = 0; k < saved_nlines && k < SC_MAX_LINES; k++) {
+                for (j = 0; j < SC_LINE_LEN; j++) sc_lines[k][j] = saved_lines[k][j];
+            }
+            return 0;
+        }
+    }
     int k = 0;
     while (line[k] && k < 255) { input_buffer[k] = line[k]; k++; }
     input_buffer[k] = '\0';
@@ -1480,6 +1744,7 @@ static void shell_execute() {
     }
 
     /* Glob expansion: expand * dan ? dalam argument */
+    shell_expand_arith();
     shell_expand_subshell();
     shell_expand_brace();
     shell_glob_expand();
@@ -2763,6 +3028,47 @@ static void shell_execute() {
      * ================================================================ */
     else if (str_compare(input_buffer, "dhcp")) {
         if (!dhcp_request()) last_exit_code = 1;
+    }
+    /* ================================================================
+     * Tier-1 — ulimit: tampilkan atau set resource limit proses ini
+     *   ulimit           — tampilkan semua limit
+     *   ulimit -v <KB>   — set batas memori heap dalam KB (0=unlimited)
+     *   ulimit -n <num>  — set batas jumlah file descriptor (0=unlimited)
+     * ================================================================ */
+    else if (str_compare(input_buffer, "ulimit")) {
+        int tid = task_get_current();
+        uint32_t mem_kb = 0; uint16_t fds = 0;
+        task_get_rlimit(tid, &mem_kb, &fds);
+        print("ulimit -v "); char ubuf[12]; itoa(mem_kb, ubuf); print(ubuf); print(" (memory KB, 0=unlimited)\n");
+        print("ulimit -n "); itoa(fds, ubuf); print(ubuf); print(" (open files, 0=unlimited)\n");
+    }
+    else if (str_starts_with(input_buffer, "ulimit ")) {
+        const char *arg = input_buffer + 7;
+        while (*arg == ' ') arg++;
+        int tid = task_get_current();
+        uint32_t mem_kb = 0; uint16_t fds = 0;
+        task_get_rlimit(tid, &mem_kb, &fds);
+        if (arg[0] == '-' && arg[1] == 'v' && arg[2] == ' ') {
+            arg += 3;
+            uint32_t v = 0;
+            while (*arg >= '0' && *arg <= '9') { v = v * 10 + (uint32_t)(*arg - '0'); arg++; }
+            task_set_rlimit(tid, v, fds);
+            set_color(GFX_LGREEN, GFX_BLACK);
+            print("ulimit: memory limit = "); char ubuf[12]; itoa(v, ubuf); print(ubuf); print(" KB\n");
+            set_color(GFX_WHITE, GFX_BLACK);
+        } else if (arg[0] == '-' && arg[1] == 'n' && arg[2] == ' ') {
+            arg += 3;
+            uint16_t v = 0;
+            while (*arg >= '0' && *arg <= '9') { v = (uint16_t)(v * 10 + (*arg - '0')); arg++; }
+            task_set_rlimit(tid, mem_kb, v);
+            set_color(GFX_LGREEN, GFX_BLACK);
+            print("ulimit: fd limit = "); char ubuf[12]; itoa(v, ubuf); print(ubuf); print("\n");
+            set_color(GFX_WHITE, GFX_BLACK);
+        } else {
+            set_color(GFX_LRED, GFX_BLACK);
+            print("ulimit: gunakan -v <KB> atau -n <num>\n");
+            set_color(GFX_WHITE, GFX_BLACK); last_exit_code = 1;
+        }
     }
     /* ================================================================
      * Fondasi AV — vt <n>: pindah ke virtual terminal n (0..5)

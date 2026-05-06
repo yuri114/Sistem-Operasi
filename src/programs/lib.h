@@ -127,6 +127,14 @@
 #define SIGKILL  9
 #define SIGTERM  15
 
+/* Tier-1: Syscall tambahan */
+#define SYS_SIGPROCMASK  107
+#define SYS_SETRLIMIT    108
+#define SYS_GETRLIMIT    109
+#define SIG_BLOCK   0
+#define SIG_UNBLOCK 1
+#define SIG_SETMASK 2
+
 /* Tahap L — Message Queue */
 #define SYS_MQ_SEND   60  // kirim MQ: ebx=dst_pid, edx=str_ptr
 #define SYS_MQ_RECV   61  // terima MQ: ebx=ptr MqRecvResult
@@ -229,6 +237,13 @@ static inline long syscall0(long num) {
 // ============================================================
 // Fungsi-fungsi untuk program user
 // ============================================================
+/* Tier-1: RLimit wrappers (didefinisikan setelah syscall helpers) */
+typedef struct { unsigned int mem_kb; unsigned short fds; } RLimit;
+static inline unsigned int sigprocmask_set(int how, unsigned int mask) {
+    return (unsigned int)syscall2(SYS_SIGPROCMASK, (long)how, (long)mask);
+}
+static inline void setrlimit_r(RLimit *r) { syscall1(SYS_SETRLIMIT, (long)r); }
+static inline void getrlimit_r(RLimit *r) { syscall1(SYS_GETRLIMIT, (long)r); }
 
 // Cetak string ke layar
 static inline void print(const char *msg) {

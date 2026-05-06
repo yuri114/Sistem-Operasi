@@ -44,6 +44,11 @@ typedef struct {
     /* Ekstensi B — per-task interval timer */
     uint32_t  itimer_interval;   /* interval dalam ms (0 = timer dinonaktifkan) */
     uint32_t  itimer_remaining;  /* sisa ms hingga SIGALRM berikutnya */
+    /* Tier-1: POSIX signal mask — bitmask sinyal yang sedang diblokir (SIGKILL tetap dikirim) */
+    uint32_t  signal_mask;
+    /* Tier-1: resource limits */
+    uint32_t  rlimit_mem;  /* batas memori heap dalam KB (0 = tidak terbatas) */
+    uint16_t  rlimit_fds;  /* batas jumlah file descriptor (0 = tidak terbatas) */
 } Task;
 
 /* F-T: konstanta sinyal standar */
@@ -103,6 +108,12 @@ uint64_t   *task_get_page_dir(int id);
 int         tasks_getargc(int id);
 const char *tasks_getargbuf(int id);
 void        task_set_page_dir(int id, uint64_t *dir);  /* F-Q: ganti page_dir */
+/* Tier-1: signal mask */
+void     task_set_signal_mask(int tid, uint32_t mask);
+uint32_t task_get_signal_mask(int tid);
+/* Tier-1: resource limits */
+void     task_set_rlimit(int tid, uint32_t mem_kb, uint16_t fds);
+void     task_get_rlimit(int tid, uint32_t *mem_kb, uint16_t *fds);
 
 /* F-Q: buat task anak untuk fork(); RIP/RSP sudah di-set sesuai resume point user */
 int         task_create_fork(int parent_tid, uint64_t child_rip, uint64_t child_rsp);

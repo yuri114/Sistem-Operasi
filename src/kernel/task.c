@@ -83,6 +83,9 @@ int task_create(void (*entry)()) {
     tasks[id].fpu_valid = 0;
     tasks[id].itimer_interval  = 0;
     tasks[id].itimer_remaining = 0;
+    tasks[id].signal_mask  = 0;
+    tasks[id].rlimit_mem   = 0;
+    tasks[id].rlimit_fds   = 0;
     /* Tahap M: load balance — kernel task di-assign langsung ke AP jika ada */
     tasks[id].cpu_id    = has_ap ? (int8_t)1 : (int8_t)-1;
     tasks[id].is_user   = 0;   /* ring-0 kernel task */
@@ -133,6 +136,9 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
     tasks[id].fpu_valid = 0;
     tasks[id].itimer_interval  = 0;
     tasks[id].itimer_remaining = 0;
+    tasks[id].signal_mask  = 0;
+    tasks[id].rlimit_mem   = 0;
+    tasks[id].rlimit_fds   = 0;
     tasks[id].is_thread = 0;
     tasks[id].parent_tid = -1;
     str_copy_n(tasks[id].name, name ? name : "?", 32);
@@ -235,6 +241,9 @@ int task_create_thread(uint64_t entry, uint64_t arg, int parent_tid) {
     tasks[id].fpu_valid  = 0;
     tasks[id].itimer_interval  = 0;
     tasks[id].itimer_remaining = 0;
+    tasks[id].signal_mask  = 0;
+    tasks[id].rlimit_mem   = 0;
+    tasks[id].rlimit_fds   = 0;
     str_copy_n(tasks[id].name, "thread", 32);
 
     /* F-Q3: Demand paging untuk thread stack.
@@ -589,10 +598,38 @@ void task_check_signals(void) {
     uint32_t term = (1u << SIGINT) | (1u << SIGKILL) | (1u << SIGTERM);
     uint32_t sigs = tasks[tid].pending_signals & term;
     if (!sigs || !tasks[tid].is_user) return;
+    /* Hormati signal_mask, tapi SIGKILL selalu dikirim */
+    uint32_t masked = sigs & ~tasks[tid].signal_mask;
+    masked |= sigs & (1u << SIGKILL);  /* SIGKILL tidak bisa diblokir */
+    if (!masked) return;
     /* Cari sinyal dengan bit terendah */
     int sig = 1;
-    while (sig < 32 && !(sigs & (1u << sig))) sig++;
+    while (sig < 32 && !(masked & (1u << sig))) sig++;
     task_exit_code(128 + sig);  /* tidak pernah kembali */
+}
+
+/* Tier-1: signal mask getter/setter */
+void task_set_signal_mask(int tid, uint32_t mask) {
+    if (tid < 0 || tid >= MAX_TASKS || !tasks[tid].used) return;
+    /* SIGKILL tidak boleh dimasukkan ke mask */
+    mask &= ~(1u << SIGKILL);
+    tasks[tid].signal_mask = mask;
+}
+uint32_t task_get_signal_mask(int tid) {
+    if (tid < 0 || tid >= MAX_TASKS) return 0;
+    return tasks[tid].signal_mask;
+}
+
+/* Tier-1: resource limits getter/setter */
+void task_set_rlimit(int tid, uint32_t mem_kb, uint16_t fds) {
+    if (tid < 0 || tid >= MAX_TASKS || !tasks[tid].used) return;
+    tasks[tid].rlimit_mem = mem_kb;
+    tasks[tid].rlimit_fds = fds;
+}
+void task_get_rlimit(int tid, uint32_t *mem_kb, uint16_t *fds) {
+    if (tid < 0 || tid >= MAX_TASKS || !tasks[tid].used) return;
+    if (mem_kb) *mem_kb = tasks[tid].rlimit_mem;
+    if (fds)    *fds    = tasks[tid].rlimit_fds;
 }
 
 /* F-T: Kembalikan exit code task yang sudah selesai. */

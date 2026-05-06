@@ -148,6 +148,14 @@
 #define SYS_SETITIMER     104 // setitimer: ebx=interval_ms (0=off) → 0
 #define SYS_GFX_FLIP      105 // flip back buffer ke layar → 0
 #define SYS_TIME          106 // time(): kembalikan detik sejak boot → uint32_t
+/* Tier-1 */
+#define SYS_SIGPROCMASK   107 // sigprocmask: ebx=how, edx=mask → old_mask
+#define SYS_SETRLIMIT     108 // setrlimit: ebx=ptr{u32 mem_kb; u16 fds} → 0
+#define SYS_GETRLIMIT     109 // getrlimit: ebx=ptr{u32 mem_kb; u16 fds} → 0
+/* Konstanta how untuk SYS_SIGPROCMASK */
+#define SIG_BLOCK   0
+#define SIG_UNBLOCK 1
+#define SIG_SETMASK 2
 
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);

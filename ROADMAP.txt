@@ -24,6 +24,8 @@ BOOT & CPU
   [x] x87/SSE state save/restore saat context switch (FXSAVE/FXRSTOR di task_switch)
   [ ] NMI handler
   [ ] ACPI power management (S3/S4 suspend)
+  [ ] UEFI boot (saat ini BIOS/legacy only via GRUB)
+  [ ] CPU affinity: SYS_SCHED_SETAFFINITY (pin task ke core tertentu)
 
 MEMORI
   [x] 4-level paging (PML4/PDPT/PD/PT), identity-map 4GB
@@ -62,8 +64,10 @@ MULTITASKING
   [ ] setuid / setgid
   [ ] Proses group / session (setsid, tcsetpgrp)
   [x] Job control: fg/bg/jobs (tabel job, jobs_add/remove, fg %N wait, bg %N)
-  [ ] POSIX signal mask (sigprocmask, sigpending)
+  [x] POSIX signal mask (sigprocmask, sigpending)
   [ ] Real-time priority class
+  [x] ulimit / rlimit per proses (CPU time, memori, fd count)
+  [ ] CPU affinity per-task (sched_setaffinity)
 
 
 ================================================================
@@ -115,6 +119,13 @@ TIMER & WAKTU
   [x] Alarm / setitimer (SIGALRM) ? task_set_itimer() + SYS_SETITIMER(104)
   [ ] Timezone support
 
+PCI & BUS
+  [x] PCI config space scan Type 1 (32-bit I/O port): vendor/device ID, BAR
+  [x] PCI used by RTL8139 (NIC), ATA DMA (Bus Master IDE), VirtIO Block
+  [ ] Generic PCI driver registration framework
+  [ ] PCI-e MSI/MSI-X interrupt routing (saat ini hanya legacy IRQ)
+  [ ] USB OHCI/EHCI/xHCI host controller stack
+
 NETWORKING
   [x] RTL8139 NIC driver (polling, PCI scan, TX/RX ring)
   [x] Ethernet II frame build/parse
@@ -131,11 +142,15 @@ NETWORKING
   [x] X.509 sertifikat parse (tanpa verifikasi chain)
   [x] HTTP server (httpd): serve file dari MFS4
   [x] WebSocket server: upgrade + frame parser
-  [ ] DHCP client (saat ini hardcode 10.0.2.15)
+  [x] DHCP client (saat ini hardcode 10.0.2.15)
   [ ] IPv6
   [ ] UDP socket bind/recv dari user space
   [x] TCP listen / accept (server socket dari user space) ? SYS_NET_LISTEN/ACCEPT/UNLISTEN (101-103)
   [ ] TLS verifikasi sertifikat (trust store)
+  [ ] VirtIO Network driver (virtio-net)
+  [ ] TCP window scaling / Nagle algorithm
+  [ ] Raw socket (kirim frame IP/Ethernet langsung dari user space)
+  [ ] Unix domain socket (AF_UNIX, komunikasi antar proses lokal)
 
 
 ================================================================
@@ -194,6 +209,7 @@ Ext2 (disk kedua disk.img)
   [ ] SysV semaphore (semget/semop)
   [ ] POSIX message queue (mq_open/mq_send/mq_receive)
   [ ] eventfd / signalfd
+  [ ] Unix domain socket (AF_UNIX socketpair)
 
 
 ================================================================
@@ -255,6 +271,9 @@ Shell features
   [x] Glob pattern *, ? dalam argument expansion
   [x] Subshell $(...) command substitution ? shell_expand_subshell()
   [x] Brace expansion {a,b,c} ? shell_expand_brace()
+  [x] Arithmetic expansion $(( expr )) dan let
+  [x] Fungsi shell (function name { ... }) dalam script
+  [ ] trap builtin (tangkap sinyal dalam script, e.g. trap handler INT)
 
 
 ================================================================
@@ -304,7 +323,21 @@ User programs (ELF64, di-embed di kernel image)
   [x] mfs4test, sigtest               Edemo MFS4 + signal
   [x] grep, sort, tail, cat, wc, head, cp, mv, ls, edit  Etools Unix
   [ ] awk, sed, less/more, zip/gzip
+  [ ] xxd / hexdump
+  [ ] tar (archiver)
+  [ ] bc (calculator CLI, dependensi arithmetic expansion)
 
+
+================================================================
+  AUDIO
+================================================================
+
+  [ ] PC Speaker driver: beep / nada via port 0x61 + PIT channel 2
+  [ ] AC'97 audio codec driver (PCI, QEMU -soundhw ac97)
+  [ ] Intel HDA (High Definition Audio) driver
+  [ ] /dev/audio: device node untuk output PCM
+  [ ] Software mixing: campurkan beberapa stream audio
+  [ ] SYS_AUDIO_WRITE syscall (kirim buffer PCM ke /dev/audio)
 
 ================================================================
   GUI & WINDOW MANAGER
@@ -321,7 +354,22 @@ User programs (ELF64, di-embed di kernel image)
   [ ] Ikon desktop / shortcut
   [ ] Notifikasi / popup toast
   [ ] Font TrueType / anti-aliased
+  [ ] Drag-and-drop antar window
+  [ ] Multi-monitor / virtual desktop support
 
+
+================================================================
+  DEBUGGING & DIAGNOSTICS
+================================================================
+
+  [x] kdbg: kernel debugger interaktif via serial (breakpoint, reg dump)
+  [x] dmesg ring buffer 4096 byte
+  [x] Kernel oops / page fault dump (register + CR2 ditampilkan)
+  [ ] Kernel panic screen dengan full stack trace
+  [ ] Backtrace / stack unwinder kernel (RBP chain walk)
+  [ ] /proc/kallsyms: symbol table kernel (addr → nama fungsi)
+  [ ] Core dump user process ke file saat segfault
+  [ ] Flame graph / profiler via LAPIC timer sampling
 
 ================================================================
   KEAMANAN & USER MANAGEMENT
@@ -337,10 +385,12 @@ User programs (ELF64, di-embed di kernel image)
   [ ] Stack canary (compile-time)
   [ ] ASLR untuk user space
   [ ] Audit log syscall
+  [ ] SMEP/SMAP enforcement (blokir kernel baca/eksekusi user page)
+  [ ] Kernel exploit mitigations: KPTI (Meltdown isolation)
 
 
 ================================================================
-  SYSCALL INDEX (100 total, SYS 0-99)
+  SYSCALL INDEX (107 total, SYS 0-106)
 ================================================================
 
   SYS 0   print              SYS 50  fs_tmpwrite
@@ -393,3 +443,8 @@ User programs (ELF64, di-embed di kernel image)
   SYS 47  fs_delete          SYS 97  clip_paste
   SYS 48  get_ticks          SYS 98  mmap_file
   SYS 49  fs_sync            SYS 99  munmap_file
+
+  SYS 100  lseek             SYS 104  setitimer
+  SYS 101  net_listen        SYS 105  gfx_flip
+  SYS 102  net_accept        SYS 106  time
+  SYS 103  net_unlisten
