@@ -35,6 +35,7 @@
 #include "forktest_elf_data.h"
 #include "pipetest_elf_data.h"
 #include "grep_elf_data.h"
+#include "sort_elf_data.h"
 #include "ls_elf_data.h"
 #include "sigtest_elf_data.h"
 #include "futextest_elf_data.h"
@@ -496,6 +497,7 @@ void programs_init() {
     fs_write_bin("forktest",      build_forktest_elf,      build_forktest_elf_len);
     fs_write_bin("pipetest",      build_pipetest_elf,      build_pipetest_elf_len);
     fs_write_bin("grep",          build_grep_elf,          build_grep_elf_len);
+    fs_write_bin("sort",          build_sort_elf,          build_sort_elf_len);
     fs_write_bin("ls",            build_ls_elf,            build_ls_elf_len);
     fs_write_bin("sigtest",       build_sigtest_elf,       build_sigtest_elf_len);
     fs_write_bin("futextest",     build_futextest_elf,     build_futextest_elf_len);

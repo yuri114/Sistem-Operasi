@@ -144,6 +144,10 @@ x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -
     -o build/grep.elf
 xxd -i build/grep.elf > src/kernel/grep_elf_data.h
 x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -fno-builtin -fno-pic -no-pie \
+-T src/programs/user.ld src/programs/sort.c \
+    -o build/sort.elf
+xxd -i build/sort.elf > src/kernel/sort_elf_data.h
+x86_64-linux-gnu-gcc -m64 -mno-red-zone -mcmodel=small -nostdlib -nostartfiles -fno-builtin -fno-pic -no-pie \
 -T src/programs/user.ld src/programs/ls.c \
     -o build/ls.elf
 xxd -i build/ls.elf > src/kernel/ls_elf_data.h

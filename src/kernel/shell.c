@@ -178,6 +178,23 @@ static void shell_expand_vars(void) {
     while (input_buffer[ii] && ti < 254) {
         if (input_buffer[ii] == '$') {
             ii++;
+            /* $? = last exit code */
+            if (input_buffer[ii] == '?') {
+                ii++;
+                char ecbuf[8]; itoa((uint32_t)(last_exit_code < 0 ? (uint32_t)(-last_exit_code) : (uint32_t)last_exit_code), ecbuf);
+                const char *ep = ecbuf;
+                if (last_exit_code < 0 && ti < 253) tmp[ti++] = '-';
+                while (*ep && ti < 254) tmp[ti++] = *ep++;
+                continue;
+            }
+            /* $$ = PID of current task */
+            if (input_buffer[ii] == '$') {
+                ii++;
+                char pidbuf[8]; itoa((uint32_t)task_get_current(), pidbuf);
+                const char *pp = pidbuf;
+                while (*pp && ti < 254) tmp[ti++] = *pp++;
+                continue;
+            }
             char vname[24]; int vi = 0;
             while (((input_buffer[ii] >= 'A' && input_buffer[ii] <= 'Z') ||
                     (input_buffer[ii] >= 'a' && input_buffer[ii] <= 'z') ||
@@ -1425,7 +1442,8 @@ static void shell_execute() {
         print("Shutting down...\n");
         acpi_shutdown();
     }
-    else if(str_compare(input_buffer, "ls")){
+    else if(str_compare(input_buffer, "ls") || str_compare(input_buffer, "ls -l")){
+        int long_fmt = str_compare(input_buffer, "ls -l");
         set_color(GFX_YELLOW, GFX_BLACK);
         if (current_dir[0]) {
             print("Isi direktori /"); print(current_dir); print(":\n");
@@ -1433,8 +1451,148 @@ static void shell_execute() {
             print("Daftar file:\n");
         }
         set_color(GFX_WHITE, GFX_BLACK);
-        if (current_dir[0]) fs_list_dir(current_dir, print);
-        else                fs_list(print);
+        if (!long_fmt) {
+            if (current_dir[0]) fs_list_dir(current_dir, print);
+            else                fs_list(print);
+        } else {
+            /* ls -l: tampilkan perms, mtime, ukuran, nama */
+            static char lsbuf[4096];
+            int lsn = fs_list_buf(lsbuf, 4096);
+            if (lsn <= 0) { print("(kosong)\n"); }
+            else {
+                set_color(GFX_LCYAN, GFX_BLACK);
+                print("PERMS    MTIME        SIZE  NAMA\n");
+                print("-------- ------------ ----- --------------------------------\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+                int li = 0;
+                while (lsbuf[li]) {
+                    char fname[64]; int fi = 0;
+                    while (lsbuf[li] && lsbuf[li] != '\n' && fi < 63)
+                        fname[fi++] = lsbuf[li++];
+                    fname[fi] = '\0';
+                    if (lsbuf[li] == '\n') li++;
+                    if (fi == 0) continue;
+                    /* filter direktori sesuai current_dir */
+                    if (current_dir[0]) {
+                        if (!str_starts_with(fname, current_dir)) continue;
+                        /* hanya entri langsung di direktori ini (tidak ada '/' lagi setelah prefix) */
+                        const char *sub = fname + str_len(current_dir);
+                        if (*sub == '/') sub++;
+                        int has_slash = 0; const char *sp = sub;
+                        while (*sp) { if (*sp == '/') { has_slash=1; break; } sp++; }
+                        if (has_slash) continue;
+                    }
+                    MFS4Stat st;
+                    if (mfs4_stat(fname, &st) != 0) continue;
+                    /* Perms: rwx format */
+                    char pstr[10];
+                    pstr[0] = (st.type == MFS4_TYPE_DIR) ? 'd' : '-';
+                    pstr[1] = (st.perms & 0x0004) ? 'r' : '-';
+                    pstr[2] = (st.perms & 0x0002) ? 'w' : '-';
+                    pstr[3] = (st.perms & 0x0001) ? 'x' : '-';
+                    pstr[4] = '-'; pstr[5] = '-'; pstr[6] = '-';
+                    pstr[7] = '-'; pstr[8] = '\0';
+                    set_color((st.type == MFS4_TYPE_DIR) ? GFX_LCYAN : GFX_WHITE, GFX_BLACK);
+                    print(pstr); print(" ");
+                    char nb[12]; itoa(st.mtime, nb); print(nb);
+                    /* pad mtime to 12 chars */
+                    int mlen = 0; while (nb[mlen]) mlen++;
+                    while (mlen++ < 12) print(" ");
+                    print(" ");
+                    /* size right-aligned to 5 */
+                    itoa(st.size, nb);
+                    int slen = 0; while (nb[slen]) slen++;
+                    while (slen++ < 5) print(" ");
+                    print(nb); print("  ");
+                    print(fname); print("\n");
+                }
+                set_color(GFX_WHITE, GFX_BLACK);
+            }
+        }
+    }
+    else if(str_starts_with(input_buffer, "ls ")) {
+        /* ls <dir> — tampilkan isi direktori tertentu */
+        const char *lsdir = input_buffer + 3;
+        while (*lsdir == ' ') lsdir++;
+        set_color(GFX_YELLOW, GFX_BLACK);
+        print("Isi direktori /"); print(lsdir); print(":\n");
+        set_color(GFX_WHITE, GFX_BLACK);
+        fs_list_dir(lsdir, print);
+    }
+    /* ================================================================
+     * Fondasi AZ — df: disk free/usage MFS4
+     * ================================================================ */
+    else if (str_compare(input_buffer, "df")) {
+        int total_files = FS_MAX_FILES;
+        /* hitung file yang terpakai */
+        static char dfbuf[4096];
+        int dfn = fs_list_buf(dfbuf, 4096);
+        int used_files = 0;
+        if (dfn > 0) {
+            int di = 0;
+            while (dfbuf[di]) {
+                char dfname[64]; int dfi = 0;
+                while (dfbuf[di] && dfbuf[di] != '\n' && dfi < 63) dfname[dfi++] = dfbuf[di++];
+                dfname[dfi] = '\0';
+                if (dfbuf[di] == '\n') di++;
+                if (dfi > 0) used_files++;
+            }
+        }
+        int free_files = total_files - used_files;
+        uint32_t used_bytes = (uint32_t)used_files * FS_MAX_DATA;
+        uint32_t total_bytes = (uint32_t)total_files * FS_MAX_DATA;
+        uint32_t free_bytes  = total_bytes - used_bytes;
+        char nb[16];
+        set_color(GFX_YELLOW, GFX_BLACK);
+        print("Filesystem: MFS4 (in-memory)\n");
+        set_color(GFX_WHITE, GFX_BLACK);
+        print("  Total    : "); itoa(total_files, nb); print(nb); print(" slot  = ");
+        itoa(total_bytes / 1024, nb); print(nb); print(" KB\n");
+        print("  Terpakai : "); itoa(used_files, nb); print(nb); print(" slot  = ");
+        itoa(used_bytes / 1024, nb); print(nb); print(" KB\n");
+        set_color(GFX_LGREEN, GFX_BLACK);
+        print("  Bebas    : "); itoa(free_files, nb); print(nb); print(" slot  = ");
+        itoa(free_bytes / 1024, nb); print(nb); print(" KB\n");
+        set_color(GFX_WHITE, GFX_BLACK);
+    }
+    /* ================================================================
+     * Fondasi AZ — du: directory/file size
+     * ================================================================ */
+    else if (str_compare(input_buffer, "du")) {
+        print("Penggunaan: du <file|dir>\n");
+    }
+    else if (str_starts_with(input_buffer, "du ")) {
+        const char *dupath = input_buffer + 3;
+        while (*dupath == ' ') dupath++;
+        /* Hitung total ukuran semua file yang namanya diawali path ini */
+        static char dubuf[4096];
+        int dun = fs_list_buf(dubuf, 4096);
+        uint32_t total_sz = 0;
+        int total_files2 = 0;
+        if (dun > 0) {
+            int di = 0;
+            while (dubuf[di]) {
+                char duname[64]; int dfi = 0;
+                while (dubuf[di] && dubuf[di] != '\n' && dfi < 63) duname[dfi++] = dubuf[di++];
+                duname[dfi] = '\0';
+                if (dubuf[di] == '\n') di++;
+                if (dfi == 0) continue;
+                if (!str_starts_with(duname, dupath)) continue;
+                MFS4Stat dust;
+                if (mfs4_stat(duname, &dust) == 0) {
+                    total_sz += dust.size;
+                    total_files2++;
+                }
+            }
+        }
+        char nb[16];
+        set_color(GFX_LCYAN, GFX_BLACK);
+        print(dupath); print(": ");
+        set_color(GFX_WHITE, GFX_BLACK);
+        itoa(total_files2, nb); print(nb); print(" file, ");
+        itoa(total_sz, nb); print(nb); print(" bytes");
+        if (total_sz >= 1024) { print(" ("); itoa(total_sz/1024, nb); print(nb); print(" KB)"); }
+        print("\n");
     }
     else if(str_compare(input_buffer, "sync")) {
         int n = fs_flush();
@@ -1496,6 +1654,35 @@ static void shell_execute() {
     else if(str_starts_with(input_buffer, "read ")) {
         char pbuf[64];
         const char *name = make_path(input_buffer + 5, pbuf, 64);
+        /* Fondasi AZ — read VARNAME: jika argument hanya identifier (tanpa '/' atau '.'),
+         * baca satu baris dari keyboard dan simpan ke variabel. */
+        const char *rarg = input_buffer + 5;
+        while (*rarg == ' ') rarg++;
+        int is_var = 1;
+        { const char *rp = rarg;
+          while (*rp && *rp != ' ') {
+              if (*rp == '/' || *rp == '.' || *rp == '\\') { is_var = 0; break; }
+              if (!( (*rp>='a'&&*rp<='z') || (*rp>='A'&&*rp<='Z') || (*rp>='0'&&*rp<='9') || *rp=='_' )) { is_var = 0; break; }
+              rp++;
+          }
+        }
+        if (is_var && rarg[0] != '\0') {
+            /* read VARNAME: baca satu baris dari keyboard */
+            char vname2[24]; int vi2 = 0;
+            while (rarg[vi2] && rarg[vi2] != ' ' && vi2 < 23) { vname2[vi2] = rarg[vi2]; vi2++; }
+            vname2[vi2] = '\0';
+            char linebuf[128]; int li2 = 0;
+            char rc2;
+            while (li2 < 127) {
+                rc2 = keyboard_getchar_block();
+                if (rc2 == '\n') break;
+                if (rc2 == '\b') { if (li2 > 0) { li2--; backspace_char(); } continue; }
+                linebuf[li2++] = rc2;
+                print_char(rc2);
+            }
+            linebuf[li2] = '\0'; print("\n");
+            sc_setvar(vname2, linebuf);
+        } else {
         const char *data = fs_read(name);
         if (data) {
             print(data);
@@ -1507,6 +1694,7 @@ static void shell_execute() {
             print(name);
             print("\n");
             set_color(GFX_WHITE, GFX_BLACK);
+        }
         }
     }
     else if (str_starts_with(input_buffer, "del ")) {
@@ -1750,23 +1938,44 @@ static void shell_execute() {
         }
     }
     else if(str_starts_with(input_buffer, "kill ")) {
-        /* parse angka id dari "kill <id>" */
+        /* Format: kill [-N] <id>
+         * -N = nomor sinyal (2=SIGINT, 9=SIGKILL, 15=SIGTERM)
+         * Default: SIGKILL */
         const char *p = input_buffer + 5;
+        int sig = 9; /* SIGKILL default */
+        if (*p == '-') {
+            p++;
+            int sn = 0;
+            while (*p >= '0' && *p <= '9') { sn = sn * 10 + (*p - '0'); p++; }
+            if (sn > 0) sig = sn;
+            while (*p == ' ') p++;
+        }
         int id = 0;
         while (*p >= '0' && *p <= '9') { id = id * 10 + (*p - '0'); p++; }
         if (id == 0) {
             set_color(GFX_LRED, GFX_BLACK);
             print("kill: tidak dapat mematikan shell (id 0)\n");
             set_color(GFX_WHITE, GFX_BLACK);
-        } else if (task_kill(id)) {
-            set_color(GFX_LGREEN, GFX_BLACK);
-            print("kill: proses ");
-            char buf[8]; itoa(id, buf); print(buf);
-            print(" dihentikan\n");
-            set_color(GFX_WHITE, GFX_BLACK);
+        } else if (sig == 9 || sig == 0) {
+            /* SIGKILL: langsung terminate */
+            if (task_kill(id)) {
+                set_color(GFX_LGREEN, GFX_BLACK);
+                print("kill: proses ");
+                char buf[8]; itoa(id, buf); print(buf);
+                print(" dihentikan\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+            } else {
+                set_color(GFX_LRED, GFX_BLACK);
+                print("kill: proses tidak ditemukan atau tidak dapat dimatikan\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+            }
         } else {
-            set_color(GFX_LRED, GFX_BLACK);
-            print("kill: proses tidak ditemukan atau tidak dapat dimatikan\n");
+            /* Kirim sinyal (SIGINT=2, SIGTERM=15, dll) */
+            task_send_signal(id, sig);
+            set_color(GFX_LGREEN, GFX_BLACK);
+            print("kill: sinyal "); char sbuf[8]; itoa(sig, sbuf); print(sbuf);
+            print(" dikirim ke proses "); char idbuf[8]; itoa(id, idbuf); print(idbuf);
+            print("\n");
             set_color(GFX_WHITE, GFX_BLACK);
         }
     }
@@ -1820,6 +2029,48 @@ static void shell_execute() {
             print(" nice="); itoa((uint32_t)(nv < 0 ? (uint32_t)(-nv) : (uint32_t)nv), buf);
             if (nv < 0) { print("-"); } print(buf); print("\n");
             set_color(GFX_WHITE, GFX_BLACK);
+        }
+    }
+    /* ================================================================
+     * Fondasi AZ — nice <nice> <cmd>: jalankan perintah dengan nice value
+     * ================================================================ */
+    else if (str_starts_with(input_buffer, "nice ")) {
+        const char *p = input_buffer + 5;
+        int sign = 1;
+        if (*p == '-') { sign = -1; p++; }
+        else if (*p == '+') p++;
+        int nv = 0;
+        while (*p >= '0' && *p <= '9') { nv = nv * 10 + (*p - '0'); p++; }
+        nv *= sign;
+        while (*p == ' ') p++;
+        if (!*p) {
+            print("nice: gunakan nice [-N] <perintah>\n");
+        } else {
+            /* Jalankan perintah dan set nice setelah spawn */
+            ShCmd nc;
+            shcmd_parse(p, &nc);
+            if (!nc.prog[0]) {
+                set_color(GFX_LRED, GFX_BLACK); print("nice: nama program kosong\n");
+                set_color(GFX_WHITE, GFX_BLACK);
+            } else {
+                int ntid = shcmd_run_nowait(&nc, -1, -1);
+                if (ntid == -2) {
+                    print("nice: program tidak ditemukan: "); print(nc.prog); print("\n");
+                } else if (ntid >= 0) {
+                    task_set_nice(ntid, nv);
+                    char nbuf[8]; itoa((uint32_t)ntid, nbuf);
+                    set_color(GFX_LGREEN, GFX_BLACK);
+                    print("nice: "); print(nc.prog); print(" [tid="); print(nbuf);
+                    print("] nice=");
+                    itoa((uint32_t)(nv < 0 ? (uint32_t)(-nv) : (uint32_t)nv), nbuf);
+                    if (nv < 0) print("-"); print(nbuf); print("\n");
+                    set_color(GFX_WHITE, GFX_BLACK);
+                    keyboard_set_fg_pid(ntid);
+                    task_wait(ntid);
+                    last_exit_code = task_get_exit_code(ntid);
+                    keyboard_set_fg_pid(-1);
+                }
+            }
         }
     }
     else if(str_starts_with(input_buffer, "pipe ")) {
@@ -2286,6 +2537,19 @@ static void shell_execute() {
     }
     else if (str_starts_with(input_buffer, "ext2cat ")) {
         ext2_cat(input_buffer + 8);
+    }
+    /* --- Fondasi AZ: dmesg — tampilkan kernel ring buffer log --- */
+    else if (str_compare(input_buffer, "dmesg")) {
+        char dmbuf[4096];
+        int n = dmesg_read(dmbuf, 4096);
+        if (n > 0) {
+            int i;
+            for (i = 0; i < n; i++) print_char(dmbuf[i]);
+        } else {
+            set_color(GFX_YELLOW, GFX_BLACK);
+            print("[dmesg: buffer kosong]\n");
+            set_color(GFX_WHITE, GFX_BLACK);
+        }
     }
     /* --- Fondasi AS: kdbg — Kernel Debugger via serial --- */
     else if (str_compare(input_buffer, "kdbg")) {

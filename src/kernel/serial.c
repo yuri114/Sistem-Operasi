@@ -62,6 +62,34 @@ void serial_print_hex(unsigned long long v) {
 }
 
 /* ================================================================
+ * Fondasi AZ — dmesg ring buffer
+ * ================================================================ */
+static char  dmesg_buf[DMESG_BUF_SIZE];
+static int   dmesg_head = 0;  /* posisi tulis berikutnya */
+static int   dmesg_len  = 0;  /* jumlah byte valid (maks DMESG_BUF_SIZE-1) */
+
+void dmesg_log(const char *s) {
+    while (*s) {
+        dmesg_buf[dmesg_head] = *s++;
+        dmesg_head = (dmesg_head + 1) % DMESG_BUF_SIZE;
+        if (dmesg_len < DMESG_BUF_SIZE - 1) dmesg_len++;
+    }
+}
+
+int dmesg_read(char *buf, int maxlen) {
+    if (maxlen <= 0) return 0;
+    int to_copy = dmesg_len;
+    if (to_copy >= maxlen) to_copy = maxlen - 1;
+    /* start = head - len (wrapped) */
+    int start = (dmesg_head - dmesg_len + DMESG_BUF_SIZE * 2) % DMESG_BUF_SIZE;
+    int i;
+    for (i = 0; i < to_copy; i++)
+        buf[i] = dmesg_buf[(start + i) % DMESG_BUF_SIZE];
+    buf[to_copy] = '\0';
+    return to_copy;
+}
+
+/* ================================================================
  * Fondasi AS — Kernel Debugger via Serial (COM1)
  * ================================================================ */
 

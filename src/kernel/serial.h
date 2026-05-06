@@ -21,4 +21,16 @@ int  serial_haschar(void);
  * Perintah: help, x <addr> [n], bt, r, q */
 void kdbg_run(void);
 
+/* ================================================================
+ * Fondasi AZ — dmesg: kernel ring buffer log
+ * ================================================================ */
+#define DMESG_BUF_SIZE 4096
+
+/* Tambahkan pesan ke ring buffer dmesg. */
+void dmesg_log(const char *s);
+
+/* Salin isi ring buffer ke buf, max maxlen-1 byte, null-terminated.
+ * Return panjang yang disalin. */
+int  dmesg_read(char *buf, int maxlen);
+
 #endif /* SERIAL_H */

@@ -79,11 +79,25 @@ static void proc_generate(const char *path) {
     }
     /* /proc/cpuinfo */
     else if (path[0]=='c'&&path[1]=='p') {
-        proc_puts("arch: x86_64\ncores: 2\nvendor: Oria OS\n");
+        extern int cpu_count;
+        extern volatile uint32_t smp_ap_started;
+        proc_puts("arch:    x86_64\n");
+        proc_puts("vendor:  Oria OS\n");
+        proc_puts("mode:    Long Mode (64-bit)\n");
+        proc_puts("cores:   "); proc_putn((uint32_t)cpu_count); proc_puts("\n");
+        proc_puts("online:  "); proc_putn((uint32_t)(smp_ap_started + 1)); proc_puts("\n");
+    }
+    /* /proc/dmesg */
+    else if (path[0]=='d'&&path[1]=='m') {
+        extern int dmesg_read(char *buf, int maxlen);
+        char dmbuf[PROC_BUF_SIZE - 1];
+        int n = dmesg_read(dmbuf, PROC_BUF_SIZE - 1);
+        int k;
+        for (k = 0; k < n && proc_rem > 0; k++) { *proc_wp++ = dmbuf[k]; proc_rem--; }
     }
     /* /proc (directory listing) */
     else if (path[0]=='\0' || (path[0]=='.'&&path[1]=='\0')) {
-        proc_puts("ps\nmeminfo\nuptime\ncpuinfo\n");
+        proc_puts("ps\nmeminfo\nuptime\ncpuinfo\ndmesg\n");
     }
     else {
         proc_puts("proc: unknown entry /proc/");
