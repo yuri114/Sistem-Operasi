@@ -1073,6 +1073,14 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         return 0;
     }
 
+    // SYS_TIME(106): kembalikan detik sejak boot (get_ticks() / 1000)
+    if (eax == SYS_TIME) {
+        uint32_t secs = get_ticks() / 1000;
+        if (ebx && is_user_ptr(ebx))
+            *(uint32_t *)(uintptr_t)ebx = secs;
+        return (uint64_t)secs;
+    }
+
     return (uint64_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal
 }
 

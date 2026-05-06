@@ -177,6 +177,21 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
     }
 
     tasks[id].rsp = (uint64_t)stack_top;
+
+    /* F-U2+: alokasi TLS untuk proses user (sama dengan thread, tapi di page_dir sendiri).
+     * Offset 0 = self-pointer (ABI standar), offset 8 = errno per-proses. */
+    {
+        uint64_t tls_va   = 0x800000ULL + (uint64_t)id * 0x1000ULL;
+        uint64_t tls_phys = pmm_alloc_frame();
+        uint8_t *tp = (uint8_t *)(uintptr_t)tls_phys;
+        int zi; for (zi = 0; zi < 4096; zi++) tp[zi] = 0;
+        /* Tulis self-pointer di offset 0 */
+        *(uint64_t *)tp = tls_va;
+        vmm_map_page(page_dir, tls_va, tls_phys, 7); /* u/s, r/w, present */
+        tasks[id].tls_frame = tls_phys;
+        /* IA32_FS_BASE akan di-set oleh task_switch pertama kali task ini jalan */
+    }
+
     vfs_init_task(id);
     return id;
 }
@@ -358,8 +373,8 @@ void task_switch() {
     if (tasks[current_task].page_dir)
         vmm_switch_dir(tasks[current_task].page_dir);
 
-    /* F-U2: jika task berikutnya adalah thread, restore FS MSR ke TLS-nya */
-    if (tasks[current_task].is_thread && tasks[current_task].tls_frame) {
+    /* F-U2: jika task berikutnya punya TLS (thread atau user task), restore FS MSR */
+    if (tasks[current_task].tls_frame) {
         uint64_t tls_va = 0x800000ULL + (uint64_t)current_task * 0x1000ULL;
         uint32_t lo = (uint32_t)tls_va;
         uint32_t hi = (uint32_t)(tls_va >> 32);

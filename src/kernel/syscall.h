@@ -147,6 +147,7 @@
 #define SYS_NET_UNLISTEN  103 // stop listen: ebx=listen_id
 #define SYS_SETITIMER     104 // setitimer: ebx=interval_ms (0=off) → 0
 #define SYS_GFX_FLIP      105 // flip back buffer ke layar → 0
+#define SYS_TIME          106 // time(): kembalikan detik sejak boot → uint32_t
 
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);

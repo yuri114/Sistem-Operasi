@@ -243,6 +243,84 @@ static int glob_match(const char *pat, const char *str) {
     return (*pat == '\0' && *str == '\0');
 }
 
+/* Brace expansion: ganti token {a,b,c} menjadi a b c dalam input_buffer.
+ * Contoh: "echo {x,y,z}.txt" → "echo x.txt y.txt z.txt"
+ * Hanya satu level brace yang didukung (tidak rekursif). */
+static void shell_expand_brace(void) {
+    /* Cari { dalam input */
+    char *lbrace = 0;
+    int i;
+    for (i = 0; input_buffer[i]; i++) {
+        if (input_buffer[i] == '{') { lbrace = &input_buffer[i]; break; }
+    }
+    if (!lbrace) return;
+    /* Pastikan ada koma di dalam (bukan hanya satu item) */
+    char *rbrace = 0;
+    char *scan = lbrace + 1;
+    int has_comma = 0;
+    while (*scan) {
+        if (*scan == ',') has_comma = 1;
+        if (*scan == '}') { rbrace = scan; break; }
+        scan++;
+    }
+    if (!rbrace || !has_comma) return;
+
+    /* Bangun string hasil di result[] */
+    char result[512]; int ri = 0;
+
+    /* Salin bagian sebelum { ke result (cmd + word-prefix) */
+    char *q = input_buffer;
+    while (q < lbrace && ri < 510) result[ri++] = *q++;
+
+    /* Cari word_prefix_start: karakter non-spasi setelah spasi terakhir sebelum { */
+    int wp_start = ri;
+    int k;
+    for (k = ri - 1; k >= 0; k--) {
+        if (result[k] == ' ') { wp_start = k + 1; break; }
+        if (k == 0) wp_start = 0;
+    }
+    /* word_pre = result[wp_start..ri-1], cmd_part = result[0..wp_start-1] */
+    char word_pre[128]; int wpi = 0;
+    for (k = wp_start; k < ri && wpi < 126; k++) word_pre[wpi++] = result[k];
+    word_pre[wpi] = '\0';
+    ri = wp_start; /* reset result ke akhir cmd_part */
+
+    /* suffix: apa yang ada setelah } sampai spasi pertama */
+    char word_suf[64]; int wsi = 0;
+    q = rbrace + 1;
+    while (*q && *q != ' ' && wsi < 62) word_suf[wsi++] = *q++;
+    word_suf[wsi] = '\0';
+    /* tail: sisanya setelah word_suf */
+    char tail[256]; int ti = 0;
+    while (*q && ti < 254) tail[ti++] = *q++;
+    tail[ti] = '\0';
+
+    /* Parse dan emit setiap item */
+    int first = 1;
+    char *tok = lbrace + 1;
+    while (tok <= rbrace) {
+        char item[64]; int ilen = 0;
+        while (*tok && *tok != ',' && *tok != '}' && ilen < 62) item[ilen++] = *tok++;
+        item[ilen] = '\0';
+        if (*tok == ',' || *tok == '}') tok++;
+
+        if (!first && ri < 510) result[ri++] = ' ';
+        first = 0;
+        for (k = 0; word_pre[k] && ri < 510; k++) result[ri++] = word_pre[k];
+        for (k = 0; item[k]     && ri < 510; k++) result[ri++] = item[k];
+        for (k = 0; word_suf[k] && ri < 510; k++) result[ri++] = word_suf[k];
+
+        if (*(tok-1) == '}') break;
+    }
+    /* Append tail */
+    for (k = 0; tail[k] && ri < 510; k++) result[ri++] = tail[k];
+    result[ri] = '\0';
+
+    /* Salin kembali ke input_buffer */
+    for (i = 0; i <= ri && i < 255; i++) input_buffer[i] = result[i];
+    input_buffer[i] = '\0';
+}
+
 /* Glob expansion: ganti token yang mengandung * atau ? dengan daftar file yang cocok */
 static void shell_glob_expand(void) {
     /* Cek apakah input mengandung glob karakter di posisi argument (bukan cmd) */
@@ -323,6 +401,46 @@ static void shell_glob_expand(void) {
 }
 
 static void shell_execute(void);  /* forward decl needed by shell_expand_subshell */
+
+/* ================================================================
+ * Here-doc <<WORD — state untuk interactive mode
+ * Saat user mengetik cmd <<WORD lalu Enter, shell masuk
+ * heredoc_mode dan mengumpulkan baris hingga WORD saja pada baris.
+ * Isi dikumpulkan di heredoc_buf, lalu disimpan ke _heredoc_ dan
+ * cmd diubah dari "cmd <<WORD" → "cmd < _heredoc_".
+ * ================================================================ */
+static int  heredoc_mode   = 0;
+static char heredoc_delim[64];
+static char heredoc_buf[2048];
+static int  heredoc_buflen = 0;
+static char heredoc_cmd[256];   /* command yang memakai heredoc */
+
+/* Cek apakah input_buffer punya <<WORD.
+ * Jika ya, isi heredoc_cmd dengan command tanpa <<WORD,
+ * isi heredoc_delim dengan WORD, return 1. */
+static int shell_heredoc_detect(void) {
+    char *p = input_buffer;
+    char *found = 0;
+    while (*p) {
+        if (p[0] == '<' && p[1] == '<' && p[2] != '<') { found = p; break; }
+        p++;
+    }
+    if (!found) return 0;
+    /* Salin bagian sebelum << ke heredoc_cmd */
+    int ci = 0;
+    char *q = input_buffer;
+    while (q < found && ci < 254) heredoc_cmd[ci++] = *q++;
+    /* trim trailing space dari cmd */
+    while (ci > 0 && heredoc_cmd[ci-1] == ' ') ci--;
+    heredoc_cmd[ci] = '\0';
+    /* Ekstrak delimiter: lewati << lalu baca word */
+    p = found + 2;
+    while (*p == ' ') p++;
+    int di = 0;
+    while (*p && *p != ' ' && *p != '\n' && di < 62) heredoc_delim[di++] = *p++;
+    heredoc_delim[di] = '\0';
+    return (di > 0) ? 1 : 0;
+}
 
 /* Subshell expansion: ganti $(...) dengan output dari command.
  * Implementasi: redirect stdout inner command ke temp file, baca hasilnya. */
@@ -1363,6 +1481,7 @@ static void shell_execute() {
 
     /* Glob expansion: expand * dan ? dalam argument */
     shell_expand_subshell();
+    shell_expand_brace();
     shell_glob_expand();
 
     /* set -x: cetak command sebelum eksekusi */
@@ -4018,6 +4137,54 @@ void shell_process_char(char c){
     if (c=='\n'){                           /* enter ditekan*/
         input_buffer[input_len] = '\0';     /* tutup string */
 
+        /* ---- Here-doc mode: kumpulkan baris sampai delimiter ---- */
+        if (heredoc_mode) {
+            /* Cek apakah baris ini adalah delimiter */
+            int line_len = input_len;
+            int delim_len = 0; while (heredoc_delim[delim_len]) delim_len++;
+            int match = (line_len == delim_len);
+            if (match) {
+                int k; for (k = 0; k < line_len; k++)
+                    if (input_buffer[k] != heredoc_delim[k]) { match = 0; break; }
+            }
+            if (match) {
+                /* Akhir heredoc: tulis ke temp file, susun command */
+                heredoc_buf[heredoc_buflen] = '\0';
+                fs_write("_heredoc_", heredoc_buf);
+                /* Bangun command: "cmd < _heredoc_" */
+                int ci = 0;
+                const char *s = heredoc_cmd;
+                while (*s && ci < 250) input_buffer[ci++] = *s++;
+                const char *redir = " < _heredoc_";
+                s = redir;
+                while (*s && ci < 254) input_buffer[ci++] = *s++;
+                input_buffer[ci] = '\0';
+                input_len = 0;
+                heredoc_mode   = 0;
+                heredoc_buflen = 0;
+                shell_execute();
+                input_len = 0;
+                input_buffer[0] = '\0';
+                set_color(GFX_LGREEN, GFX_BLACK);
+                print("> ");
+                set_color(GFX_WHITE, GFX_BLACK);
+            } else {
+                /* Tambahkan baris ke heredoc_buf */
+                int k;
+                for (k = 0; k < input_len && heredoc_buflen < 2046; k++)
+                    heredoc_buf[heredoc_buflen++] = input_buffer[k];
+                if (heredoc_buflen < 2047) heredoc_buf[heredoc_buflen++] = '\n';
+                input_len = 0;
+                input_buffer[0] = '\0';
+                /* Tampilkan prompt heredoc */
+                set_color(GFX_LCYAN, GFX_BLACK);
+                print("> ");
+                set_color(GFX_WHITE, GFX_BLACK);
+            }
+            return;
+        }
+
+        /* ---- Normal mode ---- */
         // simpan ke history jika bukan kosong
         if (input_len > 0) {
             int i;
@@ -4025,6 +4192,19 @@ void shell_process_char(char c){
             hist_head = (hist_head + 1) % HISTORY_SIZE;
             if (hist_count < HISTORY_SIZE) hist_count++;
             hist_cursor = -1;  /* reset browse position */
+        }
+
+        /* Deteksi <<WORD sebelum eksekusi */
+        if (shell_heredoc_detect()) {
+            heredoc_mode   = 1;
+            heredoc_buflen = 0;
+            heredoc_buf[0] = '\0';
+            input_len = 0;
+            input_buffer[0] = '\0';
+            set_color(GFX_LCYAN, GFX_BLACK);
+            print(heredoc_delim); print("> ");
+            set_color(GFX_WHITE, GFX_BLACK);
+            return;
         }
 
         input_len = 0;

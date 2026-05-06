@@ -58,7 +58,7 @@ MULTITASKING
   [x] Ctrl+C -> SIGINT ke foreground process
   [x] exit code: task_exit(code), SYS_WAITPID kembalikan code
   [x] Nice value per-task (task_set_nice)
-  [ ] Zombie cleanup (child exit, parent tidak wait -> slot leak)
+  [x] Zombie cleanup ? slot langsung dibebaskan (used=0), tidak ada zombie state
   [ ] setuid / setgid
   [ ] Proses group / session (setsid, tcsetpgrp)
   [x] Job control: fg/bg/jobs (tabel job, jobs_add/remove, fg %N wait, bg %N)
@@ -151,7 +151,7 @@ MFS4 (filesystem utama in-memory + disk persistence)
   [x] Disk persistence: inode table di sektor 514+ (mfs4_flush/mfs4_load)
   [x] Rename file (mfs4_rename)
   [x] chmod <file> <hex_perm>
-  [ ] Max file size > 65536 byte
+  [x] Max file size > 65536 byte ? FS_MAX_BIN_DATA=512KB, malloc exact size
   [ ] File locking (flock)
   [ ] Direktori bersarang > 1 level
 
@@ -168,7 +168,7 @@ VFS (Virtual Filesystem)
   [x] /proc/<pid>/status  EName, Pid, State, PPid, Priority
   [x] /proc/<pid>/maps, /proc/<pid>/fd ? proc_generate() extended
   [ ] inotify / file watch API
-  [ ] VFS_MAX_FD > 8
+  [x] VFS_MAX_FD > 8 ? sudah 32 (vfs.h line 12)
 
 Ext2 (disk kedua disk.img)
   [x] Mount ext2 read-only: mount ext2
@@ -251,10 +251,10 @@ Shell features
   [x] ANSI/VT100 output dari program user
   [x] Script: if/else/fi, while/do/done, for/in/do/done
   [x] Script: $1..$9 argumen, komentar #
-  [ ] Here-doc (<<EOF)
+  [x] Here-doc (<<EOF) ? shell_heredoc_detect() + interactive collection mode
   [x] Glob pattern *, ? dalam argument expansion
   [x] Subshell $(...) command substitution ? shell_expand_subshell()
-  [ ] Brace expansion {a,b,c}
+  [x] Brace expansion {a,b,c} ? shell_expand_brace()
 
 
 ================================================================
@@ -286,10 +286,10 @@ Shell features
   [x] tls_get (FS MSR TLS base)
   [x] scanf / sscanf (format: %d %u %x %s %c)
   [x] qsort / bsearch
-  [ ] time() / gettimeofday()
-  [ ] errno global per-thread
+  [x] time() / gettimeofday() ? SYS_TIME(106), get_ticks()/1000
+  [x] errno global per-thread ? via TLS offset 8, TLS dialokasi untuk semua user task
   [x] FILE* stdio (fopen/fread/fwrite/fclose/fseek) + fprintf/fputs/fgets/fgetc/fputc + lseek
-  [ ] Floating point support (printf %f)
+  [x] Floating point support (printf %f) ? vsprintf %f/F handler, 6 decimal
   [ ] Dynamic library loading (.so)
 
 User programs (ELF64, di-embed di kernel image)

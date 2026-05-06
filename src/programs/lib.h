@@ -643,30 +643,38 @@ static inline int scanf(const char *fmt, ...) {
 }
 
 // ============================================================
-// time / gettimeofday — waktu berdasarkan kernel ticks (100 Hz)
+// time / gettimeofday — waktu berdasarkan kernel ticks
 // ============================================================
+#define SYS_TIME  106
+typedef unsigned long time_t;
 
-// Kembalikan detik sejak boot (resolusi 10ms)
-static inline long time(long *t) {
-    long secs = (long)syscall0(SYS_GET_TICKS) / 100;
+// Kembalikan detik sejak boot (via SYS_TIME = get_ticks()/1000, ms-precision)
+static inline time_t time(time_t *t) {
+    time_t secs = (time_t)syscall0(SYS_TIME);
     if (t) *t = secs;
     return secs;
 }
 
-typedef struct { long tv_sec; long tv_usec; } timeval_t;
+typedef struct { time_t tv_sec; long tv_usec; } timeval_t;
 static inline int gettimeofday(timeval_t *tv) {
     if (!tv) return -1;
-    long ticks = (long)syscall0(SYS_GET_TICKS);
-    tv->tv_sec  = ticks / 100;
-    tv->tv_usec = (ticks % 100) * 10000;
+    tv->tv_sec  = (time_t)syscall0(SYS_TIME);
+    tv->tv_usec = 0;
     return 0;
 }
 
 // ============================================================
-// errno — kode error terakhir (per-program, global sederhana)
+// errno — kode error per-thread (via TLS offset 8)
+// TLS layout: [0..7] = self-pointer, [8..11] = errno
 // ============================================================
-static int _errno_val = 0;
-static inline int *__errno_loc(void) { return &_errno_val; }
+static int _errno_fallback = 0;
+static inline int *__errno_loc(void) {
+    /* Baca self-pointer dari FS:0 — valid jika TLS dipetakan */
+    void *tls;
+    __asm__ volatile ("mov %%fs:0, %0" : "=r"(tls));
+    if (!tls) return &_errno_fallback;
+    return (int *)((char *)tls + 8);
+}
 #define errno (*__errno_loc())
 
 // ============================================================
@@ -1419,8 +1427,22 @@ static inline void gfx_flip(void) {
     syscall0(SYS_GFX_FLIP);
 }
 
+/* ============================================================
+ * Syscall SYS_TIME (106) — alias get_ticks() / 1000 (ms precision)
+ * ============================================================ */
+/* SYS_TIME already defined above; time() and gettimeofday() already defined above */
 
-// Blok hingga pengguna menutup atau klik OK
+typedef struct { time_t tv_sec; long tv_usec; } struct_timeval;
+
+static inline int gettimeofday_ext(struct_timeval *tv, void *tz) {
+    (void)tz;
+    if (!tv) return -1;
+    tv->tv_sec  = (time_t)syscall0(SYS_TIME);
+    tv->tv_usec = 0;
+    return 0;
+}
+
+
 static inline void win_msgbox(const char *title, const char *msg) {
     int w = 300, h = 90;
     int x = (640 - w) / 2;
