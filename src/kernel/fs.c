@@ -330,12 +330,15 @@ static void fs_memcpy(uint8_t *dst, const uint8_t *src, uint32_t n) {
 
 static int fs_write_bin_internal(const char *name, const uint8_t *data,
                                  uint32_t size, uint8_t is_tmpfs) {
-    if (size > FS_MAX_DATA) return 0;
+    if (size > FS_MAX_BIN_DATA) return 0;
     uint32_t tick = timer_get_ticks();
     int i;
     for (i = 0; i < FS_MAX_FILES; i++) {
         if (files[i].used && !(files[i].perms & FS_PERM_DIR) && fs_strcmp(files[i].name, name)) {
-            if (!fs_ensure_data(i)) return 0;
+            /* Realokasi buffer jika ukuran berbeda */
+            if (files[i].data) { free(files[i].data); files[i].data = 0; }
+            files[i].data = (uint8_t*)malloc(size);
+            if (!files[i].data) return 0;
             fs_memcpy(files[i].data, data, size);
             files[i].size  = size;
             files[i].mtime = tick;
@@ -348,7 +351,8 @@ static int fs_write_bin_internal(const char *name, const uint8_t *data,
     for (i = 0; i < FS_MAX_FILES; i++) {
         if (!files[i].used) {
             fs_strcpy(files[i].name, name, FS_MAX_NAME);
-            if (!fs_ensure_data(i)) return 0;
+            files[i].data = (uint8_t*)malloc(size);
+            if (!files[i].data) return 0;
             fs_memcpy(files[i].data, data, size);
             files[i].size  = size;
             files[i].used  = 1;

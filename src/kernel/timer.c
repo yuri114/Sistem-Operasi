@@ -21,6 +21,7 @@ static inline void outb(uint16_t port, uint8_t value) {
 void timer_handler() {
     tick++;
     task_check_sleepers();
+    task_itimer_tick();  /* Ekstensi B: SIGALRM delivery */
     /* F-X1/X3: TCP retransmit + keepalive timer setiap 10 ms */
     if (tick % 10 == 0)
         net_tcp_tick();

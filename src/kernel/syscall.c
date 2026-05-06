@@ -18,6 +18,7 @@
 #include "shm.h"
 #include "vfs.h"
 #include "mq.h"
+#include "net.h"
 
 extern void print(const char *str); // dari kernel.c
 extern void clear_screen();         // dari kernel.c
@@ -1024,6 +1025,52 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         int mlen = (int)(unsigned int)edx;
         if (mlen <= 0 || mlen > 512) mlen = 512;
         return (uint64_t)(unsigned int)clip_paste((char *)(uintptr_t)ebx, mlen);
+    }
+
+    // ---------------------------------------------------------------
+    // Ekstensi B — syscall baru 100-105
+    // ---------------------------------------------------------------
+
+    // SYS_LSEEK(100): pindah posisi fd: ebx=fd, edx=offset (int32) → new offset / -1
+    if (eax == SYS_LSEEK) {
+        int fd     = (int)(unsigned int)ebx;
+        int offset = (int)edx;
+        int tid = task_get_current();
+        int r = vfs_seek(tid, fd, offset);
+        return (r == 0) ? (uint64_t)(uint32_t)offset : (uint64_t)-1;
+    }
+
+    // SYS_NET_LISTEN(101): mulai listen TCP: ebx=port → listen_id / -1
+    if (eax == SYS_NET_LISTEN) {
+        uint16_t port = (uint16_t)(ebx & 0xFFFF);
+        return (uint64_t)(int)net_tcp_listen(port);
+    }
+
+    // SYS_NET_ACCEPT(102): terima koneksi: ebx=listen_id, edx=timeout_ms → conn_id / -1
+    if (eax == SYS_NET_ACCEPT) {
+        int listen_id   = (int)(unsigned int)ebx;
+        uint32_t tmo_ms = (uint32_t)edx;
+        return (uint64_t)(int)net_tcp_accept(listen_id, tmo_ms);
+    }
+
+    // SYS_NET_UNLISTEN(103): berhenti listen: ebx=listen_id
+    if (eax == SYS_NET_UNLISTEN) {
+        net_tcp_unlisten((int)(unsigned int)ebx);
+        return 0;
+    }
+
+    // SYS_SETITIMER(104): set interval timer: ebx=interval_ms (0=off)
+    if (eax == SYS_SETITIMER) {
+        int tid = task_get_current();
+        uint32_t interval = (uint32_t)ebx;
+        task_set_itimer(tid, interval);
+        return 0;
+    }
+
+    // SYS_GFX_FLIP(105): flush back buffer ke hardware framebuffer
+    if (eax == SYS_GFX_FLIP) {
+        gfx_flip();
+        return 0;
     }
 
     return (uint64_t)-1; //kembalikan -1 untuk menandakan syscall tidak dikenal

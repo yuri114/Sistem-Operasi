@@ -17,7 +17,8 @@
 
 #define FS_MAX_FILES 64
 #define FS_MAX_NAME  32
-#define FS_MAX_DATA  65536          /* 128 sektor × 512 bytes = 64KB per file */
+#define FS_MAX_DATA  65536          /* 128 sektor × 512 bytes = 64KB per file (teks) */
+#define FS_MAX_BIN_DATA 524288      /* 512KB — batas ukuran file biner (ELF, dll.) */
 #define FS_DATA_SECS (FS_MAX_DATA / 512)   /* 128 sektor per file */
 
 /* Bit permission (field perms) */

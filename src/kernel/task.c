@@ -81,6 +81,8 @@ int task_create(void (*entry)()) {
     tasks[id].waiter    = -1;
     tasks[id].heap_end  = 0;  /* kernel task: tidak punya user heap */
     tasks[id].fpu_valid = 0;
+    tasks[id].itimer_interval  = 0;
+    tasks[id].itimer_remaining = 0;
     /* Tahap M: load balance — kernel task di-assign langsung ke AP jika ada */
     tasks[id].cpu_id    = has_ap ? (int8_t)1 : (int8_t)-1;
     tasks[id].is_user   = 0;   /* ring-0 kernel task */
@@ -129,6 +131,8 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
     tasks[id].heap_end  = 0x400000ULL;
     tasks[id].is_user   = 1;
     tasks[id].fpu_valid = 0;
+    tasks[id].itimer_interval  = 0;
+    tasks[id].itimer_remaining = 0;
     tasks[id].is_thread = 0;
     tasks[id].parent_tid = -1;
     str_copy_n(tasks[id].name, name ? name : "?", 32);
@@ -214,6 +218,8 @@ int task_create_thread(uint64_t entry, uint64_t arg, int parent_tid) {
     tasks[id].is_thread  = 1;
     tasks[id].parent_tid = parent_tid;
     tasks[id].fpu_valid  = 0;
+    tasks[id].itimer_interval  = 0;
+    tasks[id].itimer_remaining = 0;
     str_copy_n(tasks[id].name, "thread", 32);
 
     /* F-Q3: Demand paging untuk thread stack.
@@ -795,4 +801,28 @@ void task_yield() {
 int task_get_status(int id) {
     if (id < 0 || id >= MAX_TASKS) return -1;
     return tasks[id].status;
+}
+
+/* Ekstensi B: interval timer — dipanggil dari timer_handler setiap 1ms. */
+void task_itimer_tick(void) {
+    int i;
+    for (i = 0; i < MAX_TASKS; i++) {
+        if (!tasks[i].used || !tasks[i].is_user) continue;
+        if (tasks[i].itimer_interval == 0) continue;
+        if (tasks[i].itimer_remaining > 0) {
+            tasks[i].itimer_remaining--;
+            if (tasks[i].itimer_remaining == 0) {
+                /* kirim SIGALRM dan reset */
+                task_send_signal(i, SIGALRM);
+                tasks[i].itimer_remaining = tasks[i].itimer_interval;
+            }
+        }
+    }
+}
+
+/* Set/clear interval timer untuk task tid. */
+void task_set_itimer(int tid, uint32_t interval_ms) {
+    if (tid < 0 || tid >= MAX_TASKS || !tasks[tid].used) return;
+    tasks[tid].itimer_interval  = interval_ms;
+    tasks[tid].itimer_remaining = interval_ms;
 }

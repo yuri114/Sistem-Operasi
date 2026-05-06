@@ -41,12 +41,16 @@ typedef struct {
     /* x87/SSE state: 512 byte, harus 16-byte aligned (FXSAVE/FXRSTOR) */
     uint8_t   fpu_state[512] __attribute__((aligned(16)));
     uint8_t   fpu_valid;      /* 1 jika fpu_state sudah diisi (pernah di-switch) */
+    /* Ekstensi B — per-task interval timer */
+    uint32_t  itimer_interval;   /* interval dalam ms (0 = timer dinonaktifkan) */
+    uint32_t  itimer_remaining;  /* sisa ms hingga SIGALRM berikutnya */
 } Task;
 
 /* F-T: konstanta sinyal standar */
 #define SIGINT   2   /* Ctrl+C — default terminasi */
 #define SIGKILL  9   /* tidak bisa di-catch; terminasi paksa */
 #define SIGTERM  15  /* sinyal terminasi lunak */
+#define SIGALRM  14  /* interval timer expired */
 
 void task_init();
 int  task_create(void (*entry)());
@@ -56,6 +60,8 @@ int  task_create_thread(uint64_t entry, uint64_t arg, int parent_tid);
 void task_set_name(int id, const char *name); /* ubah nama task */
 void task_switch();           /* BSP (CPU 0) scheduler — dipanggil dari irq0   */
 void task_switch_ap(int cpu_idx); /* AP scheduler — dipanggil dari lapic_timer_isr */
+void task_itimer_tick(void);  /* dipanggil dari timer_handler setiap ms — SIGALRM delivery */
+void task_set_itimer(int tid, uint32_t interval_ms); /* set/clear interval timer */
 void task_set_has_ap(int v);       /* dipanggil smp_init setelah AP online */
 void task_set_main();
 void task_exit();

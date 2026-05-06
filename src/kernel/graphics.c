@@ -1,6 +1,7 @@
 /* graphics.c — Primitif grafis 32bpp untuk VBE Linear Framebuffer */
 #include "graphics.h"
 #include "font8x8.h"
+#include "memory.h"
 #include <stdint.h>
 
 /* -------------------------------------------------------------------
@@ -10,7 +11,13 @@
 /* Alamat fisik LFB — diperbarui oleh graphics_set_fb() */
 uint32_t gfx_lfb_addr = 0xE0000000U;
 
-/* Pointer tulis langsung ke framebuffer 32bpp */
+/* Back buffer (software) — semua drawing ke sini; gfx_flip() mengirim ke hw */
+static uint32_t *back_buf = 0;
+
+/* Pointer ke hardware framebuffer (diset oleh graphics_set_fb) */
+static volatile uint32_t *hw_fb = 0;
+
+/* Pointer tulis: selalu menunjuk ke back_buf (atau hw_fb jika back_buf gagal alokasi) */
 static volatile uint32_t *fb = (volatile uint32_t *)0xE0000000U;
 
 /* -------------------------------------------------------------------
@@ -20,7 +27,20 @@ static volatile uint32_t *fb = (volatile uint32_t *)0xE0000000U;
 /* Atur alamat LFB baru (hasil PCI scan vbe_find_lfb). */
 void graphics_set_fb(uint32_t addr) {
     gfx_lfb_addr = addr;
-    fb           = (volatile uint32_t *)addr;
+    hw_fb        = (volatile uint32_t *)addr;
+    /* Alokasi back buffer dari kernel heap; fallback ke hardware direct jika gagal */
+    if (!back_buf) {
+        back_buf = (uint32_t *)malloc((uint32_t)(SCREEN_W * SCREEN_H * 4));
+    }
+    fb = back_buf ? (volatile uint32_t *)back_buf : hw_fb;
+}
+
+/* Salin back buffer ke hardware framebuffer (flip / present). */
+void gfx_flip(void) {
+    if (!hw_fb || !back_buf) return;
+    uint32_t n = SCREEN_W * SCREEN_H;
+    uint32_t i;
+    for (i = 0; i < n; i++) hw_fb[i] = back_buf[i];
 }
 
 /* Bersihkan layar ke warna hitam. */

@@ -12,6 +12,10 @@
 
 extern void print(const char *s);
 
+/* Tabel fd global: fd_table[task_id][fd_index] — dideklarasikan di sini supaya
+   proc_generate() dapat menggunakannya sebelum vfs_init(). */
+static VfsFd fd_table[MAX_TASKS][VFS_MAX_FD];
+
 /* ------------------------------------------------------------------ */
 /* Fondasi AH — /proc virtual filesystem generator                     */
 /* ------------------------------------------------------------------ */
@@ -105,20 +109,21 @@ static void proc_generate(const char *path) {
             proc_putn((uint32_t)i); proc_puts("\n");
         }
     }
-    /* /proc/<pid>/status  or  /proc/<pid> */
+    /* /proc/<pid>/status  or  /proc/<pid>/maps  or  /proc/<pid>/fd  or  /proc/<pid> */
     else if (path[0] >= '0' && path[0] <= '9') {
         /* parse PID */
         int pid = 0;
         const char *p = path;
         while (*p >= '0' && *p <= '9') { pid = pid * 10 + (*p - '0'); p++; }
-        /* skip optional '/status' */
+        /* skip optional '/' */
         if (*p == '/') p++;
-        /* accept "status" or empty suffix */
+        /* determine sub-path: empty/"status"/"maps"/"fd" */
         if (!task_is_used(pid)) {
             proc_puts("proc: PID tidak ada: ");
             proc_putn((uint32_t)pid);
             proc_puts("\n");
-        } else {
+        } else if (*p == '\0' || (p[0]=='s'&&p[1]=='t')) {
+            /* status */
             const char *st_name;
             int st = task_get_status(pid);
             if (pid == task_get_current()) st_name = "R (running)";
@@ -133,6 +138,40 @@ static void proc_generate(const char *path) {
             proc_puts("State:\t"); proc_puts(st_name); proc_puts("\n");
             proc_puts("PPid:\t"); proc_putn((uint32_t)task_get_parent(pid)); proc_puts("\n");
             proc_puts("Priority:\t"); proc_putn((uint32_t)task_get_priority(pid)); proc_puts("\n");
+        } else if (p[0]=='m'&&p[1]=='a') {
+            /* maps: tampilkan peta memori proses */
+            uint64_t heap = task_get_heap_end(pid);
+            proc_puts("address            perm  region\n");
+            proc_puts("0000000000300000   r-xp  [text]\n");
+            if (heap > 0x400000ULL) {
+                proc_puts("0000000000400000   rw-p  [heap] size=");
+                proc_putn((uint32_t)(heap - 0x400000ULL));
+                proc_puts("\n");
+            }
+            proc_puts("00000000005fe000   rw-p  [stack]\n");
+        } else if (p[0]=='f'&&p[1]=='d') {
+            /* fd: list open file descriptors */
+            int j;
+            for (j = 0; j < VFS_MAX_FD; j++) {
+                VfsFd *f = &fd_table[pid][j];
+                if (!f->used) continue;
+                proc_putn((uint32_t)j);
+                proc_puts(": ");
+                if      (f->type == VFS_TYPE_STDIN)  proc_puts("stdin");
+                else if (f->type == VFS_TYPE_STDOUT) proc_puts("stdout");
+                else if (f->type == VFS_TYPE_FILE)   { proc_puts("file:"); proc_puts(f->name); }
+                else if (f->type == VFS_TYPE_PIPE)   proc_puts("pipe");
+                else if (f->type == VFS_TYPE_NET)    proc_puts("socket");
+                else if (f->type == VFS_TYPE_TTY)    proc_puts("tty");
+                else if (f->type == VFS_TYPE_PROC)   proc_puts("proc");
+                else if (f->type == VFS_TYPE_DEV)    proc_puts("dev");
+                else                                  proc_puts("?");
+                proc_puts("\n");
+            }
+        } else {
+            proc_puts("proc: sub-path tidak dikenal: ");
+            proc_puts(p);
+            proc_puts("\n");
         }
     }
     else {
@@ -146,8 +185,7 @@ static void proc_generate(const char *path) {
 
 /* ------------------------------------------------------------------ */
 
-/* Tabel fd global: fd_table[task_id][fd_index] */
-static VfsFd fd_table[MAX_TASKS][VFS_MAX_FD];
+/* fd_table defined earlier in file */
 
 /* ------------------------------------------------------------------ */
 void vfs_init(void)

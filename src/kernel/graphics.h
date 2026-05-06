@@ -50,4 +50,7 @@ void draw_string_4x8(int x, int y, const char *s, uint32_t fg, uint32_t bg);
 void draw_char_gfx16(int x, int y, char c, uint32_t fg, uint32_t bg);
 void draw_string_gfx16(int x, int y, const char *s, uint32_t fg, uint32_t bg);
 
+/* Ekstensi B — Double buffering */
+void gfx_flip(void);  /* salin back buffer ke framebuffer hardware */
+
 #endif /* GRAPHICS_H */

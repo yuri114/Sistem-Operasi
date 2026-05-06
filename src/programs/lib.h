@@ -1188,6 +1188,25 @@ static inline int vsprintf(char *buf, const char *fmt, va_list ap) {
             uv = lng ? va_arg(ap, unsigned long) : (unsigned long)va_arg(ap, unsigned int);
         } else if (sp == 'p') {
             uv = (unsigned long)va_arg(ap, void *); sp = 'x';
+        } else if (sp == 'f' || sp == 'F') {
+            /* %f — floating point, 6 decimal places */
+            double dv = va_arg(ap, double);
+            if (dv < 0.0) { buf[len++] = '-'; dv = -dv; }
+            unsigned long iv2 = (unsigned long)dv;
+            double frac2 = dv - (double)iv2;
+            char tmp2[24]; int ti2 = 0;
+            if (iv2 == 0) tmp2[ti2++] = '0';
+            else { unsigned long t2 = iv2; while (t2) { tmp2[ti2++] = '0' + (int)(t2 % 10); t2 /= 10; } }
+            { int k; for (k = ti2 - 1; k >= 0; k--) buf[len++] = tmp2[k]; }
+            buf[len++] = '.';
+            int j2;
+            for (j2 = 0; j2 < 6; j2++) {
+                frac2 *= 10.0;
+                int d2 = (int)frac2;
+                buf[len++] = '0' + d2;
+                frac2 -= (double)d2;
+            }
+            continue;
         } else {
             buf[len++] = sp; continue;
         }
@@ -1226,7 +1245,181 @@ static inline void printf(const char *fmt, ...) {
     print(buf);
 }
 
-// Tampilkan kotak pesan modal dengan pesan dan tombol OK
+/* ============================================================
+ * FILE* — stdio kompatibel sederhana
+ * ============================================================ */
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+#define EOF      (-1)
+
+/* Syscall baru */
+#ifndef SYS_LSEEK
+#define SYS_LSEEK        100
+#define SYS_NET_LISTEN   101
+#define SYS_NET_ACCEPT   102
+#define SYS_NET_UNLISTEN 103
+#define SYS_SETITIMER    104
+#define SYS_GFX_FLIP     105
+#endif
+
+static inline int lseek(int fd, int offset, int whence) {
+    /* Kernel hanya mendukung SEEK_SET per sekarang; whence diabaikan */
+    (void)whence;
+    return (int)syscall2(SYS_LSEEK, (long)fd, (long)offset);
+}
+
+typedef struct {
+    int  fd;        /* file descriptor dari vfs */
+    int  eof;       /* flag EOF */
+    int  err;       /* flag error */
+    int  ungot;     /* ungetc buffer: -1 = kosong */
+} FILE;
+
+/* stdin / stdout / stderr global (didefinisi sekali per TU menggunakan macro guard) */
+#ifndef _LIB_FILE_GLOBALS
+#define _LIB_FILE_GLOBALS
+static FILE _lib_stdin  = {0, 0, 0, -1};
+static FILE _lib_stdout = {1, 0, 0, -1};
+static FILE _lib_stderr = {2, 0, 0, -1};
+#define stdin  (&_lib_stdin)
+#define stdout (&_lib_stdout)
+#define stderr (&_lib_stderr)
+#endif
+
+static inline FILE *fopen(const char *path, const char *mode) {
+    int flags = VFS_O_RDONLY;
+    if (mode[0] == 'r' && mode[1] == '+') flags = VFS_O_RDWR;
+    else if (mode[0] == 'r') flags = VFS_O_RDONLY;
+    else if (mode[0] == 'w') flags = VFS_O_WRONLY | VFS_O_CREATE;
+    else if (mode[0] == 'a') flags = VFS_O_WRONLY | VFS_O_CREATE;
+    int fd = (int)syscall2(SYS_OPEN, (long)path, (long)flags);
+    if (fd < 0) return 0;
+    FILE *f = (FILE *)malloc(sizeof(FILE));
+    if (!f) { sys_close_fd(fd); return 0; }
+    f->fd   = fd;
+    f->eof  = 0;
+    f->err  = 0;
+    f->ungot = -1;
+    return f;
+}
+
+static inline int fclose(FILE *f) {
+    if (!f || f->fd < 3) return EOF;
+    int r = sys_close_fd(f->fd);
+    free(f);
+    return r;
+}
+
+static inline int fread(void *ptr, int size, int nmemb, FILE *f) {
+    if (!f || f->eof || f->err) return 0;
+    int total = size * nmemb;
+    int got = sys_read_fd(f->fd, (char *)ptr, total);
+    if (got <= 0) { f->eof = 1; return 0; }
+    return got / (size ? size : 1);
+}
+
+static inline int fwrite(const void *ptr, int size, int nmemb, FILE *f) {
+    if (!f || f->err) return 0;
+    int total = size * nmemb;
+    int w = sys_write_fd(f->fd, (const char *)ptr, total);
+    if (w < 0) { f->err = 1; return 0; }
+    return w / (size ? size : 1);
+}
+
+static inline int fgetc(FILE *f) {
+    if (!f || f->eof) return EOF;
+    if (f->ungot != -1) { int c = f->ungot; f->ungot = -1; return c; }
+    unsigned char c;
+    int r = sys_read_fd(f->fd, (char *)&c, 1);
+    if (r <= 0) { f->eof = 1; return EOF; }
+    return (int)c;
+}
+
+static inline int fputc(int c, FILE *f) {
+    if (!f || f->err) return EOF;
+    unsigned char ch = (unsigned char)c;
+    int r = sys_write_fd(f->fd, (const char *)&ch, 1);
+    if (r < 0) { f->err = 1; return EOF; }
+    return c;
+}
+
+static inline char *fgets(char *s, int n, FILE *f) {
+    if (!s || n <= 0 || !f || f->eof) return 0;
+    int i = 0;
+    while (i < n - 1) {
+        int c = fgetc(f);
+        if (c == EOF) break;
+        s[i++] = (char)c;
+        if (c == '\n') break;
+    }
+    if (i == 0) return 0;
+    s[i] = '\0';
+    return s;
+}
+
+static inline int fputs(const char *s, FILE *f) {
+    if (!s || !f) return EOF;
+    int len = 0; while (s[len]) len++;
+    return sys_write_fd(f->fd, s, len);
+}
+
+static inline int fprintf(FILE *f, const char *fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsprintf(buf, fmt, ap);
+    va_end(ap);
+    if (n > 0) sys_write_fd(f->fd, buf, n);
+    return n;
+}
+
+static inline int fflush(FILE *f) {
+    (void)f;
+    return 0; /* no buffering — no-op */
+}
+
+static inline int feof(FILE *f)   { return f ? f->eof : 1; }
+static inline int ferror(FILE *f) { return f ? f->err : 1; }
+static inline void clearerr(FILE *f) { if (f) { f->eof = 0; f->err = 0; } }
+
+static inline int fseek(FILE *f, int offset, int whence) {
+    if (!f) return -1;
+    int r = lseek(f->fd, offset, whence);
+    if (r < 0) { f->err = 1; return -1; }
+    f->eof = 0;
+    return 0;
+}
+
+static inline int ftell(FILE *f) {
+    if (!f) return -1;
+    return lseek(f->fd, 0, SEEK_CUR);
+}
+
+static inline void rewind(FILE *f) {
+    if (f) { lseek(f->fd, 0, SEEK_SET); f->eof = 0; f->err = 0; }
+}
+
+/* ============================================================
+ * Syscall wrappers baru (100–105)
+ * ============================================================ */
+static inline int net_tcp_listen(int port) {
+    return (int)syscall1(SYS_NET_LISTEN, (long)port);
+}
+static inline int net_tcp_accept(int listen_id, unsigned int timeout_ms) {
+    return (int)syscall2(SYS_NET_ACCEPT, (long)listen_id, (long)timeout_ms);
+}
+static inline void net_tcp_unlisten(int listen_id) {
+    syscall1(SYS_NET_UNLISTEN, (long)listen_id);
+}
+static inline int setitimer(int interval_ms) {
+    return (int)syscall1(SYS_SETITIMER, (long)interval_ms);
+}
+static inline void gfx_flip(void) {
+    syscall0(SYS_GFX_FLIP);
+}
+
+
 // Blok hingga pengguna menutup atau klik OK
 static inline void win_msgbox(const char *title, const char *msg) {
     int w = 300, h = 90;

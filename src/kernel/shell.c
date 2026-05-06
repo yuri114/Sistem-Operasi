@@ -322,6 +322,91 @@ static void shell_glob_expand(void) {
     input_buffer[ii2] = '\0';
 }
 
+static void shell_execute(void);  /* forward decl needed by shell_expand_subshell */
+
+/* Subshell expansion: ganti $(...) dengan output dari command.
+ * Implementasi: redirect stdout inner command ke temp file, baca hasilnya. */
+static void shell_expand_subshell(void) {
+    /* Cek apakah ada $( di input */
+    int found = 0;
+    int ii = 0;
+    while (input_buffer[ii]) {
+        if (input_buffer[ii] == '$' && input_buffer[ii+1] == '(') { found = 1; break; }
+        ii++;
+    }
+    if (!found) return;
+
+    static char sub_out[512];
+    int oi = 0;
+    int i = 0;
+
+    while (input_buffer[i] && oi < 510) {
+        if (input_buffer[i] == '$' && input_buffer[i+1] == '(') {
+            /* Ekstrak inner command */
+            i += 2; /* lewati $( */
+            char inner[256]; int ci = 0;
+            int depth = 1;
+            while (input_buffer[i] && ci < 254) {
+                if (input_buffer[i] == '(') depth++;
+                else if (input_buffer[i] == ')') {
+                    depth--;
+                    if (depth == 0) { i++; break; }
+                }
+                inner[ci++] = input_buffer[i++];
+            }
+            inner[ci] = '\0';
+
+            /* Jalankan sebagai: inner > _csub_ */
+            static char sub_cmd[300];
+            int sci = 0;
+            const char *ic = inner;
+            while (*ic && sci < 290) sub_cmd[sci++] = *ic++;
+            /* append " > _csub_" */
+            const char *redir = " > _csub_";
+            const char *rp = redir;
+            while (*rp && sci < 299) sub_cmd[sci++] = *rp++;
+            sub_cmd[sci] = '\0';
+
+            /* backup dan jalankan sub-command */
+            char saved_buf[256];
+            int si2;
+            for (si2 = 0; si2 < 256; si2++) saved_buf[si2] = input_buffer[si2];
+            int si3;
+            for (si3 = 0; si3 < 256 && sub_cmd[si3]; si3++) input_buffer[si3] = sub_cmd[si3];
+            input_buffer[si3] = '\0';
+            shell_execute();
+            /* restore */
+            for (si2 = 0; si2 < 256; si2++) input_buffer[si2] = saved_buf[si2];
+
+            /* Baca temp file */
+            const char *csub_str = fs_read("_csub_");
+            if (csub_str && csub_str[0]) {
+                static char csub_buf[256];
+                int nr = 0;
+                while (csub_str[nr] && nr < 255) { csub_buf[nr] = csub_str[nr]; nr++; }
+                csub_buf[nr] = '\0';
+                /* trim trailing whitespace/newlines */
+                int tl = nr - 1;
+                while (tl >= 0 && (csub_buf[tl] == '\n' || csub_buf[tl] == '\r' ||
+                                   csub_buf[tl] == ' ')) { csub_buf[tl--] = '\0'; }
+                /* append ke output */
+                const char *cp = csub_buf;
+                while (*cp && oi < 510) sub_out[oi++] = *cp++;
+            }
+            /* hapus temp file */
+            fs_delete("_csub_");
+        } else {
+            sub_out[oi++] = input_buffer[i++];
+        }
+    }
+    sub_out[oi] = '\0';
+
+    /* Salin kembali ke input_buffer */
+    int k2;
+    for (k2 = 0; k2 <= oi && k2 < 255; k2++) input_buffer[k2] = sub_out[k2];
+    input_buffer[k2] = '\0';
+}
+
 /* F1 — Ekspansi $VAR dalam input_buffer in-place */
 static void shell_expand_vars(void) {
     char tmp[256];
@@ -794,7 +879,7 @@ static void ed_process_char(char c) {
  * Fondasi AC — Shell Scripting Engine
  * Mendukung: #komentar, VAR=value, if/then/else/fi, for/do/done
  * ================================================================ */
-static void shell_execute(void);  /* forward declaration */
+/* shell_execute() forward declaration moved earlier in file */
 #define SC_MAX_LINES   128
 #define SC_LINE_LEN    200
 static char  sc_lines[SC_MAX_LINES][SC_LINE_LEN];
@@ -1277,6 +1362,7 @@ static void shell_execute() {
     }
 
     /* Glob expansion: expand * dan ? dalam argument */
+    shell_expand_subshell();
     shell_glob_expand();
 
     /* set -x: cetak command sebelum eksekusi */

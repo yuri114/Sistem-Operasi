@@ -140,6 +140,14 @@
 #define SYS_MMAP_FILE     98  // mmap file: ebx=fd, edx=n_pages → VA awal, 0=gagal
 #define SYS_MUNMAP_FILE   99  // munmap file: ebx=va, edx=n_pages → 0
 
+/* Ekstensi B — fitur baru */
+#define SYS_LSEEK         100 // lseek: ebx=fd, edx=offset (signed 32-bit) → new offset / -1
+#define SYS_NET_LISTEN    101 // tcp listen: ebx=port → return listen_id / -1
+#define SYS_NET_ACCEPT    102 // tcp accept: ebx=listen_id, edx=timeout_ms → conn_id / -1
+#define SYS_NET_UNLISTEN  103 // stop listen: ebx=listen_id
+#define SYS_SETITIMER     104 // setitimer: ebx=interval_ms (0=off) → 0
+#define SYS_GFX_FLIP      105 // flip back buffer ke layar → 0
+
 void syscall_init();
 uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx);
 

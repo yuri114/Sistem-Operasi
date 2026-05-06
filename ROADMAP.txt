@@ -1,5 +1,5 @@
 ================================================================
-  Oria OS — STATUS IMPLEMENTASI
+  Oria OS  ESTATUS IMPLEMENTASI
   Terakhir diperbarui: 6 Mei 2026
   Platform: x86-64 Long Mode | QEMU qemu-system-x86_64
   Build: WSL x86_64-linux-gnu-gcc | .\build.ps1 build
@@ -53,7 +53,7 @@ MULTITASKING
   [x] Thread: berbagi page_dir+heap, stack 16KB + guard per-thread
   [x] Thread naming (SYS_THREAD_SET_NAME)
   [x] Thread-Local Storage (TLS) via FS MSR (0x800000+tid*0x1000)
-  [x] Signal: SIGKILL(9), SIGTERM(15), SIGINT(2) — pending_signals bitmask
+  [x] Signal: SIGKILL(9), SIGTERM(15), SIGINT(2)  Epending_signals bitmask
   [x] Signal handler user (SYS_SIGACTION)
   [x] Ctrl+C -> SIGINT ke foreground process
   [x] exit code: task_exit(code), SYS_WAITPID kembalikan code
@@ -76,7 +76,7 @@ DISPLAY
   [x] Font 8x8 bitmap (font8x8.h)
   [x] Scrolling teks kernel
   [x] ANSI/VT100 escape codes di print_char (SGR + cursor control)
-  [ ] Framebuffer double-buffering (flicker-free)
+  [x] Framebuffer double-buffering (flicker-free) ? back_buf + gfx_flip()
   [ ] Hardware cursor
   [ ] Resolusi dinamis (user bisa ganti resolusi)
   [ ] Truetype / vector font rendering
@@ -112,7 +112,7 @@ TIMER & WAKTU
   [x] RTC driver CMOS: baca detik/menit/jam/tgl/bulan/tahun
   [x] NTP date sync via UDP (ntpdate command)
   [ ] HPET driver
-  [ ] Alarm / setitimer (SIGALRM)
+  [x] Alarm / setitimer (SIGALRM) ? task_set_itimer() + SYS_SETITIMER(104)
   [ ] Timezone support
 
 NETWORKING
@@ -134,7 +134,7 @@ NETWORKING
   [ ] DHCP client (saat ini hardcode 10.0.2.15)
   [ ] IPv6
   [ ] UDP socket bind/recv dari user space
-  [ ] TCP listen / accept (server socket dari user space)
+  [x] TCP listen / accept (server socket dari user space) ? SYS_NET_LISTEN/ACCEPT/UNLISTEN (101-103)
   [ ] TLS verifikasi sertifikat (trust store)
 
 
@@ -165,8 +165,8 @@ VFS (Virtual Filesystem)
   [x] poll() syscall (POLLIN/POLLOUT/POLLERR, timeout)
   [x] /proc virtual: ps, meminfo, uptime, cpuinfo (real data), dmesg
   [ ] /dev virtual filesystem
-  [x] /proc/<pid>/status — Name, Pid, State, PPid, Priority
-  [ ] /proc/<pid>/maps, /proc/<pid>/fd
+  [x] /proc/<pid>/status  EName, Pid, State, PPid, Priority
+  [x] /proc/<pid>/maps, /proc/<pid>/fd ? proc_generate() extended
   [ ] inotify / file watch API
   [ ] VFS_MAX_FD > 8
 
@@ -205,36 +205,36 @@ Built-in commands
   [x] echo [teks / $VAR / $? / $$], date, time, uptime
   [x] ls [path] [-l long format], cd [path], pwd
   [x] mkdir <nama>, chmod <nama> <hex>, sync
-  [x] read <VARNAME>   — baca baris keyboard ke variabel
-  [x] read <file>      — tampilkan isi file
+  [x] read <VARNAME>    Ebaca baris keyboard ke variabel
+  [x] read <file>       Etampilkan isi file
   [x] write <file> <teks>
   [x] del <file>, rename <lama> <baru>
   [x] cat [file...], cp <src> <dst>, mv <src> <dst>
-  [x] wc [file], head [-n N] [file], tail [-n N] [file], less/more [file] — pager
+  [x] wc [file], head [-n N] [file], tail [-n N] [file], less/more [file]  Epager
   [x] find <dir> <pola>, stat <file>, touch <file>
-  [x] df         — slot file MFS4 yang dipakai/bebas
-  [x] du [path]  — total ukuran file di path
-  [x] sort [file] / stdin — urutkan baris teks
-  [x] dmesg      — tampilkan kernel ring buffer log
+  [x] df          Eslot file MFS4 yang dipakai/bebas
+  [x] du [path]   Etotal ukuran file di path
+  [x] sort [file] / stdin  Eurutkan baris teks
+  [x] dmesg       Etampilkan kernel ring buffer log
   [x] ps, kill [-sig] <pid>, nice <n> <cmd>, renice <pid> <n>
   [x] env, export KEY=VAL
   [x] meminfo, cpuinfo, taskstat, paging
-  [x] history    — riwayat 50 perintah
-  [x] open/fread/fwrite/fclose — fd manual
+  [x] history     Eriwayat 50 perintah
+  [x] open/fread/fwrite/fclose  Efd manual
   [x] mq_send <pid> <pesan>, mq_recv
   [x] ping <ip>, ifconfig, udp_send, tcp_get, curl <url>
   [x] nslookup <host>, ntpdate, certcheck [host]
   [x] vdisk, mount ext2, ext2ls, ext2cat
   [x] httpd [start [port] | stop]
-  [x] ws <url>   — WebSocket client
-  [x] kdbg       — kernel debugger via serial
+  [x] ws <url>    EWebSocket client
+  [x] kdbg        Ekernel debugger via serial
   [x] whoami, login, adduser, passwd, su
-  [x] edit <file> — text editor nano-like
-  [x] sh [script.sh] — jalankan script shell
-  [x] jobs, fg %N, bg %N — job control
+  [x] edit <file>  Etext editor nano-like
+  [x] sh [script.sh]  Ejalankan script shell
+  [x] jobs, fg %N, bg %N  Ejob control
   [x] which <cmd>
   [x] alias / unalias
-  [x] top         — realtime process monitor (refresh 1s, keluar tombol apa pun)
+  [x] top          Erealtime process monitor (refresh 1s, keluar tombol apa pun)
   [x] set -e / set -x untuk debug script
 
 Shell features
@@ -253,7 +253,7 @@ Shell features
   [x] Script: $1..$9 argumen, komentar #
   [ ] Here-doc (<<EOF)
   [x] Glob pattern *, ? dalam argument expansion
-  [ ] Subshell $(...) command substitution
+  [x] Subshell $(...) command substitution ? shell_expand_subshell()
   [ ] Brace expansion {a,b,c}
 
 
@@ -288,21 +288,21 @@ Shell features
   [x] qsort / bsearch
   [ ] time() / gettimeofday()
   [ ] errno global per-thread
-  [ ] FILE* stdio (fopen/fread/fwrite/fclose/fseek)
+  [x] FILE* stdio (fopen/fread/fwrite/fclose/fseek) + fprintf/fputs/fgets/fgetc/fputc + lseek
   [ ] Floating point support (printf %f)
   [ ] Dynamic library loading (.so)
 
 User programs (ELF64, di-embed di kernel image)
-  [x] hello, sender, writer          — demo dasar
-  [x] piper, pipe_sender, pipe_receiver — demo pipe
-  [x] devtest                        — demo device driver
-  [x] gfxtest                        — demo framebuffer
-  [x] gui_demo, gui_term             — demo window manager
-  [x] paint, calc, notepad, filemanager, clock, sysinfo — GUI apps
-  [x] threadtest, condtest, forktest — demo threading/sync
-  [x] pipetest, polltest, futextest  — demo IPC/poll/futex
-  [x] mfs4test, sigtest              — demo MFS4 + signal
-  [x] grep, sort, tail, cat, wc, head, cp, mv, ls, edit — tools Unix
+  [x] hello, sender, writer           Edemo dasar
+  [x] piper, pipe_sender, pipe_receiver  Edemo pipe
+  [x] devtest                         Edemo device driver
+  [x] gfxtest                         Edemo framebuffer
+  [x] gui_demo, gui_term              Edemo window manager
+  [x] paint, calc, notepad, filemanager, clock, sysinfo  EGUI apps
+  [x] threadtest, condtest, forktest  Edemo threading/sync
+  [x] pipetest, polltest, futextest   Edemo IPC/poll/futex
+  [x] mfs4test, sigtest               Edemo MFS4 + signal
+  [x] grep, sort, tail, cat, wc, head, cp, mv, ls, edit  Etools Unix
   [ ] awk, sed, less/more, zip/gzip
 
 
