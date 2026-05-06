@@ -1,1863 +1,395 @@
 ================================================================
-  Oria OS  EROADMAP PENGEMBANGAN SISTEM
-  Dibuat: 24 Maret 2026 | Diperbarui: 29 April 2026
-================================================================
-
-KONDISI SAAT INI (setelah Tahap C)
-------------------------------------------------------------
-- Arsitektur  : x86_64 64-bit Long Mode (IA-32e)
-- Resolusi    : 1920ÁE080 @ 32bpp (VBE linear framebuffer ~8.3MB)
-- Memori      : 4-level paging, identity-mapped 4GB, heap 2MB (0x100000 Ex2FFFFF)
-- Multitasking: round-robin, MAX_TASKS=16, context-switch 64-bit
-- Filesystem  : MFS4  Einode layer, symlink, hardlink, stat; persistence disk
-- GUI         : Window Manager (16 window), taskbar, 5 built-in apps
-- User space  : Ring-3 isolasi penuh, ELF64 loader, fork/COW, mmap, threading
-- Shell       : Multi-stage pipeline (6 stage) | >> && || auto-exec operators
-- Networking  : RTL8139, ARP, IPv4, ICMP, UDP, TCP, DNS, HTTP curl, HTTPS/TLS 1.3
-- Kernel size : ~480KB
-- Platform    : QEMU qemu-system-x86_64, build via WSL cross-compiler (x86_64-linux-gnu)
-
-================================================================
-TAHAP A  E32bpp TRUE COLOR
-Status: [SELESAI] ✁ESelesai 24 Maret 2026  Ebuild 171,920 bytes, test QEMU OK
-----------------------------------------------------------------
-Tujuan     : Mengubah framebuffer dari 8bpp (palette 256 warna)
-             ke 32bpp (16 juta warna). Syarat wajib sebelum
-             resolusi tinggi karena display HD tidak masuk akal
-             dengan hanya 256 warna.
-
-LFB Size   : 640x480x4 = 1.228.800 byte (~1.2MB) ↁEmasih muat
-             dalam 1 page table (4MB mapping), tidak perlu ubah
-             paging.
-
-File yang diubah:
-  [A1] src/kernel/vbe.c            Evbe_set_mode bpp 8ↁE2
-  [A2] src/kernel/graphics.h       Ewarna 8-bit ↁE32-bit, SCREEN_BPP 32
-  [A3] src/kernel/graphics.c       Efb: uint8_t* ↁEuint32_t*, semua draw fn
-  [A4] src/kernel/window.c         Epixel_buf 32-bit, sentinal 0xFFFFFFFF
-  [A5] src/kernel/taskbar.c        Ewarna 32-bit
-  [A6] src/kernel/kernel.c         Escroll(), fg_color/bg_color 32-bit
-  [A7] src/kernel/syscall.c        ESYS_DRAW_PIXEL, SYS_WIN_DRAW_PIXEL 32-bit
-  [A8] src/programs/lib.h          Ewrapper warna 32-bit
-  [A9] src/programs/*              Esemua referensi GFX_* ke nilai 32-bit
-
-================================================================
-TAHAP B  ERESOLUSI 1280ÁE20
-Status: [SELESAI] ✁ESelesai 26 Maret 2026  ESCREEN_W 1280ÁE20, build OK, test QEMU OK
-Prasyarat: Tahap A selesai ✁E
-----------------------------------------------------------------
-File yang diubah:
-  [B1] src/kernel/graphics.h       ESCREEN_W 640ↁE280, SCREEN_H 480ↁE20
-  [B2] src/kernel/vbe.c            Evbe_set_mode(1280, 720, 32)
-  [B3] src/kernel/kernel.c         EVGA_COLS=160, VGA_ROWS=90, scroll()
-  [B4] src/kernel/window.c / taskbar.c  Elayout 1280px
-  [B5] src/programs/*              Ekoordinat window disesuaikan
-
-================================================================
-TAHAP B+  ERESOLUSI 1920ÁE080
-Status: [SELESAI] ✁ESelesai 26 Maret 2026  E8MB LFB mapping, build 172 KB, test QEMU OK
-Prasyarat: Tahap B selesai ✁E
-----------------------------------------------------------------
-LFB Size   : 1920x1080x4 = 8.294.400 byte (~8.3MB) ↁEbutuh 2 page table
-
-File yang diubah:
-  [B+1] src/kernel/paging.c        Evbe_page_table2[1024], loop 2 PT
-  [B+2] src/kernel/graphics.h      ESCREEN_W=1920, SCREEN_H=1080
-  [B+3] src/kernel/vbe.c           Evbe_set_mode(1920, 1080, 32)
-  [B+4] src/programs/*             Elayout program disesuaikan 1920px
-
-================================================================
-TAHAP C  E64-BIT LONG MODE (penulisan ulang arsitektur)
-Status: [SELESAI] ✁ESelesai 26 Maret 2026  Ebuild 178 KB, boot ke Long Mode, GUI stabil
-Prasyarat: Tahap B/B+ selesai ✁E
-----------------------------------------------------------------
-Tujuan     : Migrasi dari i386 32-bit Protected Mode ke x86_64
-             IA-32e Long Mode. Penulisan ulang penuh semua
-             komponen low-level kernel.
-
-Sub-tahap:
-
-  [C1] Bootloader & kernel entry 64-bit                           ✁E
-       - boot.asm: Real Mode ↁEProtected Mode (tidak berubah)
-       - kernel_entry.asm [BITS 32]: zero BSS, setup 4-level page
-         tables (PML4/PDPT/4xPD) di 0x1000 Ex6FFF identity-map 4GB,
-         aktifkan PAE + EFER.LME + CR0.PG, load GDT64, far jmp
-       - kernel_entry.asm [BITS 64]: reload segs, RSP=0x90000,
-         call kernel_main()
-       - GDT64: null / kernel CS 0x08 / kernel DS 0x10 /
-                user CS 0x1B / user DS 0x23 / TSS64 0x28 (16-byte)
-       - Compiler: nasm -f elf64, x86_64-linux-gnu-ld -m elf_x86_64
-
-  [C2] Linker & build system 64-bit                               ✁E
-       - linker.ld: OUTPUT_FORMAT(elf64-x86-64), . = 0x8000
-       - build.ps1: x86_64-linux-gnu-gcc -m64 -mno-red-zone
-         -mcmodel=small -fno-pic -no-pie, nasm -f elf64
-       - QEMU: ganti qemu-system-i386 ↁEqemu-system-x86_64
-
-  [C3] IDT & ISR 64-bit                                           ✁E
-       - idt.h / idt.c: gate descriptor 16-byte, offset_hi 32-bit
-       - isr.asm [BITS 64]: SAVE_REGS/RESTORE_REGS 15 GPR
-         (rax,rcx,rdx,rbx,rbp,rsi,rdi,r8-r15)
-       - irq0 timer: context switch current_rsp/next_rsp (uint64_t*)
-       - irq1 keyboard, irq12 mouse
-       - int80_handler: [rsp+112]=rax→rdi syscall dispatch
-       - exc_common: EXC_NOERR/EXC_ERR macros ↁEexception_handler
-
-  [C4] TSS 64-bit                                                  ✁E
-       - tss.h: struct TSS64 (rsp0/rsp1/rsp2, IST[7], iomap_base)
-       - tss.c: isi 16-byte GDT descriptor, ltr 0x28
-       - tss64_set_kernel_stack() dipanggil di setiap task_switch
-
-  [C5] Multitasking 64-bit                                         ✁E
-       - task.h: uint64_t rsp, uint64_t *page_dir
-       - task.c: current_rsp/next_rsp (uint64_t*), iretq frame
-         ring-0 (3 qword: RFLAGS/CS/RIP) dan
-         ring-3 (5 qword: SS/RSP_user/RFLAGS/CS/RIP)
-       - task_switch: tss64_set_kernel_stack + vmm_switch_dir
-
-  [C6] VMM 4-level paging                                          ✁E
-       - vmm.c: PMM bitmap 4096 frame (16MB), frame 0-767 pre-marked
-       - vmm_create_page_dir: PML4→PDPT→pd_low, boot PDs shared
-         pd_low[0]=0x000000|0x87 (0 EMB), pd_low[1]=0x200000|0x87 (2 EMB)
-       - vmm_map_page: walk 4-level, skip 2MB large pages (bit PS)
-       - vmm_free_user_memory: free PTs + frame ≥ 3MB + pd_low + pdpt + pml4
-       - paging.c: paging_init = no-op (4-level aktif dari kernel_entry)
-
-  [C7] ELF64 loader                                                ✁E
-       - elf_loader.h/c: Elf64_Ehdr/Elf64_Phdr, e_machine=0x3E
-       - Load address: 0x400000 (pisah dari kernel heap)
-       - User stack: 0x600000 (1 frame 4KB)
-
-  [C8] Kernel C & syscall 64-bit                                   ✁E
-       - kernel.c: enter_usermode iretq, exception_handler uint64_t
-         tss64_init, print_hex64
-       - syscall.c: is_user_ptr(uint64_t), semua return uint64_t,
-         kernel_exec / SYS_EXEC memakai uint64_t proc_dir/entry/stack
-       - lib.h: syscall0/1/2 return long, (long) pointer cast
-       - user.ld: OUTPUT_FORMAT(elf64-x86-64), . = 0x400000
-       - memory.c: saved_flags uint64_t (pushf/popf 64-bit)
-       - shell.c: uint64_t proc_dir/entry/sp1/sp2
-       - paging.c: paging_get_cr0 uint64_t temp register
-
-================================================================
-TAHAP D  EKERNEL STABILITY & DRIVER
-Status: [SELESAI] ✁ESelesai 1 April 2026  Ebuild 182 KB, test QEMU OK
-Prasyarat: Tahap C selesai ✁E
-----------------------------------------------------------------
-Tujuan     : Meningkatkan stabilitas, memperluas driver, dan
-             memperbaiki kualitas OS sebelum menambah fitur besar.
-
-  [D1] SYSCALL/SYSRET (ganti int 0x80)                            ✁E
-       - IA32_LSTAR ↁEsyscall_entry, IA32_STAR, IA32_SFMASK MSR
-       - GDT restruktur: kernel CS 0x08 / DS 0x10,
-         user CS 0x2B / DS 0x23 (STAR[63:48]=0x0018)
-       - syscall_entry di isr.asm: simpan user RSP ke scratch,
-         pindah ke kernel stack, push rcx/r11/callee-saved,
-         dispatch ke syscall_handler, restore, o64 sysret
-       - task_switch: update syscall_kstack = kstack_top tiap switch
-       - lib.h: syscall0/1/2 gunakan instruksi SYSCALL (bukan int 0x80)
-       [BUG FIX] sysretq ↁEo64 sysret: NASM salah terjemahkan
-         "sysretq" sebagai label (nol byte), sehingga setelah
-         pop rsp eksekusi jatuh ke exc0 dan memicu #DE palsu
-         di RIP 0x600F98 (data stack user). Diganti ke o64 sysret
-         yang benar menghasilkan opcode REX.W + 0F 07 (48 0F 07).
-
-  [D2] Perbaikan PMM & heap                                        ✁E
-       - PMM: TOTAL_FRAMES 4096 (16MB) ↁE16384 (64MB)
-       - Heap tetap di 0x100000 Ex2FFFFF (tidak konflik LFB)
-
-  [D3] Demand paging (page fault handler)                          ✁E
-       - exception_handler: jika #PF (exc 14), error_code bit0=0
-         (not present) + bit2=1 (user) + CR2 ∁E[0x400000, 0x80000000)
-         ↁEpmm_alloc_frame + zero-fill + vmm_map_page, return (retry)
-       - User program tidak perlu pra-alokasi semua halaman
-
-  [D4] ATA Bus Master DMA driver                                   ✁E
-       - bmide_detect(): PCI bus 0 dev 1 fn 1 ↁEBAR4 BM-IDE base
-       - detect_drive_type(): IDENTIFY command, set disk_present
-       - dma_transfer(): PRDT setup, BM DMA polling, PIO fallback
-       - Boundary check: lba > 0x0FFFFFFF ditolak
-
-  [D5] Serial port driver (COM1 debug output)                      ✁E
-       - serial_init(), serial_putc(), serial_print() di serial.c
-       - QEMU -serial stdio ↁEdebug tanpa framebuffer
-
-  [D6] Keyboard & mouse improvements                               ✁E
-       - Ctrl, Alt, CapsLock, F1–F10, Delete
-       - Scancode set 1 lengkap (44 tombol)
-
-  [D7] Timer 1000 Hz & sleep akurat                                ✁E
-       - TIMER_HZ = 1000 (1 tick = 1 ms)
-       - msleep_kernel() busy-wait with pause
-       - task_sleep(ms): set TASK_SLEEPING + wake_tick, 1:1 ms
-
-================================================================
-TAHAP E  EFILESYSTEM & I/O LANJUTAN
-Status: [SELESAI] ✁ESelesai 2 April 2026  Ebuild OK, test QEMU OK
-Prasyarat: Tahap D (sebagian)
-----------------------------------------------------------------
-  [E1] ✁EFilesystem MFS3 (64 file ÁE64KB, pointer-based, auto-migrate MFS2→MFS3)
-       - FS_MAX_FILES 32ↁE4, FS_MAX_DATA 16KBↁE4KB per file
-       - Data disimpan di heap (pointer), bukan embedded array
-       - Metadata table hanya ~4KB (hemat vs 512KB lama)
-       - Disk layout: sector 0=superblock, sector 1+i*129=header, sector 2..129+i*129=data
-       - Permission bits (FS_PERM_DIR/READ/WRITE/EXEC), timestamp (ctime/mtime)
-       - Subdirectory: entry tipe DIR (data=NULL, perms|FS_PERM_DIR)
-       - fs_mkdir(), fs_list_dir(), fs_get_perms(), fs_set_perms(), fs_get_mtime()
-       File: src/kernel/fs.h, src/kernel/fs.c
-
-  [E2] ✁Efsync / dirty bit
-       - dirty flag per file, set saat fs_write / fs_write_bin
-       - fs_flush(): tulis semua dirty non-tmpfs ke disk, clear dirty
-       - SYS_FS_SYNC (49): user-space trigger flush
-       - Shell command: sync
-       File: src/kernel/fs.c, src/kernel/syscall.h/c, src/kernel/shell.c
-
-  [E3] ✁Etmpfs (ramdisk)
-       - tmpfs flag per file; file tmpfs tidak pernah ditulis ke disk
-       - fs_write_tmp(): buat file di tmpfs
-       - SYS_FS_TMPWRITE (50): user-space create tmpfs file
-       File: src/kernel/fs.c
-
-  [E4] ✁EPipe & IPC lanjutan
-       - Named pipes: named_pipe_open(name), named_pipe_close(name)
-         SYS_PIPE_NAMED (52)  Ebuka atau buat by-name
-         File: src/kernel/pipe.h, src/kernel/pipe.c
-       - Shared memory: shm_create/find/attach/detach/destroy
-         SHM_MAX=8 region ÁE4KB, dipetakan ke VA 0x500000+slot*4096
-         SYS_SHM_CREATE (53), SYS_SHM_ATTACH (54), SYS_SHM_DETACH (55)
-         File: src/kernel/shm.h, src/kernel/shm.c
-
-  Heap expansion: 2MB (0x2FFFFF) ↁE6MB (0x6FFFFF) di memory.c
-  Shell commands baru: sync, mkdir <nama>, chmod <nama> <hex>
-  lib.h wrappers: fs_sync, fs_mkdir, fs_write_tmp, pipe_named_open,
-                  shm_create, shm_attach, shm_detach
-  build.ps1: tambah shm.c compile + link
-
-================================================================
-TAHAP F  EUSERSPACE & SHELL LANJUTAN
-Status: [SELESAI] ✁ESelesai 2 April 2026  Ebuild OK (211KB), test QEMU OK
-Prasyarat: Tahap D, E
-----------------------------------------------------------------
-  [F1] ✁EShell improvements
-       - Background process: tambahkan '&' di akhir perintah ↁEbg_exec flag
-       - Environment variables: static env_keys/env_vals (ENV_MAX=16 entri)
-       - Shell ekspansi $VAR: shell_expand_vars() scan input_buffer in-place
-       - Built-in baru: cd <dir>, cd (root), pwd, export KEY=VAL, env
-       - make_path(): prefiks current_dir secara otomatis ke nama file
-       - make_path dipakai di: read, write, del (path-aware)
-       - ls: gunakan fs_list_dir(current_dir) bila berada di subdirektori
-       File: src/kernel/shell.c
-
-  [F2] ✁EStandard C library minimal di lib.h
-       - va_list / va_start / va_arg / va_end (GCC __builtin_va_list)
-       - vsprintf(buf, fmt, ap): %d %i %u %x %X %s %c %p %%, flags - 0 width, l modifier
-       - sprintf(buf, fmt, ...) ↁEpanggil vsprintf
-       - printf(fmt, ...) ↁEvsprintf ke buffer 512B, lalu print() syscall
-       - strcat(dst, src): sambung string
-       - strstr(hay, needle): cari substring, return pointer atau NULL
-       - strtol(s, endp, base): string ke long, base 0=auto-detect
-       - atoi(s): strtol base 10
-       - memcpy, memset, memmove, memcmp: operasi blok memori
-       File: src/programs/lib.h
-
-  [F3] (ditunda) Dynamic library loading  Etidak diimplementasikan di tahap ini
-
-  [F4] ✁EProgram user tambahan
-       - clock.c: GUI window 240ÁE0, tampilkan uptime HH:MM:SS (update tiap detik)
-       - sysinfo.c: GUI window 360ÁE30, tampilkan PID, uptime, tick count,
-         timer Hz, arsitektur, info FS dan ukuran kernel
-       File baru: src/programs/clock.c, src/programs/sysinfo.c
-       Kernel: clock_elf_data.h + sysinfo_elf_data.h di-include kernel.c
-       build.ps1: tambah kompilasi clock.c + sysinfo.c ↁExxd -i ↁEheader
-
-================================================================
-TAHAP G  ENETWORKING
-Status: [SELESAI] ✁ESelesai 2 April 2026  Ebuild OK (219KB), test QEMU OK
-Prasyarat: Tahap D, E
-----------------------------------------------------------------
-  [G1] ✁ERTL8139 NIC driver (polling, tanpa IRQ)
-       - PCI scan bus 0-7 cari vendor 0x10EC device 0x8139
-       - Aktifkan I/O Space + Bus Master via PCI command register
-       - BAR0 = I/O port base
-       - RX ring buffer 8K+16+1518 byte (statis di BSS, VA=PA identity-map)
-       - TX: 4 descriptor round-robin, poll TOK/TABT
-       - RX: poll CMD.BUFE, baca header 4-byte (status+pkt_len), salin frame
-       File: src/kernel/rtl8139.h, src/kernel/rtl8139.c
-       QEMU flag: -netdev user,id=net0 -device rtl8139,netdev=net0
-
-  [G2] ✁EEthernet + ARP
-       - Bangun Ethernet frame (dst/src MAC + ethertype)
-       - ARP request/reply (untuk IPv4, ethertype 0x0806)
-       - ARP cache: 8 slot IP→MAC
-       - Otomatis balas ARP request untuk IP kita (10.0.2.15)
-       File: src/kernel/net.c
-
-  [G3] ✁EIPv4 + ICMP echo (ping)
-       - IPv4 header (20 byte, checksum, TTL=64)
-       - ICMP type 8 (echo request) + type 0 (echo reply)
-       - Checksum 16-bit one's complement (inet_cksum)
-       - Routing: subnet check ↁEdirect atau via gateway (10.0.2.2)
-       - RTT diukur dengan get_ticks() (resolusi 1 ms)
-       File: src/kernel/net.c
-
-  [G4] ✁EShell commands
-       - ifconfig: tampilkan MAC, IP (10.0.2.15), gateway (10.0.2.2)
-       - ping <ip>: kirim 4 ICMP echo request, tampilkan RTT atau timeout
-       - parse_ip(): konversi string "a.b.c.d" ↁEuint8_t[4]
-       File: src/kernel/shell.c
-
-  Kernel size: 211KB ↁE219KB (+ rtl8139.c + net.c)
-  Test: ifconfig ✁E ping 10.0.2.2 ↁE4/4 reply, rtt=0ms
-  [BUG FIX] icmp_echo_send: htons(84) double byte-swap menyebabkan
-    IP total length = 21504 di wire ↁEQEMU SLIRP reject paket.
-    Diperbaiki ke tulis bytes langsung: p[2]=0x00, p[3]=0x54.
-
-================================================================
-TAHAP H  ESMP / MULTI-CORE (jangka jauh)
-Status: [SELESAI] ✁ESelesai 1 April 2026  EAP online terverifikasi di QEMU -smp 2
-Prasyarat: Tahap D, G
-----------------------------------------------------------------
-  [H1] APIC & IOAPIC initialization                               ✁Eselesai
-       - APIC detect (CPUID bit 9) + LAPIC enable (IA32_APIC_BASE, SVR)
-       - API kirim IPI (INIT/SIPI) via ICR
-       - CATATAN: PIC belum dimatikan permanen karena IRQ timer/keyboard
-         masih lewat PIC (routing IOAPIC belum diaktifkan)
-
-  [H2] SMP bootstrap                                               ✁Eselesai
-       - Baca RSDP/RSDT/MADT (ACPI 1.0) untuk enumerasi CPU (APIC ID)
-       - AP trampoline real-mode -> protected -> long mode di 0x7000
-       - Kirim INIT/SIPI/SIPI ke AP; AP masuk smp_ap_entry() dan lapor online
-       - Per-AP stack sederhana (8KB per AP) sudah ada
-       - Per-AP IDT: setiap AP load IDT BSP via idt_reload()
-       - Per-AP TSS: GDT diperluas 8 slot (CPU0=0x30..CPU7=0xA0);
-         tss64_ap_init() isi descriptor + ltr di AP sendiri
-       - Per-AP LAPIC enable: apic_enable() dipanggil dari AP
-       - Per-AP sti: AP siap terima exception/IRQ
-       - Terverifikasi: cpu total=2, ap online=1/1 di QEMU -smp 2
-       - Per-core scheduler queue (iterasi lanjutan)
-
-  [H3] Spinlock & mutex yang benar                                 ✁Eselesai
-       - spinlock_acquire/release berbasis atomic built-in (__sync)
-       - LAPIC enable per-AP saat startup (foundation timer per-core)
-       - Per-core scheduler queue (iterasi lanjutan)
-
-  [H4] NUMA-aware memory allocator (opsional, sangat lanjut)
-
-================================================================
-RINGKASAN URUTAN & STATUS
-================================================================
-
-  [DONE] Foundation   Eheap, BSS, interrupt, task, FS, IPC, GUI
-  [DONE] Tahap A      E32bpp True Color        (24 Maret 2026)
-  [DONE] Tahap B      EResolusi 1280ÁE20        (26 Maret 2026)
-  [DONE] Tahap B+     EResolusi 1920ÁE080       (26 Maret 2026)
-  [DONE] Tahap C      E64-bit Long Mode         (26 Maret 2026)
-  [DONE] Tahap D      EKernel Stability & Driver  (1 April 2026)
-  [DONE] Tahap E      EFilesystem & I/O Lanjutan  (2 April 2026)
-  [DONE] Tahap F      EUserspace & Shell Lanjutan  (2 April 2026)
-  [DONE] Tahap G      ENetworking                   (2 April 2026)
-  [DONE] Tahap H      ESMP / Multi-core           (1 April 2026)
-  [DONE] Tahap I      EPer-core Scheduler + LAPIC Timer  (1 April 2026)
-  [DONE] Tahap J      EVFS (File Descriptor Layer)  (1 April 2026)
-  [DONE] Tahap K      EGuard Page (Stack Overflow Protection) (1 April 2026)
-  [DONE] Tahap L      EIPC Message Queue          (1 April 2026)
-  [DONE] Tahap M      ELoad-Balanced AP Dispatch  (1 April 2026)
-  [DONE] Fondasi N    EStabilitas Sistem (user heap, waitpid, slot reuse)  (1 April 2026)
-  [DONE] Tahap N      EUser-space Threading         (1 April 2026)
-  [DONE] Fondasi O    EStabilitas Threading (stack leak, blocking sem, thread-safe malloc)  (1 April 2026)
-  [DONE] Fondasi P    EThreading Lanjutan (stack 16KB, multi-waiter sem, naming, condvar)  (1 April 2026)
-  [DONE] Fondasi R1   EBlocking I/O Sejati (keyboard, pipe, VFS stdin)  (1 April 2026)
-  [DONE] Fitur C1     Eps thread display [T:X], shell redirect > <, condtest (condvar demo)  (2 April 2026)
-  [DONE] Fitur C2     ETCP/UDP stack: net_tcp_connect/send/recv/close, tcp_get HTTP client  (2 April 2026)
-  [DONE] Fondasi Q    Efork()+COW, exec_replace(), demand-page thread stack, mmap/munmap  (2 April 2026)
-  [DONE] Fondasi R2   EVFS_TYPE_PIPE/NET/TTY, fd diwarisi fork (vfs_copy_fds)  (2 April 2026)
-  [DONE] Fondasi R3   EMFS4 inode layer: symlink, hardlink, stat, listdir, mkdir, unlink  (2 April 2026)
-  [DONE] Fondasi AI   EShell operators lanjutan: multi-pipe (6 stage), >>, &&/||, auto-exec  (29 April 2026)
-  [DONE] Fondasi AJ   EHTTPS/TLS 1.3: curl https:// via AES-128-GCM + X25519 + SHA-256  (29 April 2026)
-
-================================================================
-
-
-================================================================
-TAHAP I  EPER-CORE SCHEDULER + LAPIC TIMER
-Status: [SELESAI] ✁ESelesai 1 April 2026  Ebuild 228KB, AP ticks terverifikasi
-Prasyarat: Tahap H selesai ✁E
-----------------------------------------------------------------
-  [I1] ✁EPer-core cpu_id + is_user di struct Task
-       - cpu_id: -1=bebas, 0=BSP, 1+=AP
-       - is_user: 1=shell/ring-3 (BSP saja), 0=kernel task (semua CPU)
-       - task_switch (BSP): hanya ambil cpu_id==-1 && (!has_ap||is_user==1)
-       - task_switch_ap (AP): work stealing  Eambil cpu_id==-1 && is_user==0
-
-  [I2] ✁ELAPIC Timer per-AP (INT 0x40, 10ms)
-       - apic_timer_calibrate(): BSP ukur ticks_per_ms dengan PIT
-       - apic_timer_ap_start(): AP langsung pakai kalibrasi BSP tanpa busy-wait
-       - Dipanggil: smp_init() kalibrasi; smp_ap_entry() start setelah sti
-       - lapic_timer_isr (isr.asm): SAVE_REGS→task_switch_ap→RSP swap→LAPIC EOI
-
-  [I3] ✁EAP background task + counter
-       - smp_background_task(): busy-loop + __sync smp_ap_ticks tiap ~500ms
-       - has_ap flag: BSP tidak mencuri kernel task (is_user==0) saat AP ada
-       - task_create: cpu_id==-1 (free), AP work-steals
-
-  [I4] ✁EBug fix: iretq frame 5 item (RIP+CS+RFLAGS+RSP+SS)
-       - task_create awalnya hanya push 3 item ↁEtriple fault saat AP iretq
-
-  [I5] ✁EShell: ps kolom CPU, cpuinfo ap ticks
-
-================================================================
-TAHAP J  EVIRTUAL FILESYSTEM (VFS)
-Status: [SELESAI] ✁ESelesai 1 April 2026  Ebuild OK
-Prasyarat: Tahap E, I selesai ✁E
-----------------------------------------------------------------
-Tujuan: abstraksi file descriptor (fd) per-task di atas MFS3.
-        fd=0/1/2 = stdin/stdout/stderr; fd=3-7 = file MFS3.
-        User space dapat akses file, stdin, stdout via syscall terpadu.
-
-  [J1] ✁Evfs.h / vfs.c  EFD table (MAX_TASKS ÁEVFS_MAX_FD=8)
-       - Types: STDIN(1), STDOUT(2), FILE(3)
-       - vfs_open/read/write/close/seek, vfs_init_task, vfs_close_all
-       - Offset tracking per-fd untuk baca/tulis sequential
-
-  [J2] ✁ESyscall baru: SYS_OPEN(56), SYS_READ_FD(57), SYS_WRITE_FD(58), SYS_CLOSE_FD(59)
-       - syscall.c handler, syscall.h define
-       - is_user_ptr validasi pointer VfsRWArgs dari user space
-
-  [J3] ✁EIntegrasi task: vfs_init_task di task_create_user, vfs_close_all di task_exit
-       - Bug fix: task_create_user sebelumnya set cpu_id=0 ↁEuser task tidak pernah
-         dijadwalkan (task_switch butuh cpu_id==-1); diperbaiki ke cpu_id=-1
-
-  [J4] ✁EShell: open <file>, fread <fd>, fwrite <fd> <teks>, fclose <fd>
-
-  [J5] ✁Elib.h: sys_open, sys_read_fd, sys_write_fd, sys_close_fd + VfsRWArgs struct
-
-================================================================
-TAHAP K  EGUARD PAGE (STACK OVERFLOW PROTECTION)
-Status: [SELESAI] ✁ESelesai 1 April 2026  Ebuild OK
-Prasyarat: Tahap C, D selesai ✁E
-----------------------------------------------------------------
-Tujuan: deteksi stack overflow user sebelum ia corrupt heap/code.
-        Halaman 0x5FE000-0x5FEFFF = guard zone (tidak pernah dipetakan).
-        Stack user normal ada di 0x5FF000-0x5FFFFF ke bawah via demand paging.
-
-  [K1] ✁Eexception_handler (#PF)  Etambah cek guard zone
-       - Jika CR2 ∁E[0x5FE000, 0x5FEFFF] + user + not-present:
-         cetak "== STACK OVERFLOW ==" layar merah, task_exit(), hlt
-       - Task lain (shell dll.) tetap berjalan setelah timer switch
-
-================================================================
-TAHAP L  EIPC MESSAGE QUEUE
-Status: [SELESAI] ✁ESelesai 1 April 2026  Ebuild OK
-Prasyarat: Tahap E selesai ✁E
-----------------------------------------------------------------
-Tujuan: per-task mailbox (inbox) untuk message passing tanpa shared memory.
-        Lebih fleksibel dari pipe: bisa multi-sender, tidak butuh fd.
-
-  [L1] ✁Emq.h / mq.c  Emailbox[MAX_TASKS][MQ_MAX_MSGS=8]
-       - MqMsg { used, from, len, data[56] }
-       - mq_send(dst, data, len, from), mq_recv(dst, buf, max_len, from_out)
-       - mq_pending(pid): jumlah pesan pending
-
-  [L2] ✁ESyscall baru: SYS_MQ_SEND(60), SYS_MQ_RECV(61)
-       - MQ_SEND: ebx=dst_pid, edx=str_ptr (null-terminated, max 56 char)
-       - MQ_RECV: ebx=ptr MqRecvResult {int from; int len; char data[56]}
-
-  [L3] ✁EShell: mq_send <pid> <msg>, mq_recv
-
-  [L4] ✁Elib.h: mq_send, mq_recv + MqRecvResult struct
-
-================================================================
-TAHAP M  ELOAD-BALANCED AP DISPATCH
-Status: [SELESAI] ✁ESelesai 1 April 2026  Ebuild OK
-Prasyarat: Tahap I selesai ✁E
-----------------------------------------------------------------
-Tujuan: kernel task di-assign langsung ke AP saat dibuat (bukan work-steal).
-        AP punya "antrian" dedicated; hanya fallback ke work-steal jika kosong.
-
-  [M1] ✁Etask_create: when has_ap ↁEcpu_id = 1 (AP langsung) vs -1 (float)
-       - BSP tidak perlu lagi skip is_user==0 secara eksplisit
-         (task AP sudah cpu_id=1, bukan -1 yang di-scan BSP)
-
-  [M2] ✁Etask_switch_ap: two-pass scheduler
-       - Pass 1: cari cpu_id==cpu_idx (assigned tasks)  EO(n) fast find
-       - Pass 2: fallback  Esteal cpu_id==-1 && is_user==0 (old behavior)
-
-  [M3] ✁EShell: taskstat  Etampilkan distribusi task per CPU
-
-================================================================
-FONDASI  ESTABILITAS SISTEM (N-PRE)
-Status: [SELESAI] ✁ESelesai 1 April 2026  Ebuild 247,656 bytes
-Prasyarat: Tahap I-M selesai ✁E
-----------------------------------------------------------------
-Tujuan: memperkuat fondasi sebelum Tahap N (Threading) dan seterusnya.
-        Empat area: PMM visibility, user heap isolation, waitpid, slot reuse.
-
-  [F-N1] ✁Epmm_free_count() + shell meminfo
-         - vmm.c: pmm_free_count() iterasi bitmap frame 768..16383
-         - vmm.h: deklarasi pmm_free_count()
-         - Shell: meminfo  Etampilkan total/used/free frames (4KB each),
-           kernel reserved range, kernel heap range
-
-  [F-N2] ✁EUser heap isolation via SYS_BRK(62)
-         - Task struct: tambah heap_end (0x400000 untuk user task, 0 kernel)
-         - syscall.h: SYS_BRK=62
-         - syscall.c: map halaman baru dalam [old_heap_end..new_end], return new_end aktual
-         - task.h/c: task_get_heap_end, task_set_heap_end
-         - Batas: 0x400000 Ex5FE000 (~1.9MB), tidak boleh masuk guard page
-
-  [F-N3] ✁ETask wait (waitpid) + foreground exec
-         - Task struct: tambah waiter (tid yang menunggu, -1 = tidak ada)
-         - task.c: task_wait(tid)  Eblock shell sampai tid selesai;
-                   task_exit() wake waiter via task_unblock
-         - syscall.h/c: SYS_WAITPID(63) untuk user-space
-         - Shell exec: jika foreground (!bg_exec) ↁEtask_wait(tid) sebelum
-           kembali ke prompt; jika background ↁEcetak "[N] prog &"
-
-  [F-N4] ✁EFix task slot reuse
-         - task_create(): scan slot bebas (bukan task_count++) seperti
-           task_create_user  Emencegah "slot habis" setelah 15 task exit
-         - task_switch BSP + AP: loop 0..MAX_TASKS-1 (bukan task_count)
-           agar slot yang telah dibebaskan tidak merusak round-robin modulo
-
-  [F-N5] ✁Elib.h malloc/free ↁEuser heap (tidak pakai kernel heap)
-         - Alokator blok (_UHdr linked list) mulai di 0x400000
-         - sys_brk() memperluas heap lewat SYS_BRK syscall (kernel memetakan frame)
-         - free() dengan coalescing blok bebas bersebelahan
-         - Heap user otomatis dibebaskan penuh saat task exit (vmm_free_user_memory)
-         - waitpid() wrapper di lib.h
-
-================================================================
-TAHAP N  EUSER-SPACE THREADING
-Status: [SELESAI] ✁ESelesai 1 April 2026  Ebuild 257,736 bytes
-Prasyarat: Fondasi N selesai ✁E
-----------------------------------------------------------------
-Tujuan: thread sejati yang berbagi address space dengan proses induk.
-        Setiap thread punya kernel stack + user stack sendiri, tetapi
-        berbagi page_dir (PML4) dan heap_end dengan parent.
-        Thread tidak membebaskan page_dir saat exit (milik proses).
-
-  [N1] ✁ETask struct  Etambah field thread
-       - is_thread (uint8_t): 1 = thread, jangan free page_dir saat exit
-       - parent_tid (int): tid proses induk; -1 = bukan thread
-       File: src/kernel/task.h
-
-  [N2] ✁Etask_create_thread(entry, arg, parent_tid)
-       - Scan free slot (skip 0 = shell), seperti task_create_user
-       - page_dir = tasks[parent_tid].page_dir  (shared address space)
-       - heap_end = tasks[parent_tid].heap_end   (thread lihat heap yang sama)
-       - User stack ring-3 dialokasikan di VA 0x700000 + id*0x1000 (4KB/thread)
-         ↁEsetiap slot task punya halaman stack sendiri, tidak tabrakan
-       - Initial kernel stack: iretq frame (SS/RSP/RFLAGS/CS/RIP) +
-         15 GPR slot; slot k=5 (rdi) diisi arg agar thread_fn(arg) bekerja
-       File: src/kernel/task.c
-
-  [N3] ✁Etask_exit  Eperlakuan thread vs proses
-       - Jika is_thread == 1: skip vfs_close_all, skip vmm_free_user_memory
-         (hanya proses pemilik yang boleh membebaskan page_dir)
-       - Waiter tetap di-wake melalui task_unblock(waiter)  Ejoin tetap bekerja
-       File: src/kernel/task.c
-
-  [N4] ✁ESyscall baru (64 E6)
-       - SYS_THREAD_CREATE (64): ebx=entry_va, edx=arg ↁEreturn tid
-         Kernel: task_create_thread(ebx, edx, current_task)
-       - SYS_THREAD_EXIT (65): panggil task_exit() dari thread saat ini
-       - SYS_THREAD_JOIN (66): ebx=tid ↁEtask_wait(tid), block sampai thread selesai
-       File: src/kernel/syscall.h, src/kernel/syscall.c
-
-  [N5] ✁Elib.h  Ethreading API user space
-       - thread_create(fn, arg): inline syscall via SYSCALL; arg via RDI (rsi→ebx)
-       - thread_exit(): panggil SYS_THREAD_EXIT, loop tak terbatas (tidak return)
-       - thread_join(tid): panggil SYS_THREAD_JOIN dengan tid
-       - typedef thread_fn_t = void (*)(void *)
-       File: src/programs/lib.h
-
-  [N6] ✁EProgram threadtest.c
-       - Spawn 3 thread paralel via thread_create(thread_worker, (void*)id)
-       - thread_worker: print "mulai", busy-loop 500K iter, print "selesai",
-         increment shared counter `done`, panggil thread_exit()
-       - Main: thread_join ketiga thread, print "done. count=3"
-       - Demo: main memblok (join) sampai semua thread selesai
-       File: src/programs/threadtest.c
-
-  [N7] ✁EBuild + integrasi
-       - build.ps1: kompilasi threadtest.c ↁEthreadtest.elf ↁEthreadtest_elf_data.h
-       - kernel.c: #include + fs_write_bin("threadtest", ...)
-       - shell.c: tab-completion + help entry "threadtest"
-
-================================================================
-FONDASI O  ESTABILITAS THREADING
-Status: [SELESAI] ✁ESelesai 1 April 2026  Ebuild 259,560 bytes
-Prasyarat: Tahap N selesai ✁E
-----------------------------------------------------------------
-Tujuan: memperkuat fondasi threading sebelum fitur-fitur lanjutan.
-        Empat area: thread stack leak, semaphore true blocking,
-        malloc thread-safe, dan proteksi parent-exits-before-threads.
-
-  [F-O1] ✁EThread stack frame leak  Eframe fisik tidak pernah dibebaskan
-         Masalah: task_create_thread() memanggil pmm_alloc_frame() untuk
-           user stack thread (VA 0x700000+id*0x1000). Saat thread_exit,
-           task_exit() tidak pernah membebaskan frame ini ↁE4KB leak
-           per siklus reuse slot task.
-         Fix:
-           - task.h: tambah field uint64_t tstack_frame ke struct Task
-           - task.c (task_create_thread): simpan tasks[id].tstack_frame = tstack_frame
-           - task.c (task_exit, thread path): panggil vmm_unmap_page(parent_dir,
-             tstack_va) lalu pmm_free_frame(tstack_frame) sebelum clear slot
-         Fix tambahan  Evmm_unmap_page() baru:
-           - vmm.h: deklarasi void vmm_unmap_page(uint64_t *pml4, uint64_t virt)
-           - vmm.c: implementasi  Eclear PTE + invlpg (tanpa free frame;
-             caller bertanggung jawab memanggil pmm_free_frame)
-         File: src/kernel/task.h, src/kernel/task.c,
-               src/kernel/vmm.h, src/kernel/vmm.c
-
-  [F-O2] ✁EProteksi parent-exits-before-threads (use-after-free)
-         Masalah: jika proses induk memanggil task_exit() sementara thread
-           masih berjalan, vmm_free_user_memory(dir) membebaskan PML4 yang
-           masih dipakai thread ↁEuse-after-free ↁEtriple fault saat thread
-           menyentuh memori berikutnya.
-         Fix (task.c, bagian task_exit proses bukan thread):
-           - Scan semua task: is_thread==1 && parent_tid==tid
-           - Force-kill tiap thread anak:
-               pmm_free_frame(tstack_frame), tasks[i].used=0,
-               bangunkan waiter yang sedang thread_join ke thread tersebut
-           - Baru kemudian panggil vmm_free_user_memory(dir)
-         File: src/kernel/task.c
-
-  [F-O3] ✁ESemaphore blocking sejati (ganti busy-wait)
-         Masalah: sem_wait() menggunakan task_sleep(10) dalam loop ↁE
-           CPU terbuang 10ms per-retry, tidak adil kepada task lain,
-           latensi tidak deterministik.
-         Fix (semaphore.h + semaphore.c):
-           - semaphore.h: tambah field int waiter ke Semaphore struct;
-             naikkan SEM_MAX dari 8 ↁE16
-           - sem_init_all / sem_alloc: inisialisasi waiter = -1
-           - sem_wait: jika value==0, simpan current_task ke sems[id].waiter
-             lalu task_block() (tidur sejati, bukan sleep loop);
-             setelah dibangunkan, loop kembali (spurious wake safe)
-           - sem_post: backup waiter ↁEreset sems[id].waiter=-1 ↁEnaikkan
-             value ↁEtask_unblock(w) untuk membangunkan tepat sasaran
-         File: src/kernel/semaphore.h, src/kernel/semaphore.c
-
-  [F-O4] ✁EThread-safe malloc/free di lib.h
-         Masalah: _uheap/_ubrk di lib.h adalah static globals bersama.
-           Dua thread memanggil malloc/free bersamaan ↁErace condition
-           pada free-list ↁEheap korup, crash tidak deterministik.
-         Fix (lib.h):
-           - Tambah static int _umtx = -1 (id semaphore, lazy-init)
-           - Forward declarations sem_alloc/sem_wait/sem_post sebelum
-             penggunaan (definisi lengkap ada di bawah di lib.h)
-           - _umtx_init(): alokasi sem_alloc(1) saat pertama kali dipanggil
-             (aman karena thread belum ada saat malloc pertama dipanggil induk)
-           - malloc(): _umtx_init(); sem_wait(_umtx); ... sem_post(_umtx)
-           - free():   _umtx_init(); sem_wait(_umtx); ... sem_post(_umtx)
-         File: src/programs/lib.h
-
-================================================================
-FONDASI P  ETHREADING LANJUTAN
-Status: [SELESAI] ✁ESelesai 1 April 2026  Ebuild 263,720 bytes
-Prasyarat: Fondasi O selesai ✁E
-----------------------------------------------------------------
-Tujuan: perkuat fondasi threading  Estack lebih besar, sinkronisasi
-        lebih kaya (multi-waiter, condvar), dan manajemen identitas thread.
-
-  [F-P1] ✁EThread stack 16KB + guard page per-thread
-         Masalah: 4KB terlalu kecil untuk program yang memanggil fungsi
-           bersarang dalam atau memiliki array lokal besar.
-         Fix:
-           - task.h: tstack_frame (1 field) ↁEtstack_frames[4] (array 4 frame)
-           - task.c (task_create_thread):
-               tstack_va = 0x700000 + id * 0x5000  (5 halaman per-slot)
-               Halaman 0 (VA = tstack_va): guard  Edibiarkan TIDAK dipetakan
-               Halaman 1-4 (VA = tstack_va + 0x1000..+0x4000): dipetakan P+RW+User
-               RSP awal = tstack_va + 0x5000 (puncak slot)
-               Simpan frame ke tasks[id].tstack_frames[0..3]
-           - task.c (task_exit, thread path):
-               Loop k=0..3: vmm_unmap_page + pmm_free_frame(tstack_frames[k])
-           - task.c (task_exit, proses path / force-kill threads):
-               Loop 4 frame per-thread anak sebelum vmm_free_user_memory
-           - kernel.c (exception_handler, #PF):
-               Tambah cek guard page thread:
-               if CR2 in [0x700000, 0x800000) AND (offset % 0x5000) < 0x1000:
-                 cetak "== THREAD STACK OVERFLOW ==", task_exit()
-         File: src/kernel/task.h, src/kernel/task.c, src/kernel/kernel.c
-
-  [F-P2] ✁EMultiple semaphore waiters (FIFO ring)
-         Masalah: Semaphore hanya punya 1 int waiter  Ejika 2+ thread
-           concurrent memanggil sem_wait pada value==0, hanya 1 yang
-           masuk antrian; yang lain langsung lost.
-         Fix (semaphore.h + semaphore.c):
-           - semaphore.h: SEM_WAITER_MAX=4; struct Semaphore ganti
-             int waiter ↁEint waiters[4], uint8_t whead, wtail (ring FIFO)
-           - sem_enqueue / sem_dequeue: static helper ring
-           - sem_init_all / sem_alloc: inisialisasi whead=wtail=0, waiters=-1
-           - sem_wait: enqueue current_task ke ring, task_block();
-             loop pada spurious wake (cek value setelah dibangunkan)
-           - sem_post: dequeue 1 waiter ↁEtask_unblock(w)
-         File: src/kernel/semaphore.h, src/kernel/semaphore.c
-
-  [F-P3] ✁EThread naming (SYS_THREAD_SET_NAME)
-         - task.c: task_set_name(id, name)  Estr_copy_n ke tasks[id].name
-         - syscall.h: SYS_THREAD_SET_NAME = 67  (ebx=tid, edx=name_ptr)
-         - syscall.c: handler  Evalidasi is_user_ptr(edx), panggil task_set_name
-         - lib.h: thread_set_name(tid, name) inline syscall2 wrapper
-         File: src/kernel/task.c, src/kernel/syscall.h, src/kernel/syscall.c,
-               src/programs/lib.h
-
-  [F-P4] ✁ECondition variable
-         File baru: src/kernel/condvar.h, src/kernel/condvar.c
-         - condvar.h: CV_MAX=8, CV_WAITER_MAX=4; struct CondVar {used, waiters[4], whead, wtail}
-         - cv_init_all(), cv_alloc(), cv_free()
-         - cv_wait(id, sem_id):
-             1. cli; enqueue current_task ke ring cv
-             2. sem_post(sem_id)  ↁElepas mutex atomik (IRQ kembali aktif di dalam)
-             3. sti; task_block() ↁEtidur
-             4. sem_wait(sem_id)  ↁEreacquire mutex setelah dibangunkan
-         - cv_signal(id):   dequeue 1 waiter ↁEtask_unblock
-         - cv_broadcast(id): dequeue semua ↁEtask_unblock tiap waiter
-         Syscall baru:
-           SYS_COND_ALLOC(68), SYS_COND_FREE(69), SYS_COND_WAIT(70),
-           SYS_COND_SIGNAL(71), SYS_COND_BROADCAST(72)
-         lib.h: cond_alloc(), cond_free(), cond_wait(), cond_signal(), cond_broadcast()
-         kernel.c: #include "condvar.h", cv_init_all() di kernel_main
-         build.ps1: tambah kondvar.c compile + link
-         File: src/kernel/condvar.h, src/kernel/condvar.c,
-               src/kernel/syscall.h, src/kernel/syscall.c,
-               src/kernel/kernel.c, src/programs/lib.h, build.ps1
-
-  [F-P5] ✁EMAX_TASKS 16 ↁE32
-         - task.h: MAX_TASKS = 32
-         - Semua array yang depend MAX_TASKS (vfs.c fd_table, mq.c mailbox)
-           otomatis ikut karena gunakan MAX_TASKS sebagai ukuran
-         File: src/kernel/task.h
-
-================================================================
-FONDASI R1  EBLOCKING I/O SEJATI
-Status: [SELESAI] ✁ESelesai 1 April 2026  Ebuild 263,720 bytes
-Prasyarat: Fondasi O, Tahap N selesai ✁E
-----------------------------------------------------------------
-Tujuan: ganti busy-wait dan spin-loop pada semua jalur I/O dengan
-        true blocking (task_block / task_unblock) agar CPU tidak
-        terbuang saat menunggu data keyboard atau pipe.
-
-  [F-R1a] ✁EKeyboard blocking sejati
-          Masalah: SYS_GETKEY spin-loops pada keyboard_getchar(); vfs_read
-            stdin juga memanggil keyboard_getchar() tanpa blocking.
-          Fix:
-            - keyboard.h: tambah keyboard_has_char() dan keyboard_set_waiter(tid)
-            - keyboard.c: static int kwaiter = -1; keyboard_set_waiter; keyboard_has_char
-            - keyboard_handler: setelah setiap key_push, cek kwaiter >= 0
-              ↁEsimpan ke wake, reset kwaiter=-1, task_unblock(wake)
-            - vfs.c (VFS_TYPE_STDIN):
-                while (!keyboard_has_char()) { keyboard_set_waiter(current); task_block(); }
-                buf[0] = keyboard_getchar(); return 1;
-          File: src/kernel/keyboard.h, src/kernel/keyboard.c, src/kernel/vfs.c
-
-  [F-R1b] ✁EPipe blocking sejati
-          Masalah: pipe_read() menggunakan task_sleep(10) dalam loop ↁE
-            CPU terbuang 10ms per-retry; pipe_write() tidak memberi tahu
-            pembaca bahwa data sudah tersedia.
-          Fix:
-            - pipe.h: tambah int reader_waiter ke struct Pipe
-            - pipe.c (pipe_init_all + pipe_alloc): inisialisasi reader_waiter = -1
-            - pipe_read():
-                Ganti task_sleep(10) dengan:
-                  cli; if kosong: pipes[id].reader_waiter = current; sti; task_block()
-                Loop sampai ada data (retry setelah dibangunkan)
-            - pipe_write():
-                Setelah tulis: w = reader_waiter; reader_waiter = -1; sti; task_unblock(w)
-          File: src/kernel/pipe.h, src/kernel/pipe.c
-
-================================================================
-FITUR C1  Eps THREAD DISPLAY + SHELL I/O REDIRECT + condtest
-Status: [SELESAI] ✁ESelesai 2 April 2026  Ebuild 282,888 bytes
-Prasyarat: Fondasi P, F-R1 selesai ✁E
-----------------------------------------------------------------
-Tujuan: Tambah ketiga fitur visible: identifikasi thread di ps,
-        redirect I/O di shell, dan program demo condvar.
-
-  [C1a] ✁Eps Thread Display
-          - task_is_thread(id): return tasks[id].is_thread
-          - task_get_parent(id): return tasks[id].parent_tid
-          - shell.c: ps loop cek task_is_thread ↁEcetak "[T:parent]" warna GFX_LCYAN
-          File: src/kernel/task.h, src/kernel/task.c, src/kernel/shell.c
-
-  [C1b] ✁EShell I/O Redirect
-          Masalah: exec prog > file tidak berjalan karena SYS_PRINT
-            memanggil print() kernel langsung, bypass VFS fd 1.
-          Race condition: timer IRQ bisa switch ke task baru sebelum
-            vfs_redirect_out dipanggil.
-          Fix:
-            - vfs.c: vfs_redirect_out(tid, path)  Eset fd[1]/fd[2] ke VFS_TYPE_FILE
-            - vfs.c: vfs_redirect_in(tid, path)   Eset fd[0] ke VFS_TYPE_FILE RDONLY
-            - vfs.c: vfs_stdout_is_file(tid)       Ecek apakah fd[1] adalah file
-            - vfs.h: deklarasi ketiga fungsi baru
-            - syscall.c: SYS_PRINT handler cek vfs_stdout_is_file(tid)
-                ↁEjika ya: vfs_write(tid, 1, s, n)
-                ↁEjika tidak: print(s)  (jalur lama)
-            - shell.c: exec parser parse ">" dan "<" token
-                cli sebelum task_create_user
-                sti setelah vfs_redirect_out/in dipanggil (race fix)
-          Contoh: exec hello > hasil.txt; read hasil.txt
-          File: src/kernel/vfs.c, src/kernel/vfs.h,
-                src/kernel/syscall.c, src/kernel/shell.c
-
-  [C1c] ✁Econdtest  EDemo Condition Variable
-          - Program: src/programs/condtest.c
-          - Producer-consumer: 1 mutex semaphore + 1 condvar
-            ↁEproducer sleep 300ms ↁElock ↁEset buf_ready ↁEcond_signal
-            ↁEconsumer: while(!buf_ready) cond_wait ↁEprint pesan
-          - Output terverifikasi: "cond_wait/cond_signal OK"
-          - build.ps1: kompilasi condtest.c ↁEcondtest.elf ↁEcondtest_elf_data.h
-          - kernel.c: fs_write_bin("condtest", ...) di programs_init()
-          File: src/programs/condtest.c, src/kernel/kernel.c, build.ps1
-
-================================================================
-FITUR C2  ETCP/UDP STACK
-Status: [SELESAI] ✁ESelesai 2 April 2026  Ebuild 282,888 bytes
-Prasyarat: RTL8139 + ARP + IPv4 + ICMP selesai ✁E
-----------------------------------------------------------------
-Tujuan: Implementasi transport layer lengkap (UDP dan TCP) di atas
-        stack IPv4 yang sudah ada, dengan shell command untuk testing.
-
-  [C2a] ✁EUDP Send
-          - net_udp_send(dst_ip, dst_port, src_port, data, dlen)
-          - Bangun IP header + UDP header + checksum (optional, set 0)
-          - Shell: udp_send <ip> <port> <pesan>
-          File: src/kernel/net.c, src/kernel/net.h, src/kernel/shell.c
-
-  [C2b] ✁ETCP Stack Penuh
-          Struktur: typedef struct TcpConn { used, state, dst_ip[4], dst_mac[6],
-            src_port, dst_port, snd_nxt, rcv_nxt, rx[1024], rx_head/tail,
-            fin_recv, rst_recv } TcpConn;
-          tcp_conns[4] (TCP_MAX_CONN=4), tcp_port_ctr=49152 (ephemeral port)
-
-          State machine: CLOSED ↁESYN_SENT ↁEESTABLISHED ↁE
-            FIN_WAIT1 ↁEFIN_WAIT2 ↁETIME_WAIT (active close)
-            CLOSE_WAIT ↁELAST_ACK (passive close via FIN dari server)
-
-          Fungsi internal:
-            - transport_cksum(): pseudo-header checksum TCP/UDP
-            - tcp_tx(conn, flags, data, len): kirim segmen IP+TCP
-            - tcp_rx_push(conn, data, len): masukkan data ke RX ring buffer
-            - tcp_rx_process(pkt, plen): dispatch ke TcpConn berdasarkan port
-
-          API publik:
-            - net_tcp_connect(dst_ip, port) ↁE0..3=connID, -1=timeout, -2=RST
-            - net_tcp_send(id, data, len)
-            - net_tcp_recv(id, buf, maxlen) ↁEbytes (blocking, 5s timeout)
-            - net_tcp_close(id) ↁEFIN handshake
-            - net_udp_send(dst_ip, dport, sport, data, dlen)
-            - net_poll(): single RX poll untuk driver
-
-          net_process() di-hook: if(proto==6) tcp_rx_process(...)
-
-          Fix RST vs Timeout: rst_recv field ↁEconnect return -2 jika RST
-            Shell pesan: "connection refused (RST)" vs "timeout 5 detik"
-
-          Shell tcp_get <ip> <port> [path]:
-            ↁEARP resolve MAC
-            ↁEnet_tcp_connect
-            ↁEkirim "GET /path HTTP/1.0\r\nHost: ip\r\n\r\n"
-            ↁEnet_tcp_recv loop sampai 0 bytes / tutup
-            ↁEcetak response + "total N bytes"
-
-          Terverifikasi:
-            ↁEtcp_get 10.0.2.2 8080 /
-            ↁEHTTP/1.0 200 OK dari Python SimpleHTTP server di Windows host
-            ↁEBody 2403 bytes HTML direktori listing
-          File: src/kernel/net.c, src/kernel/net.h, src/kernel/shell.c
-
-================================================================
-FONDASI S  ESHELL PIPELINE SEJATI VIA VFS
-================================================================
-Status: [SELESAI] ? Fondasi S selesai ? shell pipeline | sejati via VFS
-Prioritas: 1 (tertinggi  Elangsung memanfaatkan F-R2 yang baru selesai)
-Prasyarat: Fondasi R2 (vfs_pipe, vfs_copy_fds) selesai ✁E
-----------------------------------------------------------------
-Tujuan: Operator | di shell menggunakan VFS fd pipe yang benar
-        (bukan buffer ad-hoc lama), sehingga stdout prog1 mengalir
-        ke stdin prog2 secara blocking dan benar.
-
-  [F-S1] Shell parser upgrade untuk operator |
-         Masalah: parser shell saat ini hanya mendukung redirect > dan <.
-           Pipelining prog1 | prog2 ada tapi memakai buffer lama yang
-           tidak blocking dan tidak melaporkan EOF ke prog2.
-         Rencana:
-           - shell.c: deteksi token | saat parsing baris perintah
-           - Untuk prog1 | prog2:
-             1. vfs_pipe(0, &fd_r, &fd_w)  Ealokasikan pipe anonim di task shell
-             2. fork() + exec_replace prog1 dengan vfs_redirect_out_pipe(child, pipe_id)
-             3. fork() + exec_replace prog2 dengan vfs_redirect_in_pipe(child, pipe_id)
-             4. waitpid kedua anak
-           - Mendukung chain: prog1 | prog2 | prog3 (iteratif)
-           File: src/kernel/shell.c, src/kernel/vfs.c
-
-  [F-S2] EOF propagasi ke penerima pipe
-         Masalah: saat prog1 exit dan tutup write-end pipe, prog2
-           harus mendapat EOF (read return 0) bukan block selamanya.
-         Rencana:
-           - pipe.c: saat semua write-end ref = 0, tandai pipe EOF
-           - pipe_read(): jika EOF dan buffer kosong ↁEreturn 0
-           - vfs_close() tipe PIPE write-end: decrement write_refs;
-             jika 0 ↁEpipe_set_eof(pipe_id)
-           File: src/kernel/pipe.h/c, src/kernel/vfs.c
-
-  [F-S3] Demo: pipetest | grep
-         - Buat program minimal grep.c: baca stdin baris per baris,
-           cetak baris yang mengandung argv[1]
-         - Test: exec writer > tmp.txt; exec grep hello < tmp.txt
-         - Test pipeline: exec ls | grep elf
-         File: src/programs/grep.c
-
-================================================================
-FONDASI T  ESIGNAL & PROCESS CONTROL
-================================================================
-Status: [SELESAI] ? Fondasi T selesai ? SIGKILL/SIGINT, Ctrl+C, exit code
-Prioritas: 2
-Prasyarat: Fondasi Q (fork, waitpid) selesai ✁E
-----------------------------------------------------------------
-Tujuan: Proses dapat diinterrupt dari luar via sinyal. Ctrl+C di
-        shell mematikan proses foreground. Kernel bisa kirim SIGKILL.
-
-  [F-T1] Infrastruktur sinyal kernel
-         Rencana:
-           - task.h: tambah field uint32_t pending_signals (bitmask)
-             dan void (*signal_handlers[32])(int) (default = SIG_DFL)
-           - Sinyal standar minimum: SIGKILL(9), SIGTERM(15), SIGINT(2),
-             SIGHUP(1), SIGCHLD(17)
-           - task_send_signal(tid, sig): set bit di pending_signals[tid]
-           - Cek pending_signals saat task_switch kembali ke ring-3:
-             jika ada sinyal pending & tidak diblock ↁEdeliver
-           File: src/kernel/task.h, src/kernel/task.c
-
-  [F-T2] Deliver sinyal ke user space
-         Rencana:
-           - SIGKILL/SIGTERM: langsung task_exit() dari kernel (tidak
-             bisa di-catch)
-           - SIGINT: default = task_exit(); bisa di-override via
-             SYS_SIGNAL handler
-           - SYS_SIGNAL(87): daftarkan handler; lib.h: signal(sig, fn)
-           - SYS_KILL(88): kirim sinyal ke pid; lib.h: kill(pid, sig)
-           File: src/kernel/task.c, src/kernel/syscall.h/c,
-                 src/programs/lib.h
-
-  [F-T3] Ctrl+C di shell ↁESIGINT ke foreground process
-         Masalah: Saat ini Ctrl+C tidak melakukan apa-apa.
-         Rencana:
-           - keyboard_handler: jika scancode Ctrl+C dan ada fg_pid ↁE
-             task_send_signal(fg_pid, SIGINT)
-           - shell.c: simpan fg_pid saat exec tanpa &
-           File: src/kernel/keyboard.c, src/kernel/shell.c
-
-  [F-T4] waitpid() dengan exit code
-         Masalah: waitpid() saat ini hanya menunggu, tidak mengembalikan
-           exit code anak.
-         Rencana:
-           - task.h: tambah field int exit_code
-           - task_exit(code) / SYS_EXIT menerima int code
-           - SYS_WAITPID: kembalikan exit code via pointer argumen
-           - lib.h: int waitpid(pid) ↁEtidak berubah ABI; tambah
-             int waitpid_ex(pid, int *status)
-           File: src/kernel/task.h/c, src/kernel/syscall.c,
-                 src/programs/lib.h
-
-  [F-T5] Demo: sigtest
-         - fork() + anak sleep(5s); induk kirim SIGTERM ke anak
-         - Verifikasi anak mati sebelum 5s
-         File: src/programs/sigtest.c
-
-================================================================
-FONDASI U  EFUTEX + THREAD-LOCAL STORAGE (TLS)
-================================================================
-Status: [SELESAI] ? Fondasi U selesai ? futex mutex + TLS per-thread
-Prioritas: 3
-Prasyarat: Fondasi P (threading) selesai ✁E
-----------------------------------------------------------------
-Tujuan: Lengkapi model threading  Emutex cepat tanpa syscall untuk
-        kasus tidak-berkontestasi, dan variabel lokal per-thread.
-
-  [F-U1] Futex (fast userspace mutex)
-         Rencana:
-           - SYS_FUTEX_WAIT(89): jika *(uint32_t*)addr == expected,
-             block task ini; atomik cek+block di kernel (tanpa race)
-           - SYS_FUTEX_WAKE(90): bangunkan hingga N waiter pada addr
-           - lib.h: mutex_lock(m) ↁECAS dulu; jika gagal ↁEfutex_wait
-             mutex_unlock(m) ↁEstore 0; futex_wake jika ada waiter
-           File: src/kernel/syscall.h/c, src/programs/lib.h
-
-  [F-U2] Thread-Local Storage (TLS)
-         Rencana:
-           - Alokasi 1 halaman TLS per thread: VA 0x800000 + tid*0x1000
-           - task_create_thread(): petakan halaman TLS, set FS MSR
-             (IA32_FS_BASE = 0x800000+tid*0x1000) via WRMSRL
-           - SYS_GET_TLS(91): kembalikan FS base address ke user
-           - lib.h: static inline void *tls_get() { long r; 
-             __asm__("mov %%fs:0,%0":"=r"(r)); return (void*)r; }
-           File: src/kernel/task.c, src/kernel/syscall.h/c,
-                 src/programs/lib.h
-
-  [F-U3] Demo: futextest
-         - N thread paralel increment counter via futex-mutex
-         - Verifikasi nilai final = N ÁEiterasi
-         File: src/programs/futextest.c
-
-================================================================
-FONDASI V  EMFS4 DISK PERSISTENCE
-================================================================
-Status: [SELESAI] ? Fondasi V selesai ? MFS4 disk persistence + rename
-Prioritas: 4
-Prasyarat: Fondasi R3 (MFS4 in-memory) selesai ✁E
-----------------------------------------------------------------
-Tujuan: Inode table MFS4 ditulis ke disk sehingga symlink, hardlink,
-        dan direktori bertahan setelah reboot.
-
-  [F-V1] Layout disk MFS4
-         Rencana:
-           - Sektor 0: superblock MFS3 (tidak berubah)
-           - Sektor 513: magic "MFS4" + jumlah inode
-           - Sektor 514 E41: inode table (128 ÁE128 byte = 16KB = 32 sektor)
-           - mfs4_flush(): tulis inode table ke sektor 514+
-           - mfs4_load(): baca sektor 514+; jika magic cocok, isi inodes[]
-           File: src/kernel/mfs4.c, src/kernel/ata.c
-
-  [F-V2] Integrasi dengan fs_flush / SYS_FS_SYNC
-         Rencana:
-           - fs_flush() di fs.c: setelah flush MFS3, panggil mfs4_flush()
-           - mfs4_init(): panggil mfs4_load() sebelum scan MFS3
-           - Shell: sync sudah memanggil SYS_FS_SYNC ↁEotomatis persist
-           File: src/kernel/fs.c, src/kernel/mfs4.c
-
-  [F-V3] Rename file via MFS4
-         Rencana:
-           - mfs4_rename(old_path, new_path): update path di inode
-           - Jika ada hardlink ↁEupdate semua inode dengan inode_id sama
-           - SYS_MFS4_RENAME(92); lib.h: mfs4_rename_u()
-           - Shell: rename <lama> <baru>
-           File: src/kernel/mfs4.h/c, src/kernel/syscall.h/c,
-                 src/kernel/shell.c, src/programs/lib.h
-
-================================================================
-FONDASI W  EPOLL / SELECT + NON-BLOCKING FD
-================================================================
-Status: [SELESAI] ✁EFondasi W selesai  ESYS_FCNTL(93) + SYS_POLL(94) + polltest
-Prioritas: 5
-Prasyarat: Fondasi R2 (VFS fd lengkap) selesai ✁E
-----------------------------------------------------------------
-Tujuan: Program dapat menunggu event dari beberapa fd sekaligus
-        (network + stdin) tanpa membuat thread terpisah per fd.
-
-  [F-W1] Flag non-blocking fd                              [DONE]
-         - VFS_O_NONBLOCK (0x08): flag baru di vfs.h
-         - vfs_read() tipe PIPE/NET/STDIN/TTY + nonblock: jika tidak ada
-           data ↁEreturn VFS_EAGAIN (-11) tanpa block
-         - pipe_has_data(id): helper cek ring buffer tidak kosong (pipe.h/.c)
-         - SYS_FCNTL(93): vfs_set_flags(tid,fd,flags); ebx=fd, edx=new_flags
-         - lib.h: fcntl_setfl(fd,flags), O_NONBLOCK=0x08, EAGAIN=11
-         File: src/kernel/vfs.h/c, src/kernel/pipe.h/c,
-               src/kernel/syscall.h/c, src/programs/lib.h
-
-  [F-W2] poll() syscall                                    [DONE]
-         - struct KPollFd { int fd; short events; short revents; } di vfs.h
-         - POLLIN=1, POLLOUT=2, POLLERR=4 di vfs.h
-         - vfs_fd_ready(tid,fd,events): cek kesiapan per-type
-         - SYS_POLL(94): ebx=ptr{KPollFd*,nfds,timeout_ms}
-           Loop: cek semua fd ↁEjika ada siap return count;
-           else task_sleep(1) sampai deadline; return 0 jika timeout
-         - lib.h: PollFd struct + poll(fds,nfds,timeout_ms) inline
-         File: src/kernel/vfs.h/c, src/kernel/syscall.h/c,
-               src/programs/lib.h
-
-  [F-W3] Demo: polltest                                    [DONE]
-         - Uji 1: set O_NONBLOCK, baca pipe kosong ↁE-EAGAIN
-         - Uji 2: poll() pipe read-end, writer thread menulis setelah 200ms
-                  ↁEPOLLIN terdeteksi dalam 2000ms timeout
-         - Uji 3: baca data setelah POLLIN ↁEisi = "hello"
-         File: src/programs/polltest.c
-
-================================================================
-FONDASI X  ETCP RELIABILITY
-================================================================
-Status: [SELESAI] ✁EFondasi X selesai  ETCP retransmit+OOO+keepalive+DNS
-Prioritas: 6
-Prasyarat: Fitur C2 (TCP stack dasar) selesai ✁E
-----------------------------------------------------------------
-Tujuan: TCP stack dapat menangani paket hilang / out-of-order
-        dan koneksi jangka panjang tanpa hang.
-
-  [F-X1] TCP retransmit timer
-         Masalah: Saat ini jika paket ACK tidak datang, koneksi
-           stuck selamanya (tidak ada retransmit).
-         Rencana:
-           - TcpConn: tambah retrans_tick, retrans_count, tx_buf[]+len
-           - Timer IRQ: setiap tick cek semua conn ESTABLISHED;
-             jika get_ticks()-retrans_tick > RTO (200ms) && unacked data
-             ↁEretransmit, retrans_count++; jika > 5 ↁERST
-           File: src/kernel/net.c
-
-  [F-X2] TCP receive window / out-of-order buffer
-         Rencana:
-           - Simpan seq number terakhir (rcv_nxt); jika paket masuk
-             seq != rcv_nxt ↁEsimpan di ooo_buf (1 slot) + kirim
-             duplicate ACK
-           - Setelah gap terisi: gabungkan ke rx ring buffer
-           File: src/kernel/net.c
-
-  [F-X3] TCP keepalive + timeout idle
-         Rencana:
-           - Setelah 30 detik tidak ada data ↁEkirim keepalive probe
-           - Jika tidak ada reply setelah 3 probe ↁEclose koneksi
-           File: src/kernel/net.c
-
-  [F-X4] DNS resolver sederhana
-         Rencana:
-           - dns_resolve(hostname, out_ip): kirim UDP DNS query ke
-             8.8.8.8:53, parse response A record
-           - Shell: nslookup <hostname>
-           - lib.h: dns_resolve() wrapper
-           File: src/kernel/net.c, src/kernel/shell.c,
-                 src/programs/lib.h
-
-================================================================
-FONDASI Y  EHTTP CLIENT (curl)
-================================================================
-Status: [SELESAI] ✁EFondasi Y selesai  EHTTP client curl via DNS+TCP, build 377704 bytes
-Prioritas: 7
-Prasyarat: Fondasi X (DNS + TCP stack) selesai ✁E
-----------------------------------------------------------------
-Tujuan: OS dapat mengambil halaman web melalui HTTP/1.0  E
-        DNS resolve hostname ↁETCP connect port 80 ↁE
-        kirim GET request ↁEtampilkan response ke layar.
-
-  [F-Y1] URL parser sederhana
-         Rencana:
-           - parse_http_url(url, host_out, path_out):
-             terima "http://hostname/path", ekstrak hostname dan path
-           - Jika tidak ada path ↁEgunakan "/"
-           - Tidak mendukung https (tidak ada TLS)
-           File: src/kernel/net.c
-
-  [F-Y2] http_get()  EHTTP/1.0 request
-         Rencana:
-           - http_get(url): panggil parse_http_url ↁEdns_resolve ↁE
-             net_tcp_connect(ip, 80) ↁEkirim request:
-             "GET /path HTTP/1.0\r\nHost: hostname\r\nConnection: close\r\n\r\n"
-           - Loop net_tcp_recv() hingga koneksi ditutup server
-           - Print response: header abu-abu, body putih
-           - Return 0 sukses, -1 error (DNS/connect/timeout)
-           File: src/kernel/net.c, src/kernel/net.h
-
-  [F-Y3] Shell: curl <url>
-         Rencana:
-           - Deteksi "curl " di shell input
-           - Panggil http_get(url) ↁEcetak hasil ke layar
-           - Error: cetak pesan merah
-           File: src/kernel/shell.c
-
-================================================================
-FONDASI Z  EHTTP CHUNKED TRANSFER + REDIRECT
-================================================================
-Status: [SELESAI] ✁EFondasi Z selesai  Echunked decode + redirect + status color, build 380232 bytes
-         [BUGFIX 2 Apr 2026] Ethernet padding bug: pay_len dihitung dari IP total-length
-         bukan panjang frame fisik. Pure-ACK frame (54 byte) di-pad ke 60 byte Ethernet
-         ↁE6 byte garbage dianggap TCP data ↁErcv_nxt advance 6 ↁEHTTP response berikutnya
-         dianggap duplicate dan dibuang. Fix: pay_len = ip_total - ihl.
-         curl http://example.com ↁE540 bytes body HTML ✁E(build 379912 bytes)
-Prioritas: 8
-Prasyarat: Fondasi Y (HTTP client curl) selesai ✁E
-----------------------------------------------------------------
-Tujuan: curl dapat menampilkan body halaman web yang sesungguhnya  E
-        decode Transfer-Encoding: chunked, ikuti redirect otomatis,
-        dan tampilkan status code dengan warna.
-
-  [F-Z1] TCP RX buffer diperbesar 1024 ↁE4096
-         - TCP_RX_SIZE: 1024 ↁE4096 di net.c
-         - Handle response HTTP hingga ~4KB per recv() tanpa overflow
-         - TcpConn struct bertambah ~12KB total (4 conn ÁE3KB)
-         File: src/kernel/net.c
-
-  [F-Z2] Transfer-Encoding: chunked decoder
-         - http_decode_chunked(): parse hex chunk size + strip chunk
-           framing, output body bersih ke http_decoded[]
-         - Otomatis aktif jika header Transfer-Encoding: chunked ada
-         - http_work[8192] + http_decoded[8192] sebagai static buffer
-         File: src/kernel/net.c
-
-  [F-Z3] HTTP redirect otomatis (max 3 lompat)
-         - http_find_field(): cari nilai header case-insensitive
-         - Jika status 3xx dan Location: ada ↁEupdate URL + loop ulang
-         - Relative redirect (/path) ditambah http://host otomatis
-         File: src/kernel/net.c
-
-  [F-Z4] Status code warna
-         - 2xx ↁEhijau, 3xx ↁEkuning, 4xx/5xx ↁEmerah
-         - Status line dicetak pertama, baru header abu-abu, lalu body
-         File: src/kernel/net.c
-
-================================================================
-RINGKASAN URUTAN & TARGET 100%
-================================================================
-
-  [DONE] Foundation   Eheap, BSS, interrupt, task, FS, GUI
-  [DONE] Tahap A–C    E32bpp, 1920ÁE080, 64-bit Long Mode
-  [DONE] Tahap D–G    EStability, FS MFS3, Userspace, Networking
-  [DONE] Tahap H–M    ESMP, Per-core scheduler, VFS, Guard, IPC
-  [DONE] Fondasi N–Q  EThreading, Stabilitas, fork+COW, mmap
-  [DONE] Fondasi R1   EBlocking I/O sejati
-  [DONE] Fondasi R2   EVFS_TYPE_PIPE/NET/TTY, fd inheritance fork
-  [DONE] Fondasi R3   EMFS4 inode: symlink, hardlink, stat, mkdir
-  [DONE] Fondasi S    EShell pipeline | sejati via VFS fd
-  [DONE] Fondasi T    ESignal: SIGKILL/SIGINT, Ctrl+C, exit code
-  [DONE] Fondasi U    EFutex + TLS  (~93%)
-  [DONE] Fondasi V    EMFS4 disk persistence + rename  (~96%)
-  [DONE] Fondasi W    Epoll/select + non-blocking fd  (~97%)
-  [DONE] Fondasi X    ETCP retransmit + DNS  (~100%)
-  [DONE] Fondasi Y    EHTTP client curl  (~103%)
-  [DONE] Fondasi Z    EHTTP chunked + redirect  (~105%)
-  [DONE] Fondasi AA    ? argv/argc + exec dengan argumen  (~108%) <- SELESAI
-  [TODO] Fondasi AB-AH ? Daily Driver: tools, scripting, RTC, editor, history, ANSI, procfs
-  [DONE] Fondasi AI   EShell operators lanjutan: multi-pipe, >>, &&/||, auto-exec  (~128%) ↁESELESAI
-  [DONE] Fondasi AJ   EHTTPS/TLS 1.3: curl https:// (AES-128-GCM, X25519, SHA-256)  (~131%) ↁESELESAI
-
-================================================================
-ROADMAP DAILY DRIVER (Fondasi AA  EAH)
-================================================================
-Target: OS dapat dipakai sebagai daily driver  Eshell produktif,
-        program dengan argumen, tools standar Unix, scripting,
-        editor teks, dan tampilan terminal yang nyaman.
-
-Urutan pengerjaan (berdasarkan dampak/kepentingan):
-  [x] Fondasi AA  Eargv/argc + exec dengan argumen          (~108%)
-  [x] Fondasi AB  EBuilt-in tools: cat, cp, mv, wc, head, tail, find (~110%)
-  [x] Fondasi AC  EShell scripting: if/while/for + file .sh (~113%)
-  [x] Fondasi AD  ERTC driver + perintah date/time          (~115%)
-  [x] Fondasi AE  EText editor (edit <file>, nano-like)      (~118%)
-  [x] Fondasi AF  ECommand history (↑�E) + TAB completion ++  (~120%)
-  [x] Fondasi AG  EANSI/VT100 escape codes di output        (~122%)
-  [x] Fondasi AH ? procfs /proc (ps/mem/net via file)        (~125%)
-  [x] Fondasi AI  EShell operators: multi-pipe |, >>, &&/||, auto-exec  (~128%)
-  [x] Fondasi AJ  EHTTPS/TLS 1.3: curl https:// (AES-128-GCM, X25519, SHA-256)  (~131%)
-
-================================================================
-FONDASI AA  EARGV/ARGC: ARGUMEN PROGRAM
-================================================================
-Status: [SELESAI] ? Fondasi AA selesai ? argv/argc + exec dengan argumen
-Prasyarat: Fondasi Z selesai ✁E
-----------------------------------------------------------------
-Tujuan: Program user dapat menerima argumen dari shell.
-        Saat ini exec prog menjalankan program tanpa argumen  E
-        grep, sort, dan semua program interaktif tidak bisa
-        menerima parameter. Ini fondasi paling kritis.
-
-  [AA1] Kernel: task_create_user() terima argv[]
-        - task.h: typedef struct ExecArgs { int argc; char argv[8][128]; }
-        - task_create_user(name, argc, argv[]):
-          build argv di user stack sebelum entry:
-            RSP -= sizeof(argv strings) + sizeof(char* array) + sizeof(int)
-            layout di stack: argc | argv[0] ptr | argv[1] ptr | NULL | strings
-        - shell.c: parse "exec prog arg1 arg2" ↁEisi ExecArgs, teruskan
-
-  [AA2] lib.h: _start membaca argc/argv dari stack
-        - _start: rdi=argc, rsi=argv (ABI System V AMD64)
-        - Teruskan ke main(int argc, char **argv)
-        - Semua program yang butuh argumen: update signature _start→main
-
-  [AA3] Update program yang perlu argumen
-        - grep.c: argv[1] = pola string (ganti hardcode "test")
-        - ls.c: argv[1] = direktori (opsional)
-        - Program lain: terima argv sesuai kebutuhan
-
-  [AA4] Shell: exec dengan argumen
-        - shell.c exec parser: tokenize argumen setelah nama program
-        - Teruskan argc/argv ke task_create_user
-        - Contoh: exec grep elf ↁEfilter baris yang mengandung "elf"
-
-================================================================
-FONDASI AB  EBUILT-IN TOOLS UNIX DASAR
-================================================================
-Status: [SELESAI] ? Fondasi AB selesai ? cat, cp, mv, wc, head, tail, find, stat, touch
-Prasyarat: Fondasi AA selesai ✁E
-----------------------------------------------------------------
-Tujuan: Perintah-perintah Unix paling sering dipakai tersedia
-        langsung di shell (bukan program ELF terpisah) untuk kecepatan.
-
-  [AB1] cat <file> [file2...]     Ecetak isi file ke stdout
-  [AB2] cp <src> <dst>            Esalin file
-  [AB3] mv <src> <dst>            Epindahkan/rename file
-  [AB4] wc <file>                Ehitung baris/kata/byte
-  [AB5] head [-n N] <file>        Ecetak N baris pertama (default 10)
-  [AB6] tail [-n N] <file>        Ecetak N baris terakhir (default 10)
-  [AB7] find <dir> <pattern>      Ecari file berdasar nama
-  [AB8] stat <file>               Etampilkan metadata file (size, perms, mtime)
-  [AB9] touch <file>              Ebuat file kosong / update mtime
-  [AB10] tee <file>               Esalin stdin ke stdout DAN file
-
-================================================================
-FONDASI AC  ESHELL SCRIPTING
-================================================================
-Status: [SELESAI] ? Fondasi AC selesai ? shell scripting if/while/for + file .sh
-Prasyarat: Fondasi AA selesai ✁E
-----------------------------------------------------------------
-Tujuan: Shell dapat menjalankan file .sh berisi perintah-perintah
-        dengan kontrol alur dasar.
-
-  [AC1] File .sh execution: sh <script.sh>
-        - Baca file, eksekusi baris per baris
-        - Komentar # diabaikan, baris kosong dilewati
-
-  [AC2] Variabel lokal: VAR=nilai, $VAR expansion
-        - Guna: VAR=hello; echo $VAR
-        - Distingi env global (export) vs variabel lokal script
-
-  [AC3] if / else / fi
-        - if [ kondisi ]; then ... fi
-        - Kondisi: -f file, -eq, -ne, string compare
-
-  [AC4] while / do / done
-        - while [ kondisi ]; do ... done
-
-  [AC5] for / in / do / done
-        - for VAR in a b c; do ... done
-
-  [AC6] $1..$9  Eargumen script
-        - sh myscript.sh arg1 arg2 ↁE$1=arg1, $2=arg2
-
-================================================================
-FONDASI AD  ERTC DRIVER + DATE/TIME
-================================================================
-Status: [SELESAI] ? Fondasi AD selesai ? RTC driver + perintah date/time
-Prasyarat: Fondasi Z selesai ✁E
-----------------------------------------------------------------
-  [AD1] RTC driver (CMOS I/O port 0x70/0x71)
-        - rtc_read_time(): struct RtcTime { sec, min, hour, day, mon, year }
-        - Konversi BCD ↁEbinary
-        - File: src/kernel/rtc.h, src/kernel/rtc.c
-
-  [AD2] Shell: date  Etampilkan tanggal dan waktu real
-        - "Jum, 3 Apr 2026 14:30:25"
-
-  [AD3] fs_get_mtime, fs_set_mtime update ke RTC
-        - File yang dibuat/dimodifikasi pakai timestamp RTC
-        - ls -l tampilkan timestamp yang benar
-
-================================================================
-FONDASI AE  ETEXT EDITOR (edit command)
-================================================================
-Status: [SELESAI] ? Fondasi AE selesai ? text editor nano-like (edit <file>)
-Prasyarat: Fondasi AA, AB selesai ✁E
-----------------------------------------------------------------
-Tujuan: edit <file> membuka editor teks di terminal  E
-        baca file, tampilkan di layar, support navigasi dan edit.
-
-  [AE1] Mode layar penuh: bersihkan layar, tampilkan baris
-        - Header: nama file + status (modified/saved)
-        - Body: baris teks dengan nomor baris
-        - Footer: status bar + shortcut
-
-  [AE2] Navigasi: ↑�E←�E, Home/End, PgUp/PgDn
-  [AE3] Edit: ketik karakter, Backspace, Delete, Enter
-  [AE4] Simpan: Ctrl+S ↁEfs_write
-  [AE5] Keluar: Ctrl+Q (prompt simpan jika ada perubahan)
-  [AE6] Spesial: Ctrl+G goto line, Ctrl+F find string
-
-================================================================
-FONDASI AF  ECOMMAND HISTORY + TAB COMPLETION LANJUT
-================================================================
-Status: [SELESAI] ? Fondasi AF selesai ? command history (����) + TAB completion
-Prasyarat: Fondasi Z selesai ✁E
-----------------------------------------------------------------
-  [AF1] Command history (50 entri)
-        - Tombol ↁEↁEperintah sebelumnya, ↁEↁEperintah berikutnya
-        - history command: tampilkan semua riwayat
-
-  [AF2] Tab completion untuk perintah + file
-        - Tab pada awal baris: complete command/exec name
-        - Tab setelah path: complete filename
-
-================================================================
-FONDASI AG  EANSI/VT100 ESCAPE CODES
-================================================================
-Status: [SELESAI] ? Fondasi AG selesai ? ANSI/VT100 escape codes di print_char()
-Prasyarat: Fondasi AA selesai ✁E
-----------------------------------------------------------------
-Tujuan: print() mengerti escape sequence \033[...m sehingga
-        program user dapat mencetak teks berwarna dan mengontrol
-        cursor tanpa syscall khusus.
-
-  [AG1] Parser \033[<n>m (SGR codes)
-        - 0=reset, 1=bold, 30-37=fg color, 40-47=bg color
-        - 90-97=bright fg, 100-107=bright bg
-        - Map ke palette warna OS (GFX_*)
-
-  [AG2] Cursor control
-        - \033[H = home, \033[A/B/C/D = up/down/right/left
-        - \033[2J = clear screen
-
-  [AG3] Update echo/print syscall untuk parse ANSI in-kernel
-        - SYS_PRINT handler: scan untuk \033, proses SGR/cursor mv
-
-================================================================
-FONDASI AH  EPROCFS /PROC
-================================================================
-Status: [SELESAI] ? Fondasi AH selesai ? procfs /proc (ps, meminfo, net, uptime)
-Prasyarat: Fondasi AA, AB selesai ✁E
-----------------------------------------------------------------
-Tujuan: Direktori virtual /proc menyediakan info sistem sebagai
-        file teks  Estandar Unix yang memudahkan scripting.
-
-  [AH1] VFS mount point /proc (VFS_TYPE_PROC)
-        - vfs_read pada /proc/... menghasilkan teks generated on-the-fly
-
-  [AH2] /proc/ps         Edaftar proses (seperti perintah ps)
-  [AH3] /proc/meminfo    Estatistik memori (seperti perintah meminfo)
-  [AH4] /proc/net        Estatistik jaringan (IP, MAC, koneksi aktif)
-  [AH5] /proc/uptime     Euptime dalam detik
-
-================================================================
-FONDASI AI  ESHELL OPERATORS LANJUTAN
-================================================================
-Status: [SELESAI] ✁ESelesai 29 April 2026  Ebuild 441KB, test QEMU OK
-Prioritas: 9
-Prasyarat: Fondasi S (shell pipeline dasar) selesai ✁E
-----------------------------------------------------------------
-Tujuan: Lengkapi kemampuan shell dengan operator standar Unix  E
-        multi-stage pipeline (lebih dari 2 program), append redirect,
-        conditional chaining &&/||, dan semua operator tersedia
-        langsung tanpa prefix 'exec'.
-
-  [AI1] ✁EMulti-stage pipeline: prog1 | prog2 | ... | progN (maks 6)
-        - Lama: hanya 2-stage, hardcoded parse manual 2 token
-        - Baru: ShCmd struct + shcmd_parse() + shcmd_run_nowait() helpers
-        - Loop split input pada '|', alokasi N-1 pipe, start semua stage
-        - task_wait semua stage, last_exit_code dari stage terakhir
-        - Contoh: ls | grep elf | wc
-        File: src/kernel/shell.c
-
-  [AI2] ✁EAppend redirect >>
-        - vfs_redirect_out_append(tid, path): set fd[1] offset ke EOF file
-          (truncate tidak terjadi; data ditambahkan di akhir)
-        - shcmd_parse(): deteksi ">>" sebelum ">", set ShCmd.append=1
-        - shcmd_run_nowait(): jika append ↁEvfs_redirect_out_append
-        - Contoh: echo hello >> log.txt
-        File: src/kernel/vfs.h, src/kernel/vfs.c, src/kernel/shell.c
-
-  [AI3] ✁EConditional operators && / ||
-        - Pre-pass di shell_execute() sebelum pipeline/exec
-        - Scan input_buffer untuk token '&&' (cond_op='A') atau '||' ('O')
-        - Split ke lbuf + rbuf, eksekusi kiri via rekursi shell_execute()
-        - last_exit_code dari kiri menentukan apakah kanan dieksekusi:
-            && ↁEjalankan kanan hanya jika exit code == 0
-            || ↁEjalankan kanan hanya jika exit code != 0
-        - bg_exec detection diperbaiki: '&' tunggal di akhir ≠ bagian '&&'
-        - Contoh: make && exec hello || echo "build gagal"
-        File: src/kernel/shell.c
-
-  [AI4] ✁EAuto-exec mendukung semua operator
-        - Lama: auto-exec (program tanpa 'exec' prefix) hanya parse nama + argv
-          tidak mendukung >, >>, <, &
-        - Baru: auto-exec gunakan shcmd_parse + shcmd_run_nowait
-          ↁEsemua redirect dan background tersedia untuk semua program
-        - last_exit_code diset: 0 sukses, 127 jika program tidak ditemukan
-        - Contoh: ls > daftar.txt   (tanpa 'exec')
-        File: src/kernel/shell.c
-
-  [AI5] ✁Eexec command disederhanakan
-        - exec handler lama: ~60 baris parsing manual
-        - Baru: shcmd_parse(input+5, &ec) + shcmd_run_nowait(&ec, -1, -1)
-        - last_exit_code diset setelah task_wait (foreground exec)
-        - bg_exec flag diteruskan ke ec.bg sebelum run
-        File: src/kernel/shell.c
-
-  [AI6] ✁EHelp text diperbarui
-        - Entri baru: prog > file, prog >> file, prog < file, prog &
-        - Entri baru: prog1 | prog2 | prog3 (pipeline multi-stage)
-        - Entri baru: cmd1 && cmd2, cmd1 || cmd2
-        File: src/kernel/shell.c
-
-  ShCmd API:
-    struct ShCmd { prog[64], arg_buf[128], argv[9], argc,
-                   rout[32], rin[32], append, bg }
-    shcmd_parse(src, c)               Eparse satu perintah lengkap
-    shcmd_run_nowait(c, in_fd, out_fd)  Espawn task, return tid (non-blocking)
-    vfs_redirect_out_append(tid, path)   Eset stdout ke append mode
-
-================================================================
-FONDASI AJ  EHTTPS / TLS 1.3
-================================================================
-Status: [SELESAI] ✁ESelesai 29 April 2026  Ebuild 480KB, test QEMU OK
-Prioritas: 10
-Prasyarat: Fondasi X (TCP/DNS) + Fondasi Y (HTTP curl) selesai ✁E
-----------------------------------------------------------------
-Tujuan: Implementasi HTTPS (curl https://) menggunakan TLS 1.3 murni C,
-        tanpa library eksternal, tanpa verifikasi sertifikat (educational OS).
-        Cipher suite: TLS_AES_128_GCM_SHA256 (0x1301), key exchange: X25519.
-
-  [AJ1] ✁Ecrypto.c / crypto.h  EKriptografi primitif lengkap (~700 baris)
-        Bagian 1: SHA-256 (FIPS 180-4)
-          - sha256_init / sha256_update / sha256_final / sha256()
-        Bagian 2: HMAC-SHA256
-          - hmac_sha256(key, klen, msg, mlen, out[32])
-        Bagian 3: HKDF-SHA256 + TLS 1.3 helpers
-          - hkdf_extract(salt, ikm, prk[32])
-          - hkdf_expand(prk, info, out, olen)
-          - hkdf_expand_label(secret, label, ctx, out, olen)
-          - tls13_derive_secret(secret, label, transcript_hash, out)
-        Bagian 4: AES-128
-          - SBOX[256] (full S-box)
-          - aes128_setkey(aes, key[16])  Ekey schedule 10 ronde
-          - aes128_encrypt_block(aes, in[16], out[16])
-        Bagian 5: AES-128-GCM
-          - gcm_mul(out, X, Y)  EGHASH multiply (bit-by-bit, 128 iter)
-          - ghash(H, aad, aad_len, cipher, clen, out[16])
-          - gcm_ctr(aes, iv, buf, len, ctr_start)
-          - aes128gcm_encrypt(aes, iv, aad, aad_len, buf, len, tag[16])
-          - aes128gcm_decrypt(aes, iv, aad, aad_len, buf, len, tag[16]) ↁE0/-1
-        Bagian 6: X25519 (Curve25519 DH)
-          - fe[5]: 51-bit limb, GF(2^255-19)
-          - fe_mul() dengan __uint128_t, fe_sq, fe_add, fe_sub, fe_mul_scalar
-          - fe_invert() via Fermat (z^(2^255-21))
-          - fe_cswap() constant-time conditional swap
-          - fe_from_bytes / fe_to_bytes (little-endian 32 byte)
-          - curve25519_ladder()  EMontgomery ladder 255 bit
-          - x25519_generate_private(), x25519_public(), x25519_shared()
-        PRNG: xorshift64 di-seed dari get_ticks() + alamat stack
-        File: src/kernel/crypto.h, src/kernel/crypto.c
-
-  [AJ2] ✁Etls13.c / tls13.h  ETLS 1.3 minimal client (~480 baris)
-        State machine: TlsConn (per-koneksi, maks 4)
-          - Field: c_priv/c_pub/s_pub/ecdhe (X25519 keys)
-          - hs_s/c_key[16], hs_s/c_iv[12]
-          - ap_s/c_key[16], ap_s/c_iv[12]
-          - c_hs_traffic[32]  Edisimpan untuk client Finished key
-          - sequence counter (hs_s/c_seq, ap_s/c_seq)
-          - Sha256 transcript, state, app_buf ring buffer
-        tls13_connect(tcp_id, host):
-          1. x25519_generate_private/public
-          2. send_client_hello dengan SNI extension
-          3. Baca ServerHello (skip ChangeCipherSpec)
-          4. x25519_shared ↁEECDHE secret
-          5. derive_hs_keys (HKDF early ↁEderived ↁEhs_secret ↁEs/c hs traffic)
-          6. Loop baca encrypted records ↁEdekripsi ↁEscan HS_FINISHED
-          7. derive_app_keys (hs_secret ↁEderived2 ↁEmaster ↁEs/c ap traffic)
-          8. Kirim client Finished (HMAC-SHA256 dari c_hs_traffic)
-        tls13_send/recv/close/is_open
-        File: src/kernel/tls13.h, src/kernel/tls13.c
-
-  [AJ3] ✁Enet.c  Ehttps_get(url)
-        - Parse "https://host/path"
-        - dns_resolve(host) ↁEIP
-        - net_tcp_connect(ip, 443)
-        - tls13_connect(conn, host)  Edengan SNI
-        - Kirim HTTP/1.0 GET request via tls13_send
-        - Terima respons + tampilkan header (warna) + body (warna berbeda)
-        - tls13_close + net_tcp_close setelah selesai
-        File: src/kernel/net.c (fungsi https_get ditambah di akhir)
-        net.h: deklarasi int https_get(const char *url)
-
-  [AJ4] ✁Eshell.c  Ecurl https:// detection
-        - Cek prefix "https://" ↁEpanggil https_get(url)
-        - Cek prefix "http://"  ↁEpanggil http_get(url) (lama)
-        File: src/kernel/shell.c
-
-  [AJ5] ✁Ebuild.ps1  Ecrypto.c + tls13.c ditambah ke build
-        - Compile: crypto.c ↁEbuild/crypto.o
-        - Compile: tls13.c  ↁEbuild/tls13.o
-        - Linker: tambah build/crypto.o build/tls13.o
-        File: build.ps1
-
-  Bug yang ditemukan & diperbaiki selama development:
-    [BUG-1] SNI tidak ada ↁEserver modern gagal routing ↁE
-            tambah extension server_name (type 0x0000) di ClientHello
-    [BUG-2] Finished key salah ↁEpakai hs_c_key (16B AES key)
-            bukan c_hs_traffic (32B HKDF secret) ↁE
-            simpan c_hs_traffic di struct, pakai itu untuk
-            hkdf_expand_label(..., "finished", ...)
-    [BUG-3] ChangeCipherSpec sebelum ServerHello tidak di-skip ↁE
-            loop skip CCS sebelum parse ServerHello
-
-  Hasil test:
-    curl https://example.com  ↁEDNS OK, TCP:443 OK, TLS 1.3 OK, HTTP 200 OK
-    curl https://google.com   ↁEDNS OK, TCP:443 OK, TLS 1.3 OK
-    Kernel size: 441KB ↁE480KB (+39KB crypto+tls13)
-
-================================================================
-
-================================================================
-ROADMAP KE DEPAN  EFITUR YANG DIBUTUHKAN
-================================================================
-Oria OS sudah mencapai level "educational daily driver" (~131%).
-Berikut adalah fitur-fitur berikutnya yang paling berguna untuk
-dikerjakan, diurutkan berdasarkan prioritas dan ketergantungan.
-
-================================================================
-FONDASI AK  EACPI: SHUTDOWN, REBOOT, POWER BUTTON
-================================================================
-Status: [SELESAI] 2713
-Prioritas: 1  Esangat mudah, dampak langsung saat demo
-Prasyarat: kernel berjalan dengan QEMU ✁E
-----------------------------------------------------------------
-Tujuan: OS bisa shutdown/reboot secara bersih tanpa QEMU kill.
-
-  [AK1] ACPI PM1a_CNT: port 0x604 (QEMU default)
-        - acpi_shutdown(): outw(0x604, 0x2000)  EQEMU poweroff
-        - acpi_reboot(): outb(0x64, 0xFE)  EPS/2 reset line
-        - Shell: shutdown, reboot, poweroff
-
-  [AK2] ACPI RSDP scan (opsional, untuk hardware asli)
-        - Scan BIOS area 0xE0000 ExFFFFF untuk tanda "RSD PTR "
-        - Parse RSDT ↁEFACP ↁEPM1a_CNT_BLK untuk port yang benar
-
-  [AK3] Shutdown hook
-        - kernel_shutdown(): flush fs, tutup semua koneksi, lalu PM1a reset
-        - Ctrl+Alt+Del ↁEreboot (keyboard handler)
-        File: src/kernel/acpi.h, src/kernel/acpi.c, src/kernel/shell.c
-
-================================================================
-FONDASI AL  ENTP CLIENT (SINKRONISASI WAKTU)
-================================================================
-Status: [SELESAI] ✓
-Prioritas: 2
-Prasyarat: Fondasi X (UDP/DNS) selesai ✁E Fondasi AD (RTC) selesai ✁E
-----------------------------------------------------------------
-Tujuan: OS menyinkronkan jam dari server NTP sehingga RTC selalu akurat.
-
-  [AL1] UDP NTP request (RFC 5905)
-        - Kirim packet NTP v3 (48 byte) ke pool.ntp.org:123
-        - Parse response: Transmit Timestamp (64-bit NTP epoch)
-        - Konversi NTP epoch (1 Jan 1900) ↁEUnix epoch ↁERTC
-
-  [AL2] Aplikasikan ke RTC
-        - rtc_write_time() dari nilai NTP
-        - Tampilkan: "NTP sync: OK (pool.ntp.org, offset +2.3ms)"
-
-  [AL3] Shell: ntpdate
-        - ntpdate: sync sekali dan tampilkan hasil
-        - Auto-sync opsional: ntpd & (background polling setiap jam)
-        File: src/kernel/net.c, src/kernel/rtc.c, src/kernel/shell.c
-
-================================================================
-FONDASI AM  EHTTP SERVER (httpd)
-================================================================
-Status: [SELESAI] 2713
-Prioritas: 3
-Prasyarat: Fondasi X (TCP), Fondasi R3 (MFS4 filesystem) selesai ✁E
-----------------------------------------------------------------
-Tujuan: Oria OS dapat menyajikan file via HTTP  EOS sebagai server.
-
-  [AM1] net_tcp_listen(port)  Epassive open
-        - TcpConn: tambah state LISTEN + accept queue (2 slot)
-        - net_tcp_accept(): ambil koneksi dari accept queue; blocking
-        - net_tcp_listen(8080): bind port, mulai menerima koneksi
-
-  [AM2] HTTP/1.0 request handler
-        - Baca "GET /path HTTP/1.x\r\n..." hingga \r\n\r\n
-        - Cari file di MFS3/MFS4 berdasar path
-        - Kirim "HTTP/1.0 200 OK\r\nContent-Length: N\r\n\r\n" + isi file
-        - 404 jika file tidak ada
-
-  [AM3] Shell: httpd start / httpd stop
-        - httpd start: spawn task server di background, listen 8080
-        - httpd stop: kirim SIGTERM ke task server
-        - Akses dari Windows: curl http://10.0.2.15:8080/
-        File: src/kernel/net.c, src/kernel/net.h, src/kernel/shell.c
-
-================================================================
-FONDASI AN  EWEBSOCKET CLIENT
-================================================================
-Status: [SELESAI] ✓
-Prioritas: 4
-Prasyarat: Fondasi AJ (TLS 1.3) selesai ✁E
-----------------------------------------------------------------
-Tujuan: Koneksi WebSocket untuk komunikasi real-time (wss:// dan ws://).
-
-  [AN1] HTTP Upgrade handshake
-        - Kirim "GET / HTTP/1.1\r\nUpgrade: websocket\r\n
-          Sec-WebSocket-Key: <base64 16 byte random>\r\n..."
-        - Verifikasi response "101 Switching Protocols"
-        - HMAC-SHA1 untuk Sec-WebSocket-Accept (atau skip verifikasi)
-
-  [AN2] WebSocket frame encode/decode
-        - Frame header: FIN + opcode (0x1=text, 0x2=binary, 0x8=close)
-        - Masking key (client ↁEserver selalu masked, RFC 6455)
-        - ws_send(conn, data, len): encode + kirim
-        - ws_recv(conn, buf, max): baca + unmask frame
-
-  [AN3] Shell: ws <url>
-        - ws ws://echo.websocket.org  Econnect, baca stdin, kirim, terima
-        - ws wss://...  Egunakan TLS layer
-        File: src/kernel/websocket.h, src/kernel/websocket.c, src/kernel/shell.c
-
-================================================================
-FONDASI AO  EVIRTIO BLOCK DRIVER (pengganti ATA polling)
-================================================================
-Status: [SELESAI] ✓
-Prioritas: 5
-Prasyarat: PCI scan (Tahap N) selesai ✁E
-----------------------------------------------------------------
-Tujuan: Ganti ATA PIO polling dengan VirtIO disk untuk performa
-        baca/tulis yang jauh lebih cepat di QEMU.
-
-  [AO1] Deteksi VirtIO Block device via PCI
-        - Vendor 0x1AF4, Device 0x1001 (legacy) atau 0x1042 (modern)
-        - Baca BAR0 untuk I/O port base
-
-  [AO2] Virtqueue setup
-        - Alokasikan descriptor ring (16 entry), available ring, used ring
-        - virtio_blk_init(): negotiate features, setup queue
-
-  [AO3] Read/write request via virtqueue
-        - virtio_blk_read(sector, count, buf): buat descriptor chain
-          request header + data + status byte ↁEnotify ↁEtunggu used ring
-        - Ganti ata_read() dengan virtio_blk_read() di fs.c
-
-  [AO4] QEMU flag
-        - Tambah ke build.ps1 QEMU args:
-          -drive file=disk.img,if=virtio,format=raw
-        File: src/kernel/virtio.h, src/kernel/virtio.c, src/kernel/fs.c
-
-================================================================
-FONDASI AP  EIPv6 + ICMPv6 PING
-================================================================
-Status: [SELESAI] 2713
-Prioritas: 6
-Prasyarat: Fondasi X (TCP/IP stack) selesai ✁E
-----------------------------------------------------------------
-Tujuan: Oria OS mendukung IPv6 untuk siap menghadapi dunia modern.
-
-  [AP1] IPv6 header parse + send
-        - struct Ipv6Hdr: version, traffic class, flow label,
-          payload_len, next_header, hop_limit, src[16], dst[16]
-        - Routing: QEMU SLIRP v6 default gateway fe80::2
-
-  [AP2] NDP (Neighbor Discovery Protocol)
-        - ICMPv6 type 135 (Neighbor Solicitation)
-        - ICMPv6 type 136 (Neighbor Advertisement)
-        - Resolve fe80:: gateway MAC via NDP
-
-  [AP3] ICMPv6 Echo (ping6)
-        - ping6 <ipv6_addr>: kirim ICMPv6 Echo Request, tampilkan RTT
-        File: src/kernel/net.c, src/kernel/shell.c
-
-================================================================
-FONDASI AQ  ETLS CERTIFICATE VALIDATION (opsional/educational)
-================================================================
-Status: [SELESAI] 2713
-Prioritas: 7  Eeducational value, bukan keamanan production
-Prasyarat: Fondasi AJ (TLS 1.3) selesai ✁E
-----------------------------------------------------------------
-Tujuan: Validasi sertifikat server agar curl https:// tidak blind trust.
-
-  [AQ1] X.509 DER parser minimal
-        - Parse Certificate: tbsCertificate ↁEsubject, issuer, validity,
-          subjectPublicKeyInfo (RSA atau EC)
-        - Tidak perlu ASN.1 lengkap  Eparse field penting saja
-
-  [AQ2] Verify rantai sertifikat
-        - Hardcode public key ISRG Root X1 (Let's Encrypt) dan
-          DigiCert Global Root CA sebagai trust anchor
-        - Verify signature dengan RSA-PKCS#1-v1.5 + SHA-256
-
-  [AQ3] Shell: curl -v https://url
-        - Mode verbose: tampilkan info cert (issuer, expiry, CN)
-        - Mode default: verifikasi diam; error jika gagal
-        File: src/kernel/x509.h, src/kernel/x509.c, src/kernel/tls13.c
-
-================================================================
-FONDASI AR  EEXT2 FILESYSTEM (read-only mount)
-================================================================
-Status: [SELESAI] 2713
-Prioritas: 8
-Prasyarat: VirtIO atau ATA driver, VFS selesai ✁E
-----------------------------------------------------------------
-Tujuan: Mount partisi ext2 dari disk image  Einteroperabilitas dengan Linux.
-
-  [AR1] Superblock + block group descriptor
-        - Baca superblock (offset 1024), parse magic 0xEF53
-        - Hitung jumlah block group, baca group descriptor table
-
-  [AR2] Inode table + directory entry
-        - ext2_read_inode(ino): baca block group ↁEinode table offset ↁEinode
-        - ext2_readdir(ino): iterasi dir entry (rec_len, name_len, name)
-
-  [AR3] File read
-        - ext2_read_file(ino, buf, offset, len):
-          decode direct/indirect block pointers, baca data
-
-  [AR4] VFS mount point /mnt
-        - vfs_mount("/mnt", VFS_TYPE_EXT2, device)
-        - ls /mnt, cat /mnt/file.txt bekerja via VFS
-        File: src/kernel/ext2.h, src/kernel/ext2.c, src/kernel/vfs.c
-
-================================================================
-FONDASI AS  EKERNEL DEBUGGER (kgdb/serial console)
-================================================================
-Status: [SELESAI] 2713
-Prioritas: 9
-Prasyarat:  E
-----------------------------------------------------------------
-Tujuan: Debugging kernel via QEMU serial port tanpa reboot.
-
-  [AS1] Serial port UART 16550 (COM1: 0x3F8)
-        - uart_init(): 9600 baud, 8N1
-        - uart_putc/getc untuk karakter tunggal
-        - Redirect kernel print ke UART saat boot
-
-  [AS2] QEMU -serial stdio
-        - Tambah -serial stdio ke QEMU args di build.ps1
-        - Output kernel muncul di terminal PowerShell
-
-  [AS3] Mini debugger via serial
-        - Backtrace: tampilkan return address stack (RBP chain)
-        - Dump: x <addr> <count>  Etampilkan memori hex
-        - Registers: r  Etampilkan semua register saat panic/fault
-        File: src/kernel/uart.h, src/kernel/uart.c, src/kernel/kernel.c
-
-================================================================
-FONDASI AT  EGUI: WINDOW DECORATIONS + FONT
-================================================================
-Status: [SELESAI] 2713
-Prioritas: 10
-Prasyarat: GUI framebuffer 32bpp selesai ✁E
-----------------------------------------------------------------
-Tujuan: Tampilan GUI yang lebih profesional  Ewindow dengan title bar,
-        tombol close/minimize, dan font bitmap yang lebih tajam.
-
-  [AT1] Bitmap font atlas (8ÁE6 atau PSF)
-        - Load PC Screen Font v2 (PSF2) dari disk
-        - gfx_putchar_psf(x, y, ch, color): render dengan font PSF
-        - Ganti font 8ÁE saat ini dengan font 8ÁE6 yang lebih jelas
-
-  [AT2] Window title bar
-        - Render gradien title bar 20px di atas setiap window
-        - Tombol ÁE(close) merah, _ (minimize) kuning di sudut kanan
-        - Drag: klik title bar + geser mouse ↁEpindahkan window
-
-  [AT3] Resize handle
-        - Area 8ÁE px di sudut kanan bawah window = resize grip
-        - Drag resize ↁEupdate width/height window secara real-time
-
-  [AT4] Clipboard minimal
-        - Ctrl+C di terminal ↁEsalin teks ke clipboard_buf[512]
-        - Ctrl+V di text editor ↁEpaste dari clipboard_buf
-        File: src/kernel/gfx.h, src/kernel/gfx.c, src/kernel/wm.c
-
-================================================================
-RINGKASAN ROADMAP KE DEPAN
-================================================================
-
-  Prioritas   Fondasi   Nama                          Ketergantungan
-  ---------   -------   ---------------------------   -------------------------
-  [1]         AK        ACPI Shutdown/Reboot           E
-  [2]         AL        NTP Client                    Fondasi X, AD
-  [3]         AM        HTTP Server (httpd)           Fondasi X, R3
-  [4]         AN        WebSocket Client              Fondasi AJ (TLS)
-  [5]         AO        VirtIO Block Driver           PCI scan
-  [6]         AP        IPv6 + ICMPv6                 Fondasi X
-  [7]         AQ        TLS Certificate Validation    Fondasi AJ
-  [8]         AR        EXT2 Filesystem read-only     VirtIO/ATA, VFS
-  [9]         AS        Kernel Debugger (serial)       E
-  [10]        AT        GUI Window Decorations+Font   GUI framebuffer
-
-  Rekomendasi urutan pertama: AK ↁEAL ↁEAM ↁEAN ↁEAO
-
-================================================================
+  Oria OS — STATUS IMPLEMENTASI
+  Terakhir diperbarui: 6 Mei 2026
+  Platform: x86-64 Long Mode | QEMU qemu-system-x86_64
+  Build: WSL x86_64-linux-gnu-gcc | .\build.ps1 build
+  Kernel: ~569 KB | Resolusi: 1920x1080 32bpp VBE
+================================================================
+
+
+================================================================
+  ARSITEKTUR INTI
+================================================================
+
+BOOT & CPU
+  [x] Real Mode -> Protected Mode -> 64-bit Long Mode (IA-32e)
+  [x] GDT64: kernel CS/DS, user CS/DS, TSS64 per-CPU
+  [x] TSS64 per-core (RSP0 diupdate tiap task switch)
+  [x] IDT 64-bit: 15 GPR, exc 0-14, IRQ 0-15
+  [x] SYSCALL/SYSRET (bukan int 0x80)
+  [x] LAPIC enable per-CPU
+  [x] SMP bootstrap: ACPI MADT -> INIT/SIPI -> AP online (QEMU -smp 2)
+  [x] Per-AP LAPIC timer (INT 0x40, 10ms, dikalibrasi dari BSP)
+  [x] CPU feature detection via CPUID
+  [ ] x87/SSE state save/restore saat context switch
+  [ ] NMI handler
+  [ ] ACPI power management (S3/S4 suspend)
+
+MEMORI
+  [x] 4-level paging (PML4/PDPT/PD/PT), identity-map 4GB
+  [x] PMM bitmap 64MB (16384 frames x 4KB)
+  [x] vmm_map_page / vmm_unmap_page + invlpg
+  [x] vmm_create_page_dir / vmm_free_user_memory (COW-aware)
+  [x] Demand paging: #PF handler map frame on-demand (user space)
+  [x] Guard page stack user: 0x5FE000 (STACK OVERFLOW detection)
+  [x] Guard page thread: 0x700000+id*0x5000 (THREAD STACK OVERFLOW)
+  [x] User heap via SYS_BRK (0x400000..0x5FDFFF)
+  [x] Kernel heap: kmalloc/kfree (0x100000..0x6FFFFF)
+  [x] mmap/munmap halaman anonim (SYS_MMAP/MUNMAP)
+  [x] mmap_file / munmap_file (SYS_MMAP_FILE/MUNMAP_FILE)
+  [ ] Swap / page eviction ke disk
+  [ ] Large page (2MB) support untuk user space
+  [ ] KASLR (kernel address space layout randomization)
+
+MULTITASKING
+  [x] Round-robin scheduler, MAX_TASKS=32
+  [x] Per-core scheduler: BSP (user+float tasks), AP (kernel tasks)
+  [x] Load-balanced AP dispatch: assigned task langsung ke AP
+  [x] task_create / task_create_user / task_create_thread
+  [x] task_exit: bebaskan page_dir, fd, thread stack
+  [x] task_block / task_unblock (blocking sejati, bukan sleep loop)
+  [x] task_wait / waitpid (foreground exec block sampai child selesai)
+  [x] fork() + COW (Copy-on-Write), exec_replace()
+  [x] Thread: berbagi page_dir+heap, stack 16KB + guard per-thread
+  [x] Thread naming (SYS_THREAD_SET_NAME)
+  [x] Thread-Local Storage (TLS) via FS MSR (0x800000+tid*0x1000)
+  [x] Signal: SIGKILL(9), SIGTERM(15), SIGINT(2) — pending_signals bitmask
+  [x] Signal handler user (SYS_SIGACTION)
+  [x] Ctrl+C -> SIGINT ke foreground process
+  [x] exit code: task_exit(code), SYS_WAITPID kembalikan code
+  [x] Nice value per-task (task_set_nice)
+  [ ] Zombie cleanup (child exit, parent tidak wait -> slot leak)
+  [ ] setuid / setgid
+  [ ] Proses group / session (setsid, tcsetpgrp)
+  [ ] Job control: fg/bg/jobs (tabel job belum ada di shell)
+  [ ] POSIX signal mask (sigprocmask, sigpending)
+  [ ] Real-time priority class
+
+
+================================================================
+  DRIVER & HARDWARE
+================================================================
+
+DISPLAY
+  [x] VBE linear framebuffer 1920x1080 32bpp
+  [x] draw_pixel, fill_rect, draw_line, draw_char, draw_str
+  [x] Font 8x8 bitmap (font8x8.h)
+  [x] Scrolling teks kernel
+  [x] ANSI/VT100 escape codes di print_char (SGR + cursor control)
+  [ ] Framebuffer double-buffering (flicker-free)
+  [ ] Hardware cursor
+  [ ] Resolusi dinamis (user bisa ganti resolusi)
+  [ ] Truetype / vector font rendering
+
+STORAGE
+  [x] ATA PIO driver: read/write sector, detect drive
+  [x] ATA Bus Master DMA (bmide_detect, dma_transfer, PIO fallback)
+  [x] VirtIO Block device (virtio_blk.c): MMIO, virtqueue
+  [x] Ext2 filesystem read-only: inode, readdir, readfile
+  [ ] Ext2 write support
+  [ ] AHCI SATA driver
+  [ ] NVMe driver
+  [ ] GPT partition table parser (hanya MBR saat ini)
+
+INPUT
+  [x] PS/2 keyboard driver: scancode set 1, shift/ctrl/alt/caps/F1-F10
+  [x] PS/2 mouse driver: klik kiri/kanan, scroll
+  [x] Keyboard blocking sejati (keyboard_set_waiter / task_unblock)
+  [x] Driver keyboard VGA (drv_kbd.c) + driver VGA output (drv_vga.c)
+  [ ] USB HID keyboard/mouse
+  [ ] Gamepad / joystick
+
+SERIAL & DEBUG
+  [x] COM1 serial driver 9600 baud 8N1
+  [x] Kernel debugger interaktif via serial (kdbg)
+  [x] dmesg ring buffer 4096 byte (dmesg_log / dmesg_read)
+  [ ] Serial console sebagai tty penuh (login via serial)
+  [ ] Remote GDB stub
+
+TIMER & WAKTU
+  [x] PIT 1000 Hz (1 tick = 1ms), get_ticks(), msleep_kernel()
+  [x] LAPIC timer per-core (10ms, kalibrasi dari BSP PIT)
+  [x] RTC driver CMOS: baca detik/menit/jam/tgl/bulan/tahun
+  [x] NTP date sync via UDP (ntpdate command)
+  [ ] HPET driver
+  [ ] Alarm / setitimer (SIGALRM)
+  [ ] Timezone support
+
+NETWORKING
+  [x] RTL8139 NIC driver (polling, PCI scan, TX/RX ring)
+  [x] Ethernet II frame build/parse
+  [x] ARP request/reply + ARP cache (8 slot)
+  [x] IPv4: header, checksum, routing (direct / gateway 10.0.2.2)
+  [x] ICMP echo request/reply (ping)
+  [x] UDP send/receive
+  [x] TCP stack: connect, send, recv, close (SYN/SYNACK/FIN/RST)
+  [x] TCP retransmit timer + out-of-order buffer
+  [x] TCP keepalive + idle timeout
+  [x] DNS resolver UDP (A record, server 8.8.8.8)
+  [x] HTTP/1.0 client curl: GET, chunked decode, redirect, status warna
+  [x] HTTPS/TLS 1.3: X25519, AES-128-GCM, SHA-256, HKDF
+  [x] X.509 sertifikat parse (tanpa verifikasi chain)
+  [x] HTTP server (httpd): serve file dari MFS4
+  [x] WebSocket server: upgrade + frame parser
+  [ ] DHCP client (saat ini hardcode 10.0.2.15)
+  [ ] IPv6
+  [ ] UDP socket bind/recv dari user space
+  [ ] TCP listen / accept (server socket dari user space)
+  [ ] TLS verifikasi sertifikat (trust store)
+
+
+================================================================
+  FILESYSTEM
+================================================================
+
+MFS4 (filesystem utama in-memory + disk persistence)
+  [x] FS_MAX_FILES=64, FS_MAX_DATA=65536 byte per file
+  [x] Inode layer: symlink, hardlink, stat (type/size/ctime/mtime/perms)
+  [x] fs_mkdir / fs_list_dir / fs_get_perms / fs_set_perms
+  [x] fsync / dirty bit -> flush ke disk ATA
+  [x] tmpfs flag (file tidak di-persist ke disk)
+  [x] Disk persistence: inode table di sektor 514+ (mfs4_flush/mfs4_load)
+  [x] Rename file (mfs4_rename)
+  [x] chmod <file> <hex_perm>
+  [ ] Max file size > 65536 byte
+  [ ] File locking (flock)
+  [ ] Direktori bersarang > 1 level
+
+VFS (Virtual Filesystem)
+  [x] VFS fd table per-task (MAX_TASKS x VFS_MAX_FD=8)
+  [x] Tipe fd: STDIN, STDOUT, FILE, PIPE, NET, TTY, PROC
+  [x] vfs_open/read/write/close/seek
+  [x] fd diwarisi fork (vfs_copy_fds)
+  [x] vfs_redirect_out / vfs_redirect_in / vfs_redirect_out_append
+  [x] Non-blocking fd (VFS_O_NONBLOCK, return EAGAIN)
+  [x] poll() syscall (POLLIN/POLLOUT/POLLERR, timeout)
+  [x] /proc virtual: ps, meminfo, uptime, cpuinfo (real data), dmesg
+  [ ] /dev virtual filesystem
+  [ ] /proc/<pid>/ per-proses (maps, fd, status)
+  [ ] inotify / file watch API
+  [ ] VFS_MAX_FD > 8
+
+Ext2 (disk kedua disk.img)
+  [x] Mount ext2 read-only: mount ext2
+  [x] ext2ls [path]: list direktori
+  [x] ext2cat <file>: baca isi file
+  [ ] Ext2 write support
+  [ ] Mount ext2 sebagai root filesystem
+
+
+================================================================
+  IPC & SINKRONISASI
+================================================================
+
+  [x] Semaphore: alloc/free/wait/post, blocking sejati, FIFO ring 4 waiter
+  [x] Condition variable: alloc/free/wait/signal/broadcast
+  [x] Futex: FUTEX_WAIT/WAKE (CAS + block/wake atomik)
+  [x] mutex_lock/unlock di lib.h via futex
+  [x] Pipe anonim: alloc/read/write/close, blocking sejati, EOF propagasi
+  [x] Named pipe: open/close by-name
+  [x] Shared memory: 8 region x 4KB (VA 0x500000+slot*4096)
+  [x] Message queue per-task: mq_send/mq_recv (8 pesan x 56 byte)
+  [x] Clipboard: SYS_CLIP_COPY/PASTE (512 byte shared buffer)
+  [ ] SysV semaphore (semget/semop)
+  [ ] POSIX message queue (mq_open/mq_send/mq_receive)
+  [ ] eventfd / signalfd
+
+
+================================================================
+  SHELL & SCRIPTING
+================================================================
+
+Built-in commands
+  [x] help, clear, about, reboot, shutdown/poweroff
+  [x] echo [teks / $VAR / $? / $$], date, time, uptime
+  [x] ls [path] [-l long format], cd [path], pwd
+  [x] mkdir <nama>, chmod <nama> <hex>, sync
+  [x] read <VARNAME>   — baca baris keyboard ke variabel
+  [x] read <file>      — tampilkan isi file
+  [x] write <file> <teks>
+  [x] del <file>, rename <lama> <baru>
+  [x] cat [file...], cp <src> <dst>, mv <src> <dst>
+  [x] wc [file], head [-n N] [file], tail [-n N] [file]
+  [x] find <dir> <pola>, stat <file>, touch <file>
+  [x] df         — slot file MFS4 yang dipakai/bebas
+  [x] du [path]  — total ukuran file di path
+  [x] sort [file] / stdin — urutkan baris teks
+  [x] dmesg      — tampilkan kernel ring buffer log
+  [x] ps, kill [-sig] <pid>, nice <n> <cmd>, renice <pid> <n>
+  [x] env, export KEY=VAL
+  [x] meminfo, cpuinfo, taskstat, paging
+  [x] history    — riwayat 50 perintah
+  [x] open/fread/fwrite/fclose — fd manual
+  [x] mq_send <pid> <pesan>, mq_recv
+  [x] ping <ip>, ifconfig, udp_send, tcp_get, curl <url>
+  [x] nslookup <host>, ntpdate, certcheck [host]
+  [x] vdisk, mount ext2, ext2ls, ext2cat
+  [x] httpd [start [port] | stop]
+  [x] ws <url>   — WebSocket client
+  [x] kdbg       — kernel debugger via serial
+  [x] whoami, login, adduser, passwd, su
+  [x] edit <file> — text editor nano-like
+  [x] sh [script.sh] — jalankan script shell
+  [ ] jobs, fg %N, bg %N — job control
+  [ ] which <cmd>
+  [ ] alias / unalias
+  [ ] top         — realtime process monitor
+  [ ] set -e / set -x untuk debug script
+
+Shell features
+  [x] Pipeline multi-stage: prog1 | prog2 | ... | prog6
+  [x] Redirect output: prog > file
+  [x] Redirect append: prog >> file
+  [x] Redirect input: prog < file
+  [x] Background: cmd &
+  [x] Conditional: cmd1 && cmd2, cmd1 || cmd2
+  [x] Variable expansion: $VAR, $?, $$
+  [x] Auto-exec (program tanpa prefix 'exec')
+  [x] Tab completion (command + filename)
+  [x] Command history (arrow up/down)
+  [x] ANSI/VT100 output dari program user
+  [x] Script: if/else/fi, while/do/done, for/in/do/done
+  [x] Script: $1..$9 argumen, komentar #
+  [ ] Here-doc (<<EOF)
+  [ ] Glob pattern *, ? dalam ls/find
+  [ ] Subshell $(...) command substitution
+  [ ] Brace expansion {a,b,c}
+
+
+================================================================
+  USER SPACE & LIBRARY (lib.h)
+================================================================
+
+  [x] Syscall wrappers syscall0..3 via SYSCALL instruction
+  [x] print / exit / getkey / sleep / yield / getpid
+  [x] malloc / free: user heap via SYS_BRK, linked list + coalescing
+  [x] malloc thread-safe via futex mutex
+  [x] memcpy, memset, memmove, memcmp
+  [x] strlen, strcpy, strcat, strcmp, strstr, strncpy
+  [x] sprintf / vsprintf / printf: %d %i %u %x %s %c %p %%
+  [x] atoi / strtol (base 0/8/10/16)
+  [x] itoa (basis 10)
+  [x] getargv / argc/argv dari stack (System V AMD64 ABI)
+  [x] fork / exec / exec_replace / waitpid
+  [x] thread_create / thread_exit / thread_join / thread_set_name
+  [x] sem_alloc/free/wait/post
+  [x] cond_alloc/free/wait/signal/broadcast
+  [x] mutex_lock/unlock via futex
+  [x] mmap / munmap
+  [x] sys_open / sys_read_fd / sys_write_fd / sys_close_fd
+  [x] fcntl_setfl / poll (POLLIN/POLLOUT, timeout)
+  [x] signal / kill
+  [x] dns_resolve (UDP, A record)
+  [x] net_tcp_connect/send/recv/close
+  [x] clipboard_copy / clipboard_paste
+  [x] tls_get (FS MSR TLS base)
+  [ ] scanf / sscanf
+  [ ] qsort / bsearch
+  [ ] time() / gettimeofday()
+  [ ] errno global per-thread
+  [ ] FILE* stdio (fopen/fread/fwrite/fclose/fseek)
+  [ ] Floating point support (printf %f)
+  [ ] Dynamic library loading (.so)
+
+User programs (ELF64, di-embed di kernel image)
+  [x] hello, sender, writer          — demo dasar
+  [x] piper, pipe_sender, pipe_receiver — demo pipe
+  [x] devtest                        — demo device driver
+  [x] gfxtest                        — demo framebuffer
+  [x] gui_demo, gui_term             — demo window manager
+  [x] paint, calc, notepad, filemanager, clock, sysinfo — GUI apps
+  [x] threadtest, condtest, forktest — demo threading/sync
+  [x] pipetest, polltest, futextest  — demo IPC/poll/futex
+  [x] mfs4test, sigtest              — demo MFS4 + signal
+  [x] grep, sort, cat, wc, head, cp, mv, ls, edit — tools Unix
+  [ ] tail (ELF) — saat ini hanya built-in shell
+  [ ] awk, sed, less/more, zip/gzip
+
+
+================================================================
+  GUI & WINDOW MANAGER
+================================================================
+
+  [x] Window manager: max 16 window, drag, minimize, close
+  [x] Taskbar: daftar window aktif, klik untuk focus/restore
+  [x] Wallpaper: load raw BGRA32 960x540 dari disk (wallpaper.img)
+  [x] Window syscalls: create/destroy/draw/clear/event/btn_add
+  [x] Mouse: klik, drag window, scroll
+  [x] Clipboard copy/paste antar window
+  [ ] Window resize oleh user (drag border)
+  [ ] Compositing / alpha blending
+  [ ] Ikon desktop / shortcut
+  [ ] Notifikasi / popup toast
+  [ ] Font TrueType / anti-aliased
+
+
+================================================================
+  KEAMANAN & USER MANAGEMENT
+================================================================
+
+  [x] Ring-3 isolasi penuh (user space tidak bisa akses kernel)
+  [x] is_user_ptr() validasi pointer syscall
+  [x] User accounts: /etc/passwd, /etc/shadow (hash SHA-256)
+  [x] login / whoami / su / passwd / adduser
+  [x] chmod permission bits per file (MFS4 perms)
+  [ ] Mandatory access control (MAC)
+  [ ] Sandbox / seccomp filter
+  [ ] Stack canary (compile-time)
+  [ ] ASLR untuk user space
+  [ ] Audit log syscall
+
+
+================================================================
+  SYSCALL INDEX (100 total, SYS 0-99)
+================================================================
+
+  SYS 0   print              SYS 50  fs_tmpwrite
+  SYS 1   getkey             SYS 51  fs_mkdir
+  SYS 2   exit               SYS 52  pipe_named
+  SYS 3   alloc              SYS 53  shm_create
+  SYS 4   free               SYS 54  shm_attach
+  SYS 5   fs_read            SYS 55  shm_detach
+  SYS 6   fs_write           SYS 56  open
+  SYS 7   msg_send           SYS 57  read_fd
+  SYS 8   msg_recv           SYS 58  write_fd
+  SYS 9   kill               SYS 59  close_fd
+  SYS 10  sem_alloc          SYS 60  mq_send
+  SYS 11  sem_free           SYS 61  mq_recv
+  SYS 12  sem_wait           SYS 62  brk
+  SYS 13  sem_post           SYS 63  waitpid
+  SYS 14  pipe_open          SYS 64  thread_create
+  SYS 15  pipe_write         SYS 65  thread_exit
+  SYS 16  pipe_read          SYS 66  thread_join
+  SYS 17  pipe_close         SYS 67  thread_set_name
+  SYS 18  pipe_getid         SYS 68  cond_alloc
+  SYS 19  dev_write          SYS 69  cond_free
+  SYS 20  dev_read           SYS 70  cond_wait
+  SYS 21  dev_ioctl          SYS 71  cond_signal
+  SYS 22  draw_pixel         SYS 72  cond_broadcast
+  SYS 23  fill_screen        SYS 73  fork
+  SYS 24  fill_rect          SYS 74  exec_replace
+  SYS 25  draw_line          SYS 75  mmap
+  SYS 26  clr_screen         SYS 76  munmap
+  SYS 27  getpid             SYS 77  pipe2
+  SYS 28  yield              SYS 78  net_open
+  SYS 29  sleep              SYS 79  tty_open
+  SYS 30  exec               SYS 80  pipe_redirect
+  SYS 31  draw_char          SYS 81  mfs4_symlink
+  SYS 32  draw_str           SYS 82  mfs4_hardlink
+  SYS 33  mouse_get          SYS 83  mfs4_stat
+  SYS 34  win_create         SYS 84  mfs4_listdir
+  SYS 35  win_destroy        SYS 85  mfs4_unlink
+  SYS 36  win_draw           SYS 86  mfs4_mkdir
+  SYS 37  win_clear          SYS 87  sigaction
+  SYS 38  win_event          SYS 88  sigkill_sig
+  SYS 39  win_btn_add        SYS 89  futex_wait
+  SYS 40  win_click_pos      SYS 90  futex_wake
+  SYS 41  win_draw_pixel     SYS 91  get_tls
+  SYS 42  win_fill_rect      SYS 92  mfs4_rename
+  SYS 43  win_mouse_rel      SYS 93  fcntl
+  SYS 44  win_minimize       SYS 94  poll
+  SYS 45  win_restore        SYS 95  getargv
+  SYS 46  fs_list            SYS 96  clip_copy
+  SYS 47  fs_delete          SYS 97  clip_paste
+  SYS 48  get_ticks          SYS 98  mmap_file
+  SYS 49  fs_sync            SYS 99  munmap_file
