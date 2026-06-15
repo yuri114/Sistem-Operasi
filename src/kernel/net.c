@@ -571,6 +571,20 @@ static void tcp_tx(TcpConn *c, uint8_t flags, uint32_t seq, uint32_t ack,
     rtl8139_send(pkt_buf, (uint16_t)(14 + 20 + tcp_tlen));
 }
 
+/* Balas SYN yang ditolak (accept queue/slot TcpConn penuh) dengan RST+ACK,
+ * agar client langsung tahu koneksi ditolak alih-alih menunggu timeout.
+ * Pakai TcpConn statis sementara — hanya dst_ip/dst_mac/port dipakai tcp_tx(). */
+static TcpConn rst_reply_conn;
+static void tcp_send_rst_reply(const uint8_t src_ip[4], const uint8_t *eth_src_mac,
+                                uint16_t our_port, uint16_t remote_port, uint32_t ack) {
+    int ki;
+    for (ki = 0; ki < 4; ki++) rst_reply_conn.dst_ip[ki] = src_ip[ki];
+    for (ki = 0; ki < 6; ki++) rst_reply_conn.dst_mac[ki] = eth_src_mac[ki];
+    rst_reply_conn.src_port = our_port;
+    rst_reply_conn.dst_port = remote_port;
+    tcp_tx(&rst_reply_conn, TCP_RST | TCP_ACK, 0, ack, 0, 0);
+}
+
 /* ---- push received data into connection rx ring buffer ---- */
 static void tcp_rx_push(TcpConn *c, const uint8_t *data, uint16_t len) {
     uint16_t i;
@@ -618,7 +632,9 @@ static void tcp_rx_process(const uint8_t *ip_hdr, const uint8_t *tcp_seg, int tc
                                                 || c->state == TCP_FIN_WAIT2) {
             /* F-X1: ACK clears retransmit buffer jika semua data ter-ack */
             if (flags & TCP_ACK) {
-                if (c->tx_len > 0 && sack >= c->tx_seq + c->tx_len)
+                /* Signed-diff comparison (RFC 1323) agar wraparound 32-bit
+                 * sequence number ditangani benar, bukan unsigned >= biasa. */
+                if (c->tx_len > 0 && (int32_t)(sack - (c->tx_seq + c->tx_len)) >= 0)
                     c->tx_len = 0;
                 if (c->state == TCP_FIN_WAIT1 && sack == c->snd_nxt)
                     c->state = TCP_FIN_WAIT2;
@@ -677,14 +693,22 @@ static void tcp_rx_process(const uint8_t *ip_hdr, const uint8_t *tcp_seg, int tc
             if (!tcp_listen[li].active) continue;
             if (tcp_listen[li].port != rdp) continue;
             /* rdp = our port (dst of incoming packet) */
-            if (tcp_listen[li].aq_count >= 2) break; /* accept queue penuh */
+            if (tcp_listen[li].aq_count >= 2) {
+                /* accept queue penuh — tolak dgn RST, jangan drop diam-diam */
+                tcp_send_rst_reply(src_ip, ip_hdr - 14 + 6, rdp, rsp, sseq + 1);
+                break;
+            }
 
             /* Alokasikan TcpConn baru */
             int ci;
             for (ci = 0; ci < TCP_MAX_CONN; ci++) {
                 if (!tcp_conns[ci].used) break;
             }
-            if (ci >= TCP_MAX_CONN) break;
+            if (ci >= TCP_MAX_CONN) {
+                /* tidak ada slot TcpConn tersisa — tolak dgn RST */
+                tcp_send_rst_reply(src_ip, ip_hdr - 14 + 6, rdp, rsp, sseq + 1);
+                break;
+            }
 
             TcpConn *nc = &tcp_conns[ci];
             int ki;
@@ -758,6 +782,8 @@ static int dns_build_query(uint8_t *buf, const char *hostname, uint16_t txid) {
         const char *dot = p;
         while (*dot && *dot != '.') dot++;
         int llen = (int)(dot - p);
+        /* Pastikan label + terminasi + QTYPE/QCLASS masih muat di buf */
+        if (pos + 1 + llen + 5 > DNS_MAX_PKT) return -1;
         buf[pos++] = (uint8_t)llen;
         for (j = 0; j < llen; j++) buf[pos++] = (uint8_t)p[j];
         p = dot;
@@ -829,6 +855,7 @@ int dns_resolve(const char *hostname, uint8_t out_ip[4]) {
     static uint16_t dns_txid = 0x4400;
     uint16_t txid = ++dns_txid;
     int qlen = dns_build_query(qbuf, hostname, txid);
+    if (qlen < 0) return 0;  /* hostname terlalu panjang untuk DNS_MAX_PKT */
 
     /* Kirim 3 kali (timeout 1s per attempt) */
     int attempt;

@@ -15,8 +15,13 @@ extern void set_color(uint32_t fg, uint32_t bg);
 
 /* Konstanta */
 #define TLS_MAX_CONN          4
-#define TLS_REC_BUF        8192
-#define TLS_APP_BUF        8192
+/* TLS 1.3 (RFC 8446 5.1) membatasi TLSPlaintext.length <= 2^14 (16384).
+ * Sebelumnya 8192 menyebabkan read_record() menolak (return -1, koneksi
+ * gagal) record berukuran 8193-16384 byte yang sah dikirim server.
+ * TLS_APP_BUF ikut dinaikkan agar ap_buf selalu cukup menampung sisa
+ * data terdekripsi dari satu record penuh. */
+#define TLS_REC_BUF       16384
+#define TLS_APP_BUF       16384
 #define TLS_HANDSHAKE      0x16
 #define TLS_APP_DATA       0x17
 #define TLS_ALERT          0x15

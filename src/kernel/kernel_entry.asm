@@ -162,10 +162,18 @@ long_mode_entry:
     mov  gs, ax
     mov  ss, ax
 
-    ; Stack kernel awal — BSS dipindah ke 0x4000000 (64MB, di luar jangkauan PMM).
-    ; Conventional RAM setelah .data end (0x76148) sampai 0x9FBFF aman dipakai stack.
-    ; 0x9F000: tepat di bawah EBDA (0x9FC00), gives ~163KB stack space. ✓
-    mov  rsp, 0x9F000
+    ; Stack kernel awal — diletakkan SETELAH .bss (0x4000000-0x41FFFFF, ~1MB
+    ; terpakai), masih di dalam region 2MB yang dipetakan pd_low[32] (vmm.c)
+    ; sehingga tetap accessible walau CR3 user process aktif.
+    ;
+    ; CATATAN SEJARAH: stack lama dipasang di 0x9F000 dengan asumsi ".data
+    ; end (0x76148)". Setelah banyak fitur ditambahkan, .data sekarang
+    ; berakhir di ~0xA0280 — overlap dengan 0x9F000! Stack growing-down dari
+    ; 0x9F000 menimpa tail .data (variabel global) tepat saat kernel_main()
+    ; mulai berjalan -> korupsi data sebelum idt_init() -> #fault tanpa
+    ; handler -> triple fault -> reset loop ("bootnya looping di kernel").
+    ; Fix: pindahkan stack ke 0x4200000 (di atas .bss, masih dalam pd_low[32]).
+    mov  rsp, 0x4200000
 
     ; Tulis 'LM' ke VGA text buffer (diagnostik)
     mov  word [0xB8000], 0x0F4C

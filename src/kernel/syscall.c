@@ -378,6 +378,7 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
     // SYS_FS_LIST(46): list nama file ke buffer
     if (eax == SYS_FS_LIST) {
         if (!is_user_ptr(ebx)) return 0;
+        if ((int)edx <= 0) return 0;
         return (uint32_t)fs_list_buf((char*)ebx, (int)edx);
     }
 
@@ -467,6 +468,7 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         typedef struct { char *buf; int len; } RArgs;
         RArgs *a = (RArgs*)edx;
         if (!is_user_ptr((uint64_t)a->buf)) return (uint64_t)-1;
+        if (a->len < 0 || a->len > 65536) return (uint64_t)-1;
         int tid = task_get_current();
         return (uint64_t)vfs_read(tid, (int)ebx, a->buf, a->len);
     }
@@ -476,6 +478,7 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         typedef struct { const char *buf; int len; } WArgs;
         WArgs *a = (WArgs*)edx;
         if (!is_user_ptr((uint64_t)a->buf)) return (uint64_t)-1;
+        if (a->len < 0 || a->len > 65536) return (uint64_t)-1;
         int tid = task_get_current();
         return (uint64_t)vfs_write(tid, (int)ebx, a->buf, a->len);
     }
@@ -516,6 +519,14 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         if (new_end == 0) return cur_end;          /* query current brk */
         if (new_end <= cur_end) return cur_end;    /* no shrink */
         if (new_end > 0x5FE000ULL) return cur_end; /* jangan masuk guard page */
+        /* Tier-1: tegakkan rlimit_mem (KB) jika diset via SYS_SETRLIMIT.
+         * Heap dimulai dari 0x400000, jadi ukuran heap = new_end - 0x400000. */
+        {
+            uint32_t mem_kb = 0; uint16_t fds_unused = 0;
+            task_get_rlimit(tid, &mem_kb, &fds_unused);
+            if (mem_kb && (new_end - 0x400000ULL) > (uint64_t)mem_kb * 1024ULL)
+                return cur_end;
+        }
         /* Petakan frame baru untuk halaman yang belum dipetakan */
         uint64_t *pdir = task_get_page_dir(tid);
         uint64_t pg;
@@ -687,8 +698,9 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         int tid = task_get_current();
         uint64_t *pdir = task_get_page_dir(tid);
         if (!pdir) return 0;
-        /* VA bump allocator mulai dari 0x900000 */
+        /* VA bump allocator mulai dari 0x900000, batas atas 0xB00000 (region mmap_file) */
         static uint64_t mmap_next_va = 0x900000ULL;
+        if (mmap_next_va + n * 0x1000ULL > 0xB00000ULL) return 0;
         uint64_t va_base = mmap_next_va;
         uint64_t i;
         for (i = 0; i < n; i++) {
@@ -992,6 +1004,10 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
         if (!is_user_ptr(ebx) || !is_user_ptr(edx)) return 0;
         int tid = task_get_current();
         int ac  = tasks_getargc(tid);
+        /* Defensif: uargv di user-space diasumsikan punya 9 slot (argv[0..7] + NULL).
+         * ac sudah dibatasi <=8 di task.c, tapi clamp di sini agar penulisan
+         * uargv[ac] selalu di dalam batas walau batas itu berubah nanti. */
+        if (ac > 8) ac = 8;
         const char *src = tasks_getargbuf(tid);  /* pointer ke kernel arg_buf */
         /* Salin arg_buf ke user buffer (max 512 byte) */
         int i;
@@ -1008,7 +1024,7 @@ uint64_t syscall_handler(uint64_t eax, uint64_t ebx, uint64_t edx) {
             while (*p) p++;
             p++;  /* lewati null */
         }
-        if (ac <= 8) uargv[ac] = 0;  /* null sentinel */
+        uargv[ac] = 0;  /* null sentinel */
         return (uint64_t)(unsigned int)ac;
     }
 

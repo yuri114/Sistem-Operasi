@@ -87,10 +87,11 @@ void smp_ap_entry(void)
     idt_reload();
 
     /* --- 3. Setup TSS per-AP dan load TR ---
-     * Stack top sama dengan formula di trampoline:
-     *   0x9F000 - apic_id * 8192
+     * Stack top sama dengan formula di trampoline (di atas .bss, dalam
+     * region 2MB pd_low[32] — lihat smp_trampoline.asm):
+     *   0x4200000 - apic_id * 8192
      * (APIC ID dipakai karena itulah yang dipakai trampoline) */
-    stack_top = 0x9F000ULL - (uint64_t)my_apic_id * 8192ULL;
+    stack_top = 0x4200000ULL - (uint64_t)my_apic_id * 8192ULL;
     tss64_ap_init(cpu_idx, stack_top);
 
     /* --- 4. Aktifkan LAPIC pada AP ini ---

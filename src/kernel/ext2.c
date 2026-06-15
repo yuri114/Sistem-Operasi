@@ -211,6 +211,13 @@ static int read_inode(uint32_t ino) {
 
 /* ------------------------------------------------------------------ */
 /* Get data block number for logical block idx within an inode        */
+/*
+ * Catatan: fungsi ini memakai buffer scratch statis (g_indir_buf, indir2)
+ * yang dipakai ulang antar pemanggilan. Aman untuk pemanggilan berurutan
+ * (driver ext2 ini single-threaded, tidak reentrant), tapi JANGAN dipanggil
+ * secara nested/rekursif (mis. dari dalam ext2_read_block callback lain)
+ * karena akan saling menimpa isi buffer.
+ */
 /* ------------------------------------------------------------------ */
 static uint32_t inode_get_block(uint32_t idx) {
     uint32_t ptrs_per_block = g_block_size / 4;

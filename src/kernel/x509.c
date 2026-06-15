@@ -82,6 +82,7 @@ static int asn1_peek(const uint8_t *der, uint32_t pos, uint32_t dlen,
     uint8_t tag = der[pos++];
     int32_t clen = asn1_length(der, &pos, dlen);
     if (clen < 0) return -1;
+    if ((uint32_t)clen > dlen - pos) return -1;  /* konten tidak boleh melampaui sisa buffer */
     if (tag_out)  *tag_out  = tag;
     if (clen_out) *clen_out = (uint32_t)clen;
     if (hdr_out)  *hdr_out  = pos - start;

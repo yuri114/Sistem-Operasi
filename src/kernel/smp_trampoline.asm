@@ -99,10 +99,12 @@ lmode_entry:
     mov gs, ax
 
     ; Stack per-AP unik berdasarkan LAPIC ID (8KB per AP)
-    ; BSS sudah di 0x700000 — conventional RAM 0x76148-0x9FBFF aman.
-    ; Formula: 0x9F000 - apic_id * 8192
-    ;   AP1 (id=1): 0x9D000-0x9F000, AP2 (id=2): 0x9B000-0x9D000
-    ; Semua di atas .data end (0x76148) dan di bawah EBDA (0x9FC00) ✓
+    ; Base 0x4200000: di atas .bss (0x4000000-0x41FFFFF), masih dalam region
+    ; 2MB yang dipetakan pd_low[32] (vmm.c) sehingga tetap accessible walau
+    ; CR3 user process aktif. (Base lama 0x9F000 overlap dengan tail .data
+    ; setelah kernel bertambah besar -> korupsi global var -> triple fault.)
+    ; Formula: 0x4200000 - apic_id * 8192
+    ;   AP1 (id=1): 0x41FE000-0x4200000, AP2 (id=2): 0x41FC000-0x41FE000
     ;
     ; PENTING: jangan tulis [0xFEE00020] langsung — NASM di BITS 64 menghasilkan
     ; SIB+disp32 yang di-sign-extend ke 0xFFFFFFFFFEE00020 (tidak di-map!).
@@ -113,8 +115,8 @@ lmode_entry:
     and eax, 0xFF
     movzx rax, al
     shl   rax, 13           ; * 8192 (8KB per AP)
-    mov   rsp, 0x9F000
-    sub   rsp, rax          ; AP1: 0x9D000, AP2: 0x9B000, ...
+    mov   rsp, 0x4200000
+    sub   rsp, rax          ; AP1: 0x41FE000, AP2: 0x41FC000, ...
 
     ; Lompat ke fungsi C smp_ap_entry (64-bit RIP-relative dari patch field)
     ; [patch_ap_entry] = [0x7020] dengan ORG 0x7000 ✓

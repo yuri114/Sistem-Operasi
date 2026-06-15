@@ -107,9 +107,13 @@ const char *mfs4_resolve(const char *path, int max_depth)
     int d;
     for (d = 0; d < max_depth; d++) {
         MFS4Inode *nd = find_inode(resolved);
-        if (!nd || nd->type != MFS4_TYPE_SYMLINK) break;
+        if (!nd || nd->type != MFS4_TYPE_SYMLINK) return resolved;
         s_copy(resolved, nd->target, MFS4_PATH_LEN);
     }
+    /* Masih symlink setelah max_depth iterasi → cycle (A->B->A) atau chain
+     * terlalu panjang. Kembalikan "" agar find_inode() di pemanggil gagal
+     * (-1) secara jelas, bukan path symlink yang belum ter-resolve. */
+    resolved[0] = '\0';
     return resolved;
 }
 
@@ -369,7 +373,17 @@ int mfs4_rename(const char *old_path, const char *new_path)
     /* Untuk FILE: rename entry di MFS3 terlebih dulu */
     if (nd->type == MFS4_TYPE_FILE) {
         if (fs_rename(nd->target, new_path) != 0) return -1;
-        s_copy(nd->target, new_path, MFS4_PATH_LEN);
+        /* Propagasikan target baru ke semua hardlink yang share inode_id
+         * (termasuk nd sendiri) — data MFS3 sudah berpindah nama, jadi
+         * setiap inode yang merujuk ke nama lama kini akan menjadi broken
+         * link kalau target-nya tidak ikut diupdate. */
+        int i;
+        for (i = 0; i < MFS4_MAX_INODES; i++) {
+            if (inodes[i].used && inodes[i].type == MFS4_TYPE_FILE &&
+                inodes[i].inode_id == nd->inode_id) {
+                s_copy(inodes[i].target, new_path, MFS4_PATH_LEN);
+            }
+        }
     }
 
     s_copy(nd->path, new_path, MFS4_PATH_LEN);

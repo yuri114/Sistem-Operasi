@@ -5,6 +5,7 @@
 
 #define PIPE_MAX 8    // jumlah pipe serentak
 #define PIPE_BUF 256  // ukuran ring buffer per pipe
+#define PIPE_WAITER_MAX 4  // maksimum reader yang bisa menunggu sekaligus per pipe
 
 typedef struct {
     char     buf[PIPE_BUF];  // ring buffer data
@@ -13,7 +14,8 @@ typedef struct {
     uint8_t  used;           // slot aktif?
     uint8_t  eof;            // 1 = semua write-end tutup; pembaca dapat EOF
     int8_t   write_refs;     // jumlah fd write-end yang aktif
-    int      reader_waiter;  // tid blocked di pipe_read (-1 = tidak ada)
+    int      reader_waiters[PIPE_WAITER_MAX]; // ring tid blocked di pipe_read
+    uint8_t  rw_head, rw_tail;                // index ring reader_waiters
 } Pipe;
 
 // Inisialisasi semua slot pipe

@@ -3,6 +3,13 @@
 
 static Pipe pipes[PIPE_MAX];
 
+static void pipe_reset_waiters(int id) {
+    int j;
+    for (j = 0; j < PIPE_WAITER_MAX; j++) pipes[id].reader_waiters[j] = -1;
+    pipes[id].rw_head = 0;
+    pipes[id].rw_tail = 0;
+}
+
 void pipe_init_all() {
     int i;
     for (i = 0; i < PIPE_MAX; i++) {
@@ -11,7 +18,7 @@ void pipe_init_all() {
         pipes[i].tail          = 0;
         pipes[i].eof           = 0;
         pipes[i].write_refs    = 0;
-        pipes[i].reader_waiter = -1;
+        pipe_reset_waiters(i);
     }
 }
 
@@ -24,11 +31,30 @@ int pipe_alloc() {
             pipes[i].tail          = 0;
             pipes[i].eof           = 0;
             pipes[i].write_refs    = 0;
-            pipes[i].reader_waiter = -1;
+            pipe_reset_waiters(i);
             return i;
         }
     }
     return -1;
+}
+
+/* Enqueue tid ke ring reader_waiters. Return 0 sukses, -1 jika penuh. */
+static int pipe_enqueue_waiter(int id, int tid) {
+    uint8_t next = (pipes[id].rw_tail + 1) % PIPE_WAITER_MAX;
+    if (next == pipes[id].rw_head) return -1;  /* ring penuh */
+    pipes[id].reader_waiters[pipes[id].rw_tail] = tid;
+    pipes[id].rw_tail = next;
+    return 0;
+}
+
+/* Dequeue satu reader waiter. Return tid atau -1 jika kosong. */
+static int pipe_dequeue_waiter(int id) {
+    int tid;
+    if (pipes[id].rw_head == pipes[id].rw_tail) return -1;  /* ring kosong */
+    tid = pipes[id].reader_waiters[pipes[id].rw_head];
+    pipes[id].reader_waiters[pipes[id].rw_head] = -1;
+    pipes[id].rw_head = (pipes[id].rw_head + 1) % PIPE_WAITER_MAX;
+    return tid;
 }
 
 void pipe_free(int id) {
@@ -42,17 +68,17 @@ void pipe_writer_attach(int id) {
 }
 
 void pipe_writer_detach(int id) {
-    int w;
+    int w, waiters[PIPE_WAITER_MAX], n, i;
     if (id < 0 || id >= PIPE_MAX || !pipes[id].used) return;
     __asm__ volatile ("cli");
     if (pipes[id].write_refs > 0) pipes[id].write_refs--;
     if (pipes[id].write_refs == 0) {
         pipes[id].eof = 1;
-        /* Bangunkan pembaca yang sedang tunggu agar dapat EOF */
-        w = pipes[id].reader_waiter;
-        pipes[id].reader_waiter = -1;
+        /* Bangunkan semua pembaca yang sedang tunggu agar dapat EOF */
+        n = 0;
+        while ((w = pipe_dequeue_waiter(id)) >= 0) waiters[n++] = w;
         __asm__ volatile ("sti");
-        if (w >= 0) task_unblock(w);
+        for (i = 0; i < n; i++) task_unblock(waiters[i]);
     } else {
         __asm__ volatile ("sti");
     }
@@ -79,9 +105,8 @@ int pipe_write(int id, const char *str) {
         p->buf[p->tail] = '\0';
         p->tail = next;
     }
-    /* Bangunkan pembaca yang sedang menunggu */
-    w = p->reader_waiter;
-    p->reader_waiter = -1;
+    /* Bangunkan satu pembaca yang sedang menunggu */
+    w = pipe_dequeue_waiter(id);
     __asm__ volatile ("sti");
     if (w >= 0) task_unblock(w);
     return written;
@@ -100,7 +125,14 @@ int pipe_read(int id, char *buf) {
             __asm__ volatile ("sti");
             return 0;
         }
-        pipes[id].reader_waiter = task_get_current();
+        if (pipe_enqueue_waiter(id, task_get_current()) < 0) {
+            /* Ring waiter penuh — tidak aman untuk task_block (tidak akan
+             * dibangunkan oleh pipe_write/detach). Yield dan coba lagi. */
+            __asm__ volatile ("sti");
+            task_yield();
+            task_check_signals();
+            continue;
+        }
         __asm__ volatile ("sti");
         task_block();  /* tidur sampai pipe_write/detach membangunkan */
         /* F-T: sinyal pending (mis. SIGINT dari Ctrl+C) → batalkan baca */

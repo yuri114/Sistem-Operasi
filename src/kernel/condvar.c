@@ -57,7 +57,16 @@ void cv_free(int id) {
 int cv_wait(int id, int sem_id) {
     if (id < 0 || id >= CV_MAX || !cvars[id].used) return -1;
     __asm__ volatile ("cli");
-    cv_enqueue(&cvars[id], task_get_current());
+    if (cv_enqueue(&cvars[id], task_get_current()) < 0) {
+        /* Ring waiter penuh — tidak aman untuk task_block (tidak akan
+         * dibangunkan oleh cv_signal/broadcast). Lepas+reacquire mutex
+         * lalu yield supaya caller bisa retry cek predikat. */
+        __asm__ volatile ("sti");
+        sem_post(sem_id);
+        task_yield();
+        sem_wait(sem_id);
+        return 0;
+    }
     sem_post(sem_id);               /* lepas mutex (IRQ cepat diaktifkan kembali di dalam) */
     __asm__ volatile ("sti");
     task_block();                   /* tidur */

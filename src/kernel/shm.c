@@ -71,7 +71,7 @@ int shm_attach(int id, uint64_t *pml4) {
 
 int shm_detach(int id, uint64_t *pml4) {
     if (id < 0 || id >= SHM_MAX || !shm_slots[id].phys) return 0;
-    shm_slots[id].refcount--;
+    if (shm_slots[id].refcount > 0) shm_slots[id].refcount--;
     /* Tidak unmap halaman dari page table (tidak ada vmm_unmap yet) */
     return 1;
 }

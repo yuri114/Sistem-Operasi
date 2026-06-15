@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd \"/d/Sistem Operasi\" && grep -n \"paging_init\" -A40 src/kernel/paging.c | head -80)",
+      "Read(//d/d/Sistem Operasi/src/kernel/**)",
+      "Bash(cd \"/d/Sistem Operasi\" && ls -la build/kernel.bin build/kernel.elf build/os.img 2>/dev/null && date)",
+      "Read(//d/d/Sistem Operasi/build/**)",
+      "Bash(wmic process *)",
+      "Bash(wc -l build/build_log.txt)",
+      "Bash(tail -30 build/build_log.txt)"
+    ]
+  }
+}

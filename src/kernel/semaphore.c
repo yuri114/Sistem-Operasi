@@ -64,7 +64,13 @@ int sem_wait(int id) {
             return 0;
         }
         /* Tidak tersedia — enqueue diri ke ring waiter, lalu blokir */
-        sem_enqueue(id, task_get_current());
+        if (sem_enqueue(id, task_get_current()) < 0) {
+            /* Ring waiter penuh — tidak aman untuk task_block (tidak akan
+             * dibangunkan oleh sem_post). Yield dan coba lagi nanti. */
+            __asm__ volatile ("sti");
+            task_yield();
+            continue;
+        }
         __asm__ volatile ("sti");
         task_block();  /* tidur sampai sem_post membangunkan */
         /* Setelah dibangunkan, coba cek ulang (spurious wake safe) */

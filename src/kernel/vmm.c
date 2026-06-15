@@ -1,8 +1,9 @@
 /* vmm.c ? Physical and Virtual Memory Manager (64-bit, 4-level paging)
  *
  * PMM: bitmap untuk 64MB / 4KB = 16384 frame.
- *   Frame 0-767    (0-3MB)   : kernel / boot page tables — ditandai USED.
- *   Frame 768-16383 (3-64MB) : bebas, dialokasikan untuk user processes.
+ *   Frame 0-2047     (0-8MB)  : kernel image, heap, boot page tables —
+ *                                ditandai USED (lihat KERNEL_RESERVED_FRAMES).
+ *   Frame 2048-16383 (8-64MB) : bebas, dialokasikan untuk user processes.
  *
  * VMM per-proses:
  *   Setiap proses mempunyai PML4 sendiri.
@@ -10,8 +11,9 @@
  *   proc_pdpt[1] = 0x4003  (boot PD 1-2GB, shared, identity-mapped)
  *   proc_pdpt[2] = 0x5003  (boot PD 2-3GB, shared)
  *   proc_pdpt[3] = 0x6003  (boot PD 3-4GB, shared, VBE LFB ada di sini)
- *   proc_pd_low[0] = 2MB large page 0x000000 (kernel code, P+RW+User+PS)
- *   proc_pd_low[1..N] = PT 4KB pages untuk user code/stack (isi vmm_map_page)
+ *   proc_pd_low[0-3] = 2MB large pages 0x000000-0x7FFFFF (heap + kernel
+ *                      image @ 0x700000, P+RW+User+PS)
+ *   proc_pd_low[4..N] = PT 4KB pages untuk user code/stack (isi vmm_map_page)
  */
 #include "vmm.h"
 #include "memory.h"
@@ -20,6 +22,10 @@
  * Physical Memory Manager
  * =================================================================== */
 #define TOTAL_FRAMES 16384  /* 64MB / 4KB */
+/* Frame 0..KERNEL_RESERVED_FRAMES-1 (0-8MB) : kernel image, heap, boot page
+ * tables, .bss/stack — ditandai USED, tidak pernah dialokasikan ke user.
+ * Mencakup heap [0x100000-0x700000) dan kernel image @ 0x700000 (linker.ld). */
+#define KERNEL_RESERVED_FRAMES 2048  /* 8MB / 4KB */
 static uint8_t frame_bitmap[TOTAL_FRAMES / 8];
 static uint8_t frame_cow_cnt[TOTAL_FRAMES];  /* COW ref-count per frame */
 
@@ -36,13 +42,13 @@ static int bitmap_test(uint32_t frame) {
 void pmm_init() {
     int i;
     for (i = 0; i < TOTAL_FRAMES / 8; i++) frame_bitmap[i] = 0;
-    /* Tandai 0-3MB (768 frame) sebagai sudah dipakai */
-    for (i = 0; i < 768; i++) bitmap_set(i);
+    /* Tandai 0-8MB (KERNEL_RESERVED_FRAMES frame) sebagai sudah dipakai */
+    for (i = 0; i < KERNEL_RESERVED_FRAMES; i++) bitmap_set(i);
 }
 
 uint64_t pmm_alloc_frame() {
     int i;
-    for (i = 768; i < TOTAL_FRAMES; i++) {
+    for (i = KERNEL_RESERVED_FRAMES; i < TOTAL_FRAMES; i++) {
         if (!bitmap_test(i)) {
             bitmap_set(i);
             return (uint64_t)i * PAGE_SIZE;
@@ -53,14 +59,14 @@ uint64_t pmm_alloc_frame() {
 
 void pmm_free_frame(uint64_t addr) {
     uint32_t frame = (uint32_t)(addr / PAGE_SIZE);
-    if (frame >= 768 && frame < TOTAL_FRAMES)
+    if (frame >= KERNEL_RESERVED_FRAMES && frame < TOTAL_FRAMES)
         bitmap_clear(frame);
 }
 
 uint32_t pmm_free_count() {
     uint32_t count = 0;
     int i;
-    for (i = 768; i < TOTAL_FRAMES; i++)
+    for (i = KERNEL_RESERVED_FRAMES; i < TOTAL_FRAMES; i++)
         if (!bitmap_test(i)) count++;
     return count;
 }
@@ -200,6 +206,12 @@ uint64_t *vmm_create_page_dir() {
      * Diperlukan agar kernel heap (0x100000-0x2FFFFF) tetap accessible
      * saat CR3 user process aktif.  Juga mencakup range 0x300000-0x3FFFFF. */
     pd_low[1] = 0x0000000000200087ULL;   /* base=0x200000, P+RW+User+PS */
+    /* pd_low[2..3] = 2MB large pages: identity map 4-8MB, User-accessible.
+     * Heap penuh [0x100000-0x6FFFFF) + kernel image @ 0x700000 (linker.ld)
+     * harus tetap accessible saat CR3 user process aktif (interrupt/syscall
+     * berjalan dengan kernel .text di 0x700000+ walau CR3=punya proses user). */
+    pd_low[2] = 0x0000000000400087ULL;   /* base=0x400000, P+RW+User+PS */
+    pd_low[3] = 0x0000000000600087ULL;   /* base=0x600000, P+RW+User+PS */
     /* pd_low[32] = 2MB large page: identity map 64-66MB, kernel-only.
      * WAJIB: BSS kernel berada di 0x4000000-0x41FFFFF. Tanpa entry ini,
      * setiap akses ke global kernel (tasks[], frame_bitmap, dll.) saat
@@ -238,10 +250,10 @@ void vmm_free_user_memory(uint64_t *pml4) {
         for (j = 0; j < 512; j++) {
             if (!(pt[j] & 1)) continue;
             uint64_t phys = pt[j] & mask;
-            if (phys >= 768ULL * PAGE_SIZE) {
+            if (phys >= (uint64_t)KERNEL_RESERVED_FRAMES * PAGE_SIZE) {
                 /* Respek COW refcount: hanya free jika tidak ada proses lain yang berbagi */
                 uint32_t fn = (uint32_t)(phys / PAGE_SIZE);
-                if (frame_cow_cnt[fn] > 0) {
+                if (fn < TOTAL_FRAMES && frame_cow_cnt[fn] > 0) {
                     frame_cow_cnt[fn]--;
                     /* Jangan pmm_free — masih dipakai proses lain */
                 } else {
@@ -251,25 +263,25 @@ void vmm_free_user_memory(uint64_t *pml4) {
         }
         /* Bebaskan frame PT itu sendiri */
         uint64_t pt_phys = pd_low[i] & mask;
-        if (pt_phys >= 768ULL * PAGE_SIZE)
+        if (pt_phys >= (uint64_t)KERNEL_RESERVED_FRAMES * PAGE_SIZE)
             pmm_free_frame(pt_phys);
     }
 
     /* Bebaskan proc_pd_low */
     uint64_t pd_low_phys = pdpt[0] & mask;
-    if (pd_low_phys >= 768ULL * PAGE_SIZE)
+    if (pd_low_phys >= (uint64_t)KERNEL_RESERVED_FRAMES * PAGE_SIZE)
         pmm_free_frame(pd_low_phys);
 
 free_pdpt:
     /* Bebaskan proc_pdpt */
     uint64_t pdpt_phys = pml4[0] & mask;
-    if (pdpt_phys >= 768ULL * PAGE_SIZE)
+    if (pdpt_phys >= (uint64_t)KERNEL_RESERVED_FRAMES * PAGE_SIZE)
         pmm_free_frame(pdpt_phys);
 
 free_pml4:
     /* Bebaskan pml4 itu sendiri */
     uint64_t pml4_phys = (uint64_t)pml4;
-    if (pml4_phys >= 768ULL * PAGE_SIZE)
+    if (pml4_phys >= (uint64_t)KERNEL_RESERVED_FRAMES * PAGE_SIZE)
         pmm_free_frame(pml4_phys);
 
     (void)k;
@@ -353,7 +365,7 @@ void vmm_copy_cow(uint64_t *parent_pml4, uint64_t *child_pml4) {
         for (j = 0; j < 512; j++) {
             if (!(parent_pt[j] & 1)) continue;
             uint64_t phys = parent_pt[j] & mask;
-            if (phys < 768ULL * PAGE_SIZE) continue;  /* frame kernel, skip */
+            if (phys < (uint64_t)KERNEL_RESERVED_FRAMES * PAGE_SIZE) continue;  /* frame kernel, skip */
 
             /* VA halaman ini */
             uint64_t va = (uint64_t)i * 0x200000ULL + (uint64_t)j * 0x1000ULL;
@@ -367,8 +379,10 @@ void vmm_copy_cow(uint64_t *parent_pml4, uint64_t *child_pml4) {
 
             /* Tambah ref count: parent + child masing-masing 1 counter = +2 */
             uint32_t fn = (uint32_t)(phys / PAGE_SIZE);
-            if (frame_cow_cnt[fn] < 254) frame_cow_cnt[fn] += 2;
-            else frame_cow_cnt[fn] = 255;
+            if (fn < TOTAL_FRAMES) {
+                if (frame_cow_cnt[fn] < 254) frame_cow_cnt[fn] += 2;
+                else frame_cow_cnt[fn] = 255;
+            }
         }
     }
 }
@@ -391,7 +405,7 @@ int vmm_cow_fault(uint64_t *pml4, uint64_t virt) {
     uint64_t old_phys  = *pte & ~(uint64_t)0xFFF;
     uint32_t old_frame = (uint32_t)(old_phys / PAGE_SIZE);
 
-    if (frame_cow_cnt[old_frame] > 1) {
+    if (old_frame < TOTAL_FRAMES && frame_cow_cnt[old_frame] > 1) {
         /* Masih ada proses lain yang berbagi frame ini — alokasi frame baru */
         uint64_t new_phys = pmm_alloc_frame();
         if (!new_phys) return 0;  /* OOM — biarkan kernel panic */

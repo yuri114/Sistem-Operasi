@@ -504,20 +504,9 @@ void task_exit_code(int code) {
         vfs_close_all(tid);
     }
 
-    /* Simpan waiter sebelum membersihkan slot */
+    /* Simpan waiter & TLS frame sebelum membersihkan slot */
     int waiter = tasks[tid].waiter;
-
-    tasks[tid].used             = 0;
-    tasks[tid].cpu_id           = (int8_t)-1;   /* kembalikan ke pool */
-    tasks[tid].page_dir         = 0;
-    tasks[tid].waiter           = -1;
-    tasks[tid].is_thread        = 0;
-    tasks[tid].pending_signals  = 0;
-    for (k = 0; k < 4; k++) tasks[tid].tstack_frames[k] = 0;
-
-    /* F-U2: bebaskan halaman TLS thread */
     uint64_t tls_frame_saved = tasks[tid].tls_frame;
-    tasks[tid].tls_frame = 0;
 
     /* Kembali ke boot PML4 dulu */
     vmm_switch_dir((uint64_t *)0x1000);
@@ -566,6 +555,18 @@ void task_exit_code(int code) {
         /* Hanya proses pemilik yang membebaskan page_dir */
         vmm_free_user_memory(dir);
     }
+
+    /* Slot baru dibebaskan setelah seluruh cleanup memori selesai, agar
+     * task_create_* lain tidak bisa memakai ulang slot ini sementara
+     * page_dir/TLS/thread-stack milik task lama masih dibebaskan. */
+    tasks[tid].used             = 0;
+    tasks[tid].cpu_id           = (int8_t)-1;   /* kembalikan ke pool */
+    tasks[tid].page_dir         = 0;
+    tasks[tid].waiter           = -1;
+    tasks[tid].is_thread        = 0;
+    tasks[tid].pending_signals  = 0;
+    tasks[tid].tls_frame        = 0;
+    for (k = 0; k < 4; k++) tasks[tid].tstack_frames[k] = 0;
 
     /* Bangunkan task yang sedang menunggu task ini selesai */
     if (waiter >= 0 && waiter < MAX_TASKS && tasks[waiter].used)
@@ -761,6 +762,12 @@ int task_create_fork(int parent_tid, uint64_t child_rip, uint64_t child_rsp) {
 
     /* Salin seluruh Task struct dari induk, sesuaikan field yang perlu berbeda */
     tasks[id] = tasks[parent_tid];
+
+    /* tls_frame milik induk (frame fisik halaman TLS-nya) ikut tercopy oleh
+     * bulk-copy di atas, padahal anak tidak memiliki halaman TLS terpisah
+     * dengan frame itu (TLS anak ikut COW seperti memori lain via page_dir).
+     * Nolkan agar tidak ada referensi basi ke frame milik induk. */
+    tasks[id].tls_frame  = 0;
 
     tasks[id].used       = 1;
     tasks[id].status     = TASK_RUNNING;

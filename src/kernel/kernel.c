@@ -664,6 +664,11 @@ void kernel_main(){
     volatile uint16_t *vga_dbg = (volatile uint16_t *)0xB8000;
     vga_dbg[0] = 0x0F4B; vga_dbg[1] = 0x0F43; vga_dbg[2] = 0x0F20;
 
+    /* Heap WAJIB siap sebelum graphics_set_fb() (malloc back buffer di
+     * bawah) — jika dipanggil sebelum mem_init(), heap_head masih NULL,
+     * malloc() mengembalikan 0. */
+    mem_init();
+
     /* 1. Paging */
     paging_init();
     vga_dbg[3] = 0x0F50;
@@ -685,7 +690,6 @@ void kernel_main(){
     print("=================================");
     print("\nKernel berjalan di Long Mode (64-bit)\n");
     shell_init();
-    mem_init();
     pmm_init();
     ata_init();
     virtio_blk_init();

@@ -313,6 +313,7 @@ function Run-QEMU {
     # Bangun argumen QEMU secara dinamis (wallpaper drive opsional)
     $qemuArgs = @(
         "-machine", "pc",
+        "-accel", "tcg,tb-size=64",
         "-smp", "2",
         "-drive", "format=raw,file=$os_img,index=0,if=ide",
         "-drive", "format=raw,file=$disk_img,index=1,if=ide"

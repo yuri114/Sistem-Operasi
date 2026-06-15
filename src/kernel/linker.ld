@@ -6,7 +6,13 @@ ENTRY(kernel_main)
 
 SECTIONS
 {
-    . = 0x8000;
+    /* Kernel image (.text/.rodata/.data) dilink di 0x700000 (7MB), tepat
+     * setelah heap [0x100000-0x700000). Bootloader (boot.asm) memuat image
+     * ini secara ber-chunk via unreal-mode rep-movsb sehingga tidak lagi
+     * dibatasi oleh VGA hole 0xA0000-0xBFFFF (batas lama 608KB).
+     * pmm_init() (vmm.c) memperluas reservasi frame agar region ini
+     * (dan heap) tidak pernah dialokasikan ke proses user. */
+    . = 0x700000;
 
     .text :
     {

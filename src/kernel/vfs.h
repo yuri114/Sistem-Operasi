@@ -8,6 +8,7 @@
 #ifndef VFS_H
 #define VFS_H
 #include <stdint.h>
+#include "fs.h"
 
 #define VFS_MAX_FD    32   /* max fd per task                         */
 #define VFS_FD_STDIN  0    /* standard input  (keyboard)              */
@@ -58,7 +59,9 @@ typedef struct {
     uint8_t  _pad;
     uint32_t offset;      /* posisi baca/tulis (TYPE_FILE)            */
     union {
-        char  name[28];   /* nama file (TYPE_FILE)                    */
+        /* FS_MAX_NAME (32) agar path MFS3 terpanjang (31 char + NUL) tidak
+         * terpotong dibanding nama asli yang dicatat fs.c. */
+        char  name[FS_MAX_NAME];   /* nama file (TYPE_FILE)               */
         struct {
             int16_t pipe_id;   /* id pipe anonim (TYPE_PIPE)          */
             int16_t pipe_end;  /* 0=read end, 1=write end             */

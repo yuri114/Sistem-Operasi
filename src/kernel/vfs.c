@@ -258,7 +258,7 @@ int vfs_open(int task_id, const char *path, int flags)
                 fd_table[task_id][j].type   = VFS_TYPE_PROC;
                 fd_table[task_id][j].flags  = VFS_O_RDONLY;
                 fd_table[task_id][j].offset = 0;
-                for (k = 0; k < 27 && entry[k]; k++) fd_table[task_id][j].name[k] = entry[k];
+                for (k = 0; k < FS_MAX_NAME - 1 && entry[k]; k++) fd_table[task_id][j].name[k] = entry[k];
                 fd_table[task_id][j].name[k] = '\0';
                 return j;
             }
@@ -300,7 +300,7 @@ int vfs_open(int task_id, const char *path, int flags)
             fd_table[task_id][j].type   = VFS_TYPE_FILE;
             fd_table[task_id][j].flags  = (uint8_t)flags;
             fd_table[task_id][j].offset = 0;
-            for (k = 0; k < 27 && path[k]; k++) fd_table[task_id][j].name[k] = path[k];
+            for (k = 0; k < FS_MAX_NAME - 1 && path[k]; k++) fd_table[task_id][j].name[k] = path[k];
             fd_table[task_id][j].name[k] = '\0';
             return j;
         }
@@ -583,11 +583,11 @@ int vfs_write(int task_id, int fd, const char *buf, int len)
     if (f->type == VFS_TYPE_FILE) {
         if (!(f->flags & (VFS_O_WRONLY | VFS_O_RDWR))) return -1;
         existing = fs_read_bin(f->name, &file_len);
-        tmp = (uint8_t *)malloc(65536);
+        tmp = (uint8_t *)malloc(FS_MAX_BIN_DATA);
         if (!tmp) return -1;
-        for (k = 0; k < (int)file_len && k < 65536; k++) tmp[k] = existing[k];
+        for (k = 0; k < (int)file_len && k < FS_MAX_BIN_DATA; k++) tmp[k] = existing[k];
         end = (int)f->offset + len;
-        if (end > 65535) { len = 65535 - (int)f->offset; end = 65535; }
+        if (end > FS_MAX_BIN_DATA - 1) { len = (FS_MAX_BIN_DATA - 1) - (int)f->offset; end = FS_MAX_BIN_DATA - 1; }
         for (k = 0; k < len; k++) tmp[f->offset + k] = (uint8_t)buf[k];
         total = (int)file_len > end ? (int)file_len : end;
         fs_write_bin(f->name, tmp, (uint32_t)total);
@@ -692,7 +692,7 @@ int vfs_redirect_out(int task_id, const char *path)
     fd_table[task_id][1].type   = VFS_TYPE_FILE;
     fd_table[task_id][1].flags  = VFS_O_WRONLY;
     fd_table[task_id][1].offset = 0;
-    for (k = 0; k < 27 && path[k]; k++) fd_table[task_id][1].name[k] = path[k];
+    for (k = 0; k < FS_MAX_NAME - 1 && path[k]; k++) fd_table[task_id][1].name[k] = path[k];
     fd_table[task_id][1].name[k] = '\0';
     fd_table[task_id][2] = fd_table[task_id][1];
     return 0;
@@ -707,7 +707,7 @@ int vfs_redirect_in(int task_id, const char *path)
     fd_table[task_id][0].type   = VFS_TYPE_FILE;
     fd_table[task_id][0].flags  = VFS_O_RDONLY;
     fd_table[task_id][0].offset = 0;
-    for (k = 0; k < 27 && path[k]; k++) fd_table[task_id][0].name[k] = path[k];
+    for (k = 0; k < FS_MAX_NAME - 1 && path[k]; k++) fd_table[task_id][0].name[k] = path[k];
     fd_table[task_id][0].name[k] = '\0';
     return 0;
 }
@@ -751,7 +751,7 @@ int vfs_redirect_out_append(int task_id, const char *path)
     fd_table[task_id][1].type   = VFS_TYPE_FILE;
     fd_table[task_id][1].flags  = VFS_O_WRONLY;
     fd_table[task_id][1].offset = file_len;
-    for (k = 0; k < 27 && path[k]; k++) fd_table[task_id][1].name[k] = path[k];
+    for (k = 0; k < FS_MAX_NAME - 1 && path[k]; k++) fd_table[task_id][1].name[k] = path[k];
     fd_table[task_id][1].name[k] = '\0';
     fd_table[task_id][2] = fd_table[task_id][1];
     return 0;

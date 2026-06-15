@@ -291,11 +291,13 @@ exc_common:
     mov  rdx, [rsp + 136]       ; RIP
     mov  rcx, cr2               ; CR2 untuk page fault
 
-    call exception_handler      ; tidak pernah kembali
+    call exception_handler      ; #PF dari COW (F-Q1) atau demand-paging (D3) bisa
+                                 ; "return" normal untuk retry instruksi; exception
+                                 ; lain berakhir di KERNEL PANIC (for(;;) hlt), tidak kembali
 
     RESTORE_REGS
     add  rsp, 16                ; buang exc_num + error_code
-    iretq
+    iretq                       ; retry instruksi yang fault (jalur COW/demand-paging)
 
 ; ------------------------------------------------------------------
 ; LAPIC Timer ISR (INT 0x40) — AP scheduler tick
