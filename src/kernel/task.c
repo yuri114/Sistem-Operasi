@@ -6,6 +6,7 @@
 #include "memory.h"
 #include "spinlock.h"
 #include "vfs.h"
+#include "memory_map.h"
 
 static void str_copy_n(char *dst, const char *src, int n) {
     int i;
@@ -14,6 +15,37 @@ static void str_copy_n(char *dst, const char *src, int n) {
 }
 
 static Task tasks[MAX_TASKS];
+
+/* Inisialisasi field-field umum sebuah task slot. Dipanggil oleh task_create(),
+ * task_create_user(), dan task_create_thread() sebelum mereka mengatur field
+ * yang spesifik (page_dir, priority, heap_end, is_user, dll). */
+static void task_init_common(int id) {
+    tasks[id].used      = 1;
+    tasks[id].status    = TASK_RUNNING;
+    tasks[id].wake_tick = 0;
+    tasks[id].pipe_id   = -1;
+    tasks[id].waiter    = -1;
+    tasks[id].fpu_valid = 0;
+    tasks[id].itimer_interval  = 0;
+    tasks[id].itimer_remaining = 0;
+    tasks[id].signal_mask  = 0;
+    tasks[id].rlimit_mem   = 0;
+    tasks[id].rlimit_fds   = 0;
+}
+
+/* Tick-countdown bersama: jika task tid masih punya jatah waktu, kurangi dan
+ * kembalikan 1 (caller harus return tanpa switch). Jika jatah habis, reset
+ * ticks = priority dan kembalikan 0 (caller lanjut mencari task berikutnya). */
+static int task_tick_countdown_or_reset(int tid) {
+    if (tid < 0) return 0;
+    if (tasks[tid].used && tasks[tid].status == TASK_RUNNING && tasks[tid].ticks > 1) {
+        tasks[tid].ticks--;
+        return 1;
+    }
+    if (tasks[tid].used && tasks[tid].status == TASK_RUNNING)
+        tasks[tid].ticks = tasks[tid].priority;
+    return 0;
+}
 static uint8_t *stacks_base;
 static int current_task = 0;
 static int task_count   = 0;
@@ -72,20 +104,10 @@ int task_create(void (*entry)()) {
     }
     if (id == -1) return -1;
     if (id >= task_count) task_count = id + 1;
-    tasks[id].used      = 1;
-    tasks[id].status    = TASK_RUNNING;
-    tasks[id].wake_tick = 0;
+    task_init_common(id);
     tasks[id].priority  = 1;
     tasks[id].ticks     = 1;
-    tasks[id].pipe_id   = -1;
-    tasks[id].waiter    = -1;
     tasks[id].heap_end  = 0;  /* kernel task: tidak punya user heap */
-    tasks[id].fpu_valid = 0;
-    tasks[id].itimer_interval  = 0;
-    tasks[id].itimer_remaining = 0;
-    tasks[id].signal_mask  = 0;
-    tasks[id].rlimit_mem   = 0;
-    tasks[id].rlimit_fds   = 0;
     /* Tahap M: load balance — kernel task di-assign langsung ke AP jika ada */
     tasks[id].cpu_id    = has_ap ? (int8_t)1 : (int8_t)-1;
     tasks[id].is_user   = 0;   /* ring-0 kernel task */
@@ -122,23 +144,13 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
     if (id == -1) return -1;
     if (id >= task_count) task_count = id + 1;
 
-    tasks[id].used      = 1;
-    tasks[id].status    = TASK_RUNNING;
-    tasks[id].wake_tick = 0;
+    task_init_common(id);
     tasks[id].page_dir  = page_dir;
     tasks[id].priority  = 2;
     tasks[id].ticks     = 2;
-    tasks[id].pipe_id   = -1;
     tasks[id].cpu_id    = -1;
-    tasks[id].waiter    = -1;
-    tasks[id].heap_end  = 0x400000ULL;
+    tasks[id].heap_end  = MM_USER_HEAP_START;
     tasks[id].is_user   = 1;
-    tasks[id].fpu_valid = 0;
-    tasks[id].itimer_interval  = 0;
-    tasks[id].itimer_remaining = 0;
-    tasks[id].signal_mask  = 0;
-    tasks[id].rlimit_mem   = 0;
-    tasks[id].rlimit_fds   = 0;
     tasks[id].is_thread = 0;
     tasks[id].parent_tid = -1;
     str_copy_n(tasks[id].name, name ? name : "?", 32);
@@ -187,7 +199,7 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
     /* F-U2+: alokasi TLS untuk proses user (sama dengan thread, tapi di page_dir sendiri).
      * Offset 0 = self-pointer (ABI standar), offset 8 = errno per-proses. */
     {
-        uint64_t tls_va   = 0x800000ULL + (uint64_t)id * 0x1000ULL;
+        uint64_t tls_va   = MM_TLS_BASE + (uint64_t)id * MM_TLS_PAGE_SIZE;
         uint64_t tls_phys = pmm_alloc_frame();
         uint8_t *tp = (uint8_t *)(uintptr_t)tls_phys;
         int zi; for (zi = 0; zi < 4096; zi++) tp[zi] = 0;
@@ -225,25 +237,15 @@ int task_create_thread(uint64_t entry, uint64_t arg, int parent_tid) {
     if (parent_tid < 0 || parent_tid >= MAX_TASKS || !tasks[parent_tid].used)
         return -1;
 
-    tasks[id].used       = 1;
-    tasks[id].status     = TASK_RUNNING;
-    tasks[id].wake_tick  = 0;
+    task_init_common(id);
     tasks[id].page_dir   = tasks[parent_tid].page_dir;  /* berbagi address space */
     tasks[id].priority   = 2;
     tasks[id].ticks      = 2;
-    tasks[id].pipe_id    = -1;
     tasks[id].cpu_id     = -1;
-    tasks[id].waiter     = -1;
     tasks[id].heap_end   = tasks[parent_tid].heap_end;  /* thread lihat heap yang sama */
     tasks[id].is_user    = 1;
     tasks[id].is_thread  = 1;
     tasks[id].parent_tid = parent_tid;
-    tasks[id].fpu_valid  = 0;
-    tasks[id].itimer_interval  = 0;
-    tasks[id].itimer_remaining = 0;
-    tasks[id].signal_mask  = 0;
-    tasks[id].rlimit_mem   = 0;
-    tasks[id].rlimit_fds   = 0;
     str_copy_n(tasks[id].name, "thread", 32);
 
     /* F-Q3: Demand paging untuk thread stack.
@@ -254,8 +256,8 @@ int task_create_thread(uint64_t entry, uint64_t arg, int parent_tid) {
     int k;
     for (k = 0; k < 4; k++) tasks[id].tstack_frames[k] = 0;
 
-    uint64_t tstack_va = 0x700000ULL + (uint64_t)id * 0x5000ULL;
-    uint64_t user_rsp  = tstack_va + 0x5000ULL;  /* puncak slot */
+    uint64_t tstack_va = MM_THREAD_STACK_BASE + (uint64_t)id * MM_THREAD_STACK_SLOT;
+    uint64_t user_rsp  = tstack_va + MM_THREAD_STACK_SLOT;  /* puncak slot */
 
     /* Susun kernel stack awal (sama seperti task_create_user):
      *   [tinggi] SS, RSP_user, RFLAGS, CS, RIP   iretq frame
@@ -277,7 +279,7 @@ int task_create_thread(uint64_t entry, uint64_t arg, int parent_tid) {
      * FS MSR (IA32_FS_BASE = 0xC0000100) disetel ke VA tersebut agar
      * instruksi 'mov %%fs:offset, reg' bekerja dari user space thread. */
     {
-        uint64_t tls_va   = 0x800000ULL + (uint64_t)id * 0x1000ULL;
+        uint64_t tls_va   = MM_TLS_BASE + (uint64_t)id * MM_TLS_PAGE_SIZE;
         uint64_t tls_phys = pmm_alloc_frame();
         /* zero-fill halaman TLS */
         uint8_t *tp = (uint8_t *)(tls_phys);
@@ -299,17 +301,7 @@ void task_switch() {
 
     if (task_count < 2) return;
 
-    /* Tick countdown: task masih punya jatah, jangan switch */
-    if (tasks[current_task].used &&
-        tasks[current_task].status == TASK_RUNNING &&
-        tasks[current_task].ticks > 1) {
-        tasks[current_task].ticks--;
-        return;
-    }
-
-    /* Reset ticks task yang selesai jatah-nya */
-    if (tasks[current_task].used && tasks[current_task].status == TASK_RUNNING)
-        tasks[current_task].ticks = tasks[current_task].priority;
+    if (task_tick_countdown_or_reset(current_task)) return;
 
     /* Cari task berikutnya dengan spinlock agar tidak race dengan AP */
     spinlock_acquire(&task_lock);
@@ -384,7 +376,7 @@ void task_switch() {
 
     /* F-U2: jika task berikutnya punya TLS (thread atau user task), restore FS MSR */
     if (tasks[current_task].tls_frame) {
-        uint64_t tls_va = 0x800000ULL + (uint64_t)current_task * 0x1000ULL;
+        uint64_t tls_va = MM_TLS_BASE + (uint64_t)current_task * MM_TLS_PAGE_SIZE;
         uint32_t lo = (uint32_t)tls_va;
         uint32_t hi = (uint32_t)(tls_va >> 32);
         __asm__ volatile ("wrmsr" :: "c"(0xC0000100u), "a"(lo), "d"(hi));
@@ -408,18 +400,7 @@ void task_switch_ap(int cpu_idx)
 
     if (task_count < 1) return;
 
-    /* Tick countdown AP — hanya AP yang akses current_task_ap, tanpa lock */
-    if (current_task_ap >= 0 && tasks[current_task_ap].used &&
-        tasks[current_task_ap].status == TASK_RUNNING &&
-        tasks[current_task_ap].ticks > 1) {
-        tasks[current_task_ap].ticks--;
-        return;
-    }
-
-    /* Reset ticks */
-    if (current_task_ap >= 0 && tasks[current_task_ap].used &&
-        tasks[current_task_ap].status == TASK_RUNNING)
-        tasks[current_task_ap].ticks = tasks[current_task_ap].priority;
+    if (task_tick_countdown_or_reset(current_task_ap)) return;
 
     /* Cari task ring-0 bebas dengan spinlock (work stealing) */
     spinlock_acquire(&task_lock);
@@ -489,7 +470,7 @@ void task_exit_code(int code) {
     uint8_t   is_thr    = tasks[tid].is_thread;
     uint64_t *dir       = tasks[tid].page_dir;
     int       ptid      = tasks[tid].parent_tid;
-    uint64_t  tstack_va = 0x700000ULL + (uint64_t)tid * 0x5000ULL;
+    uint64_t  tstack_va = MM_THREAD_STACK_BASE + (uint64_t)tid * MM_THREAD_STACK_SLOT;
     uint64_t  tstack_fs[4];
     int k;
     for (k = 0; k < 4; k++) tstack_fs[k] = tasks[tid].tstack_frames[k];
@@ -525,7 +506,7 @@ void task_exit_code(int code) {
             }
             /* F-U2: unmap dan bebaskan halaman TLS thread */
             if (tls_frame_saved) {
-                uint64_t tls_va = 0x800000ULL + (uint64_t)tid * 0x1000ULL;
+                uint64_t tls_va = MM_TLS_BASE + (uint64_t)tid * MM_TLS_PAGE_SIZE;
                 vmm_unmap_page(tasks[ptid].page_dir, tls_va);
                 pmm_free_frame(tls_frame_saved);
             }
@@ -538,7 +519,7 @@ void task_exit_code(int code) {
                 int tw = tasks[i].waiter;
                 int j;
                 /* F-Q3: gunakan vmm_get_phys agar demand-paged thread stack ikut dibebaskan */
-                uint64_t ts_va = 0x700000ULL + (uint64_t)i * 0x5000ULL;
+                uint64_t ts_va = MM_THREAD_STACK_BASE + (uint64_t)i * MM_THREAD_STACK_SLOT;
                 for (j = 0; j < 4; j++) {
                     uint64_t page_va = ts_va + 0x1000ULL + (uint64_t)j * 0x1000ULL;
                     uint64_t phys = vmm_get_phys(dir, page_va);

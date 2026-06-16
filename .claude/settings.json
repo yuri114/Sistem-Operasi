@@ -7,7 +7,10 @@
       "Read(//d/d/Sistem Operasi/build/**)",
       "Bash(wmic process *)",
       "Bash(wc -l build/build_log.txt)",
-      "Bash(tail -30 build/build_log.txt)"
+      "Bash(tail -30 build/build_log.txt)",
+      "PowerShell(Stop-Process -Id 9716,16884,18548,26020,26616,28952 -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2; Get-Process | Where-Object {$_.ProcessName -match 'wsl|vmmem|vmcompute'} | Select-Object Id,ProcessName,CPU,WorkingSet | Format-Table -AutoSize)",
+      "PowerShell(wsl --shutdown)",
+      "PowerShell(Get-Process | Where-Object {$_.ProcessName -match 'wsl|vmmem|vmcompute'} | Select-Object Id,ProcessName,CPU,WorkingSet,StartTime | Format-Table -AutoSize)"
     ]
   }
 }

@@ -1,8 +1,9 @@
 /* memory.c — Alokator heap fisik kernel (first-fit, coalescing free) */
 #include "memory.h"
+#include "memory_map.h"
 
-#define HEAP_START 0x100000u  /* 1MB — awal heap kernel */
-#define HEAP_SIZE  0x600000u  /* 6MB — ukuran heap kernel (0x100000–0x6FFFFF) */
+#define HEAP_START MM_HEAP_START  /* 1MB — awal heap kernel */
+#define HEAP_SIZE  MM_HEAP_SIZE   /* 6MB — ukuran heap kernel (0x100000–0x6FFFFF) */
 
 /* Header setiap blok heap */
 typedef struct BlockHeader {

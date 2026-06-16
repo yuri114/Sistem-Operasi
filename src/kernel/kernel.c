@@ -3,6 +3,7 @@
 #include "pic.h"
 #include "shell.h"
 #include "memory.h"
+#include "memory_map.h"
 #include "timer.h"
 #include "fs.h"
 #include "ata.h"
@@ -540,82 +541,88 @@ static void print_hex64(uint64_t val) {
     print(buf);
 }
 
-/* Dipanggil dari exc_common di isr.asm saat CPU exception terjadi.
- * Untuk #PF dari user mode (page not present, alamat valid): demand-page.
- * Semua exception lain: tampilkan Kernel Panic dan halt. */
-void exception_handler(uint64_t exc_num, uint64_t error_code,
-                       uint64_t rip,      uint64_t cr2) {
-
-    /* ---- F-Q1: Copy-on-Write fault (present + write + user) ---- */
+/* ---- F-Q1: Copy-on-Write fault (present + write + user) ----
+ * Return 1 jika ditangani sebagai COW (caller harus return, retry instruksi),
+ * 0 jika bukan COW (jatuh ke #PF panic/demand-paging). */
+static int handle_cow_fault(uint64_t exc_num, uint64_t error_code, uint64_t cr2) {
     if (exc_num == 14 && (error_code & 7u) == 7u) {
         /* error_code bit0=present, bit1=write, bit2=user — semua set */
         uint64_t cr3;
         __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
         uint64_t *pml4 = (uint64_t *)(cr3 & ~(uint64_t)0xFFF);
-        if (vmm_cow_fault(pml4, cr2)) return;  /* COW ditangani, retry instruksi */
+        if (vmm_cow_fault(pml4, cr2)) return 1;  /* COW ditangani, retry instruksi */
         /* Bukan COW — jatuh ke #PF panic di bawah */
     }
+    return 0;
+}
 
-    /* ---- D3: Demand paging ---- */
-    if (exc_num == 14) {
-        /* Kondisi demand-page:
-         *   bit 0 error_code = 0  → page not present (bukan protection violation)
-         *   bit 2 error_code = 1  → akses dari user mode
-         *   cr2 dalam range user space: 0x400000 – 0x7FFFFFFF */
-        if (!(error_code & 1u) && (error_code & 4u)
-            && cr2 >= 0x400000ULL && cr2 < 0x80000000ULL)
-        {
-            /* Tahap K: Guard page — CR2 di [0x5FE000, 0x5FEFFF] = stack overflow */
-            if (cr2 >= 0x5FE000ULL && cr2 < 0x5FF000ULL) {
-                int _tid = task_get_current();
-                char _nb[8];
-                fill_screen(GFX_RED);
-                cursor_row = 0; cursor_col = 0;
-                set_color(GFX_WHITE, GFX_RED);
-                print("== STACK OVERFLOW ==\n");
-                print("Task ID : "); itoa((uint32_t)_tid, _nb); print(_nb); print("\n");
-                print("CR2     : 0x"); print_hex64(cr2); print("\n");
-                print("Task killed.\n");
-                task_exit();
-                for (;;) __asm__ volatile("hlt");
-            }
-            /* F-P1: Guard page stack thread — slot di VA 0x700000 + id*0x5000 */
-            if (cr2 >= 0x700000ULL && cr2 < 0x800000ULL) {
-                uint64_t off = cr2 - 0x700000ULL;
-                if ((off % 0x5000ULL) < 0x1000ULL) {
-                    int _tid = task_get_current();
-                    char _nb[8];
-                    fill_screen(GFX_RED);
-                    cursor_row = 0; cursor_col = 0;
-                    set_color(GFX_WHITE, GFX_RED);
-                    print("== THREAD STACK OVERFLOW ==\n");
-                    print("Task ID : "); itoa((uint32_t)_tid, _nb); print(_nb); print("\n");
-                    print("CR2     : 0x"); print_hex64(cr2); print("\n");
-                    print("Task killed.\n");
-                    task_exit();
-                    for (;;) __asm__ volatile("hlt");
-                }
-            }
-            /* Baca PML4 dari CR3 */
-            uint64_t cr3;
-            __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
-            uint64_t *pml4 = (uint64_t *)(cr3 & ~(uint64_t)0xFFF);
+/* Tampilkan panic layar-merah "stack overflow" untuk task saat ini, lalu
+ * matikan task tersebut dan halt selamanya. Dipakai untuk guard page stack
+ * user maupun guard page stack thread (F-P1) — beda hanya judul pesan. */
+static void panic_stack_overflow(uint64_t cr2, const char *label) {
+    int _tid = task_get_current();
+    char _nb[8];
+    fill_screen(GFX_RED);
+    cursor_row = 0; cursor_col = 0;
+    set_color(GFX_WHITE, GFX_RED);
+    print("== "); print(label); print(" ==\n");
+    print("Task ID : "); itoa((uint32_t)_tid, _nb); print(_nb); print("\n");
+    print("CR2     : 0x"); print_hex64(cr2); print("\n");
+    print("Task killed.\n");
+    task_exit();
+    for (;;) __asm__ volatile("hlt");
+}
 
-            /* Alokasikan frame baru dan zeroing (keamanan: jangan bocor data) */
-            uint64_t phys = pmm_alloc_frame();
-            if (phys) {
-                /* zero_frame adalah static di vmm.c — panggil via helper yang sudah ada */
-                uint64_t *p = (uint64_t *)phys;
-                int i;
-                for (i = 0; i < (int)(4096 / 8); i++) p[i] = 0;
+/* ---- D3: Demand paging ----
+ * Return 1 jika di-demand-page (caller harus return, retry instruksi),
+ * 0 jika harus jatuh ke #PF panic. */
+static int handle_demand_paging(uint64_t exc_num, uint64_t error_code, uint64_t cr2) {
+    if (exc_num != 14) return 0;
 
-                /* Petakan halaman yang di-fault (page-aligned) */
-                vmm_map_page(pml4, cr2 & ~(uint64_t)0xFFF, phys, 7);
-                return;  /* kembali: retry instruksi */
-            }
-            /* Tidak cukup memori — jatuh ke panic */
+    /* Kondisi demand-page:
+     *   bit 0 error_code = 0  → page not present (bukan protection violation)
+     *   bit 2 error_code = 1  → akses dari user mode
+     *   cr2 dalam range user space: 0x400000 – 0x7FFFFFFF */
+    if (!(error_code & 1u) && (error_code & 4u)
+        && cr2 >= MM_USER_VA_LOW && cr2 < MM_USER_VA_HIGH)
+    {
+        /* Tahap K: Guard page — CR2 di [0x5FE000, 0x5FEFFF] = stack overflow */
+        if (cr2 >= MM_STACK_GUARD_LO && cr2 < MM_STACK_GUARD_HI) {
+            panic_stack_overflow(cr2, "STACK OVERFLOW");
         }
+        /* F-P1: Guard page stack thread — slot di VA 0x700000 + id*0x5000 */
+        if (cr2 >= MM_THREAD_STACK_BASE && cr2 < MM_TLS_BASE) {
+            uint64_t off = cr2 - MM_THREAD_STACK_BASE;
+            if ((off % MM_THREAD_STACK_SLOT) < 0x1000ULL) {
+                panic_stack_overflow(cr2, "THREAD STACK OVERFLOW");
+            }
+        }
+        /* Baca PML4 dari CR3 */
+        uint64_t cr3;
+        __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+        uint64_t *pml4 = (uint64_t *)(cr3 & ~(uint64_t)0xFFF);
+
+        /* Alokasikan frame baru dan zeroing (keamanan: jangan bocor data) */
+        uint64_t phys = pmm_alloc_frame();
+        if (phys) {
+            /* zero_frame adalah static di vmm.c — panggil via helper yang sudah ada */
+            uint64_t *p = (uint64_t *)phys;
+            int i;
+            for (i = 0; i < (int)(4096 / 8); i++) p[i] = 0;
+
+            /* Petakan halaman yang di-fault (page-aligned) */
+            vmm_map_page(pml4, cr2 & ~(uint64_t)0xFFF, phys, 7);
+            return 1;  /* kembali: retry instruksi */
+        }
+        /* Tidak cukup memori — jatuh ke panic */
     }
+    return 0;
+}
+
+/* Tampilkan layar Kernel Panic merah dengan detail exception, lalu halt
+ * selamanya. Tidak pernah return. */
+static void show_kernel_panic(uint64_t exc_num, uint64_t error_code,
+                               uint64_t rip, uint64_t cr2) {
     static const char *names[] = {
         "#DE Divide Error",         "#DB Debug",
         "NMI",                      "#BP Breakpoint",
@@ -652,6 +659,16 @@ void exception_handler(uint64_t exc_num, uint64_t error_code,
     print("\n\nSystem Halted.\n");
     __asm__ volatile ("cli");
     for (;;) __asm__ volatile ("hlt");
+}
+
+/* Dipanggil dari exc_common di isr.asm saat CPU exception terjadi.
+ * Untuk #PF dari user mode (page not present, alamat valid): demand-page.
+ * Semua exception lain: tampilkan Kernel Panic dan halt. */
+void exception_handler(uint64_t exc_num, uint64_t error_code,
+                       uint64_t rip,      uint64_t cr2) {
+    if (handle_cow_fault(exc_num, error_code, cr2)) return;
+    if (handle_demand_paging(exc_num, error_code, cr2)) return;
+    show_kernel_panic(exc_num, error_code, rip, cr2);
 }
 
 /*entry point kernel - dipanggil dari kernel_entry.asm*/

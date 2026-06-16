@@ -1,4 +1,9 @@
-/* linker.ld — Script linker 64-bit untuk Oria OS */
+/* linker.ld — Script linker 64-bit untuk Oria OS
+ *
+ * Alamat di file ini didokumentasikan ulang sebagai konstanta MM_* di
+ * src/kernel/memory_map.h (MM_KERNEL_IMAGE_BASE, MM_BSS_BASE, dst).
+ * memory_map.h adalah single source of truth untuk pembaca C; nilai di
+ * sini TIDAK diubah (linker script tidak bisa #include header C). */
 OUTPUT_FORMAT(elf64-x86-64)
 OUTPUT_ARCH(i386:x86-64)
 

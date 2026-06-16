@@ -17,6 +17,7 @@
  */
 #include "vmm.h"
 #include "memory.h"
+#include "memory_map.h"
 
 /* ===================================================================
  * Physical Memory Manager
@@ -25,7 +26,7 @@
 /* Frame 0..KERNEL_RESERVED_FRAMES-1 (0-8MB) : kernel image, heap, boot page
  * tables, .bss/stack — ditandai USED, tidak pernah dialokasikan ke user.
  * Mencakup heap [0x100000-0x700000) dan kernel image @ 0x700000 (linker.ld). */
-#define KERNEL_RESERVED_FRAMES 2048  /* 8MB / 4KB */
+#define KERNEL_RESERVED_FRAMES MM_KERNEL_RESERVED_FRAMES  /* 8MB / 4KB */
 static uint8_t frame_bitmap[TOTAL_FRAMES / 8];
 static uint8_t frame_cow_cnt[TOTAL_FRAMES];  /* COW ref-count per frame */
 
@@ -210,13 +211,13 @@ uint64_t *vmm_create_page_dir() {
      * Heap penuh [0x100000-0x6FFFFF) + kernel image @ 0x700000 (linker.ld)
      * harus tetap accessible saat CR3 user process aktif (interrupt/syscall
      * berjalan dengan kernel .text di 0x700000+ walau CR3=punya proses user). */
-    pd_low[2] = 0x0000000000400087ULL;   /* base=0x400000, P+RW+User+PS */
-    pd_low[3] = 0x0000000000600087ULL;   /* base=0x600000, P+RW+User+PS */
+    pd_low[2] = MM_USER_HEAP_START | 0x87ULL;   /* base=0x400000, P+RW+User+PS */
+    pd_low[3] = MM_USER_STACK_PAGE | 0x87ULL;   /* base=0x600000, P+RW+User+PS */
     /* pd_low[32] = 2MB large page: identity map 64-66MB, kernel-only.
      * WAJIB: BSS kernel berada di 0x4000000-0x41FFFFF. Tanpa entry ini,
      * setiap akses ke global kernel (tasks[], frame_bitmap, dll.) saat
      * CR3 user process aktif akan menyebabkan #PF → crash. */
-    pd_low[32] = 0x0000000004000083ULL;  /* base=0x4000000, P+RW, kernel-only, PS */
+    pd_low[32] = MM_BSS_BASE | 0x83ULL;  /* base=0x4000000, P+RW, kernel-only, PS */
 
     return pml4;
 }
