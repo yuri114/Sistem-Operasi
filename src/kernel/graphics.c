@@ -11,14 +11,16 @@
 /* Alamat fisik LFB — diperbarui oleh graphics_set_fb() */
 uint32_t gfx_lfb_addr = 0xE0000000U;
 
-/* Back buffer (software) — semua drawing ke sini; gfx_flip() mengirim ke hw */
-static uint32_t *back_buf = 0;
+/* Back buffer (software) — static BSS array, 8MB di region 0x4000000+.
+ * Tidak pakai malloc sehingga tidak bergantung pada ukuran heap (heap hanya 6MB). */
+static uint32_t g_back_buf[SCREEN_W * SCREEN_H];
+static uint32_t *back_buf = g_back_buf;
 
 /* Pointer ke hardware framebuffer (diset oleh graphics_set_fb) */
 static volatile uint32_t *hw_fb = 0;
 
-/* Pointer tulis: selalu menunjuk ke back_buf (atau hw_fb jika back_buf gagal alokasi) */
-static volatile uint32_t *fb = (volatile uint32_t *)0xE0000000U;
+/* Pointer tulis: selalu menunjuk ke back_buf */
+static volatile uint32_t *fb = (volatile uint32_t *)g_back_buf;
 
 /* Dirty region — bounding box area yang sudah diubah sejak gfx_flip() terakhir.
  * x2/y2 eksklusif. has_dirty=0 berarti tidak ada yang perlu di-flip. */
@@ -51,12 +53,17 @@ void gfx_mark_dirty(int x1, int y1, int x2, int y2) {
 void graphics_set_fb(uint32_t addr) {
     gfx_lfb_addr = addr;
     hw_fb        = (volatile uint32_t *)addr;
-    /* Alokasi back buffer dari kernel heap; fallback ke hardware direct jika gagal */
-    if (!back_buf) {
-        back_buf = (uint32_t *)malloc((uint32_t)(SCREEN_W * SCREEN_H * 4));
-    }
-    fb = back_buf ? (volatile uint32_t *)back_buf : hw_fb;
+    fb           = hw_fb;   /* console mode: tulis langsung ke hardware */
 }
+
+/* Aktifkan double buffering saat memasuki GUI mode.
+ * Harus dipanggil SEBELUM wm_init() — setelah ini semua draw ke back_buf, gfx_flip() ke hw. */
+void gfx_enable_double_buffer(void) {
+    fb = (volatile uint32_t *)back_buf;
+}
+
+/* Kembalikan pointer ke fb aktif (back_buf di GUI mode, hw_fb di console mode). */
+volatile uint32_t *gfx_get_fb(void) { return fb; }
 
 /* Salin back buffer ke hardware framebuffer — hanya baris dalam dirty region.
  * x1 dibulatkan ke bawah ke kelipatan 2 agar copy 64-bit tetap aligned. */
