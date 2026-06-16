@@ -94,7 +94,25 @@ void smp_ap_entry(void)
     stack_top = 0x4200000ULL - (uint64_t)my_apic_id * 8192ULL;
     tss64_ap_init(cpu_idx, stack_top);
 
-    /* --- 4. Aktifkan LAPIC pada AP ini ---
+    /* --- 3b. Setup SYSCALL/SYSRET MSR di AP ini ---
+     * SYSCALL MSR adalah per-core, jadi harus dikonfigurasi di setiap AP.
+     * Nilai identik dengan BSP di kernel_main [D1], kecuali LSTAR yang
+     * menunjuk ke syscall_entry_ap (pakai globals per-AP, bukan global BSP). */
+    {
+        extern void syscall_entry_ap(void);
+        uint32_t lo, hi;
+        uint64_t lstar;
+        __asm__ volatile ("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0xC0000080u));
+        lo |= 0x1u;  /* SCE bit */
+        __asm__ volatile ("wrmsr" :: "c"(0xC0000080u), "a"(lo), "d"(hi));
+        lo = 0; hi = (0x0018u << 16) | 0x0008u;
+        __asm__ volatile ("wrmsr" :: "c"(0xC0000081u), "a"(lo), "d"(hi));
+        lstar = (uint64_t)(uintptr_t)syscall_entry_ap;
+        __asm__ volatile ("wrmsr" :: "c"(0xC0000082u),
+                          "a"((uint32_t)lstar), "d"((uint32_t)(lstar >> 32)));
+        __asm__ volatile ("wrmsr" :: "c"(0xC0000084u), "a"(0x200u), "d"(0u));
+    }
+
     /* --- 4. Aktifkan LAPIC pada AP ini --- */
     apic_enable();
 

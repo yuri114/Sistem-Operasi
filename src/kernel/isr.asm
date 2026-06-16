@@ -18,7 +18,9 @@ global irq1
 global irq12
 global int80_handler
 global syscall_entry
+global syscall_entry_ap
 global syscall_kstack
+global syscall_kstack_ap
 global lapic_timer_isr
 global lapic_spurious_isr
 
@@ -185,10 +187,21 @@ extern exception_handler
 ; ==================================================================
 section .data
 align 8
-syscall_kstack:     dq  0x90000     ; diupdate task_switch untuk top-of-kernel-stack task saat ini
-syscall_tmp_rsp:    dq  0           ; scratch sementara (aman: interrupts off saat dipakai)
+syscall_kstack:        dq  0x90000  ; BSP — diupdate task_switch setiap context switch
+syscall_tmp_rsp:       dq  0        ; BSP scratch (IF=0 saat dipakai, tidak ada BSP race)
+syscall_kstack_ap:     dq  0x90000  ; AP  — diupdate task_switch_ap setiap context switch
+syscall_tmp_rsp_ap:    dq  0        ; AP  scratch (IF=0 saat dipakai, AP tidak bagi scratch ini)
 
 section .text
+
+; Entry point SYSCALL untuk AP (core ke-2+). Pakai globals per-AP agar tidak
+; race dengan BSP yang memakai syscall_kstack/syscall_tmp_rsp sendiri.
+syscall_entry_ap:
+    mov  [rel syscall_tmp_rsp_ap], rsp
+    mov  rsp, [rel syscall_kstack_ap]
+    push qword [rel syscall_tmp_rsp_ap]
+    jmp  syscall_entry_common
+
 syscall_entry:
     ; Simpan user RSP ke scratch (IF=0, aman dari race)
     mov  [rel syscall_tmp_rsp], rsp
@@ -199,6 +212,7 @@ syscall_entry:
     ; Simpan user RSP di kernel stack (per-task karena tiap task punya kernel stack sendiri)
     push qword [rel syscall_tmp_rsp]
 
+syscall_entry_common:
     ; Aman untuk re-enable interrupt
     sti
 

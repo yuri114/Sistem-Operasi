@@ -605,11 +605,7 @@ static int handle_demand_paging(uint64_t exc_num, uint64_t error_code, uint64_t 
         /* Alokasikan frame baru dan zeroing (keamanan: jangan bocor data) */
         uint64_t phys = pmm_alloc_frame();
         if (phys) {
-            /* zero_frame adalah static di vmm.c — panggil via helper yang sudah ada */
-            uint64_t *p = (uint64_t *)phys;
-            int i;
-            for (i = 0; i < (int)(4096 / 8); i++) p[i] = 0;
-
+            vmm_zero_frame(phys);
             /* Petakan halaman yang di-fault (page-aligned) */
             vmm_map_page(pml4, cr2 & ~(uint64_t)0xFFF, phys, 7);
             return 1;  /* kembali: retry instruksi */

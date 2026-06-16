@@ -21,7 +21,7 @@ typedef struct {
     uint8_t   ticks;
     int       pipe_id;
     int8_t    cpu_id;     /* CPU yang sedang menjalankan task ini (-1 = bebas) */
-    uint8_t   is_user;    /* 1 = ring-3 user task (hanya boleh di BSP/CPU 0)   */
+    uint8_t   is_user;    /* 1 = ring-3 user task (bisa jalan di BSP maupun AP) */
     uint8_t   is_thread;  /* 1 = thread (berbagi page_dir dgn parent, jangan free saat exit) */
     int       parent_tid; /* untuk thread: tid proses induk; -1 = bukan thread  */
     int       waiter;     /* tid task yang menunggu task ini selesai (-1 = none) */

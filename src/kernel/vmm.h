@@ -12,6 +12,11 @@ uint64_t pmm_alloc_frame();
 void     pmm_free_frame(uint64_t addr);
 uint32_t pmm_free_count();   /* jumlah frame bebas saat ini */
 
+/* Aman dipanggil saat CR3 = process page dir (switch ke boot PML4 secara internal) */
+void     vmm_zero_frame(uint64_t phys);
+void     vmm_copy_to_frame(uint64_t phys, uint64_t off,
+                            const uint8_t *src, uint64_t len);
+
 uint64_t *vmm_create_page_dir();
 void      vmm_switch_dir(uint64_t *pml4);
 void      vmm_map_page(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags);

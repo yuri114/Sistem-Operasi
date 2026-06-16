@@ -283,10 +283,11 @@ static inline void exit() {
 
 // ============================================================
 // User-space heap allocator (SYS_BRK based, block allocator)
-// Heap region: 0x400000 – 0x5FE000 (~1.9MB)
+// Heap region: after user ELF end (_end) up to stack guard (~0xEFE000)
 // ============================================================
-#define _USER_HEAP_START 0x400000UL
-#define _USER_HEAP_LIMIT 0x5FE000UL  /* guard page batas atas */
+extern char _end[];
+#define _USER_HEAP_START ((unsigned long)&_end)
+#define _USER_HEAP_LIMIT 0xEFE000UL  /* guard page batas atas */
 
 typedef struct _UHdr {
     unsigned int   sz;    /* ukuran data (tidak termasuk header) */

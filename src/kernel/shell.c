@@ -1,5 +1,6 @@
 /* shell.c — Command-line shell: input, history, tab-completion, built-in commands */
 #include "shell.h"
+#include "memory_map.h"
 #include "graphics.h"
 #include "memory.h"
 #include "timer.h"
@@ -1670,9 +1671,9 @@ static int shcmd_run_nowait(ShCmd *c, int pipe_in_fd, int pipe_out_fd) {
         return -1;
     }
     uint64_t sp = pmm_alloc_frame();
-    vmm_map_page(dir, 0x600000, sp, 7);
+    vmm_map_page(dir, MM_USER_STACK_PAGE, sp, 7);
     __asm__ volatile("cli" ::: "memory");
-    int tid = task_create_user(entry, dir, 0x600000 + PAGE_SIZE,
+    int tid = task_create_user(entry, dir, MM_USER_ENTRY_RSP,
                                c->prog, c->argc, c->argv);
     if (pipe_out_fd >= 0)  vfs_redirect_out_pipe(tid, pipe_out_fd);
     else if (c->rout[0]) {
@@ -2988,9 +2989,9 @@ static void shell_execute() {
                 uint64_t entry1 = elf_load(d1, sz1, dir1);
                 if (entry1) {
                     uint64_t sp1 = pmm_alloc_frame();
-                    vmm_map_page(dir1, 0x600000, sp1, 7);
+                    vmm_map_page(dir1, MM_USER_STACK_PAGE, sp1, 7);
                     const char *av1p[2] = { prog1, 0 };
-                    int tid1 = task_create_user(entry1, dir1, 0x600000 + PAGE_SIZE, prog1, 1, av1p);
+                    int tid1 = task_create_user(entry1, dir1, MM_USER_ENTRY_RSP, prog1, 1, av1p);
                     task_set_pipe(tid1, pipe_fd);
                 }
 
@@ -2999,9 +3000,9 @@ static void shell_execute() {
                 uint64_t entry2 = elf_load(d2, sz2, dir2);
                 if (entry2) {
                     uint64_t sp2 = pmm_alloc_frame();
-                    vmm_map_page(dir2, 0x600000, sp2, 7);
+                    vmm_map_page(dir2, MM_USER_STACK_PAGE, sp2, 7);
                     const char *av2p[2] = { prog2, 0 };
-                    int tid2 = task_create_user(entry2, dir2, 0x600000 + PAGE_SIZE, prog2, 1, av2p);
+                    int tid2 = task_create_user(entry2, dir2, MM_USER_ENTRY_RSP, prog2, 1, av2p);
                     task_set_pipe(tid2, pipe_fd);
                 }
 
@@ -4373,16 +4374,16 @@ static void shell_execute() {
                     uint64_t entry1 = elf_load(d1, sz1, dir1);
                     if (entry1) {
                         uint64_t sp1 = pmm_alloc_frame();
-                        vmm_map_page(dir1, 0x600000, sp1, 7);
-                        int tid1 = task_create_user(entry1, dir1, 0x600000 + PAGE_SIZE, prog1, acL, avL);
+                        vmm_map_page(dir1, MM_USER_STACK_PAGE, sp1, 7);
+                        int tid1 = task_create_user(entry1, dir1, MM_USER_ENTRY_RSP, prog1, acL, avL);
                         task_set_pipe(tid1, pipe_fd);
                     }
                     uint64_t *dir2 = vmm_create_page_dir();
                     uint64_t entry2 = elf_load(d2, sz2, dir2);
                     if (entry2) {
                         uint64_t sp2 = pmm_alloc_frame();
-                        vmm_map_page(dir2, 0x600000, sp2, 7);
-                        int tid2 = task_create_user(entry2, dir2, 0x600000 + PAGE_SIZE, prog2, acR, avR);
+                        vmm_map_page(dir2, MM_USER_STACK_PAGE, sp2, 7);
+                        int tid2 = task_create_user(entry2, dir2, MM_USER_ENTRY_RSP, prog2, acR, avR);
                         task_set_pipe(tid2, pipe_fd);
                     }
                     if (entry1 && entry2) {

@@ -51,6 +51,7 @@ void draw_char_gfx16(int x, int y, char c, uint32_t fg, uint32_t bg);
 void draw_string_gfx16(int x, int y, const char *s, uint32_t fg, uint32_t bg);
 
 /* Ekstensi B — Double buffering */
-void gfx_flip(void);  /* salin back buffer ke framebuffer hardware */
+void gfx_flip(void);            /* salin dirty region back buffer ke framebuffer hardware */
+void gfx_mark_dirty(int x1, int y1, int x2, int y2);  /* tandai area (eksklusif x2/y2) sebagai dirty */
 
 #endif /* GRAPHICS_H */

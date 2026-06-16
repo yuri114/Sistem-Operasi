@@ -1,5 +1,6 @@
 /* vfs.c — Virtual Filesystem implementation */
 #include "vfs.h"
+#include "memory_map.h"
 #include "task.h"
 #include "fs.h"
 #include "pipe.h"
@@ -142,13 +143,13 @@ static void proc_generate(const char *path) {
             /* maps: tampilkan peta memori proses */
             uint64_t heap = task_get_heap_end(pid);
             proc_puts("address            perm  region\n");
-            proc_puts("0000000000300000   r-xp  [text]\n");
-            if (heap > 0x400000ULL) {
-                proc_puts("0000000000400000   rw-p  [heap] size=");
-                proc_putn((uint32_t)(heap - 0x400000ULL));
+            proc_puts("0000000000c00000   r-xp  [text]\n");
+            if (heap > MM_USER_CODE_BASE) {
+                proc_puts("0000000000c00000   rw-p  [heap] size=");
+                proc_putn((uint32_t)(heap - MM_USER_CODE_BASE));
                 proc_puts("\n");
             }
-            proc_puts("00000000005fe000   rw-p  [stack]\n");
+            proc_puts("0000000000f00000   rw-p  [stack]\n");
         } else if (p[0]=='f'&&p[1]=='d') {
             /* fd: list open file descriptors */
             int j;

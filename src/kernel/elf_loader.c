@@ -67,10 +67,7 @@ uint64_t elf_load(const uint8_t *data, uint32_t size, uint64_t *pml4) {
             uint64_t phys = pmm_alloc_frame();
             if (!phys) return 0;
 
-            /* Zero-fill frame terlebih dahulu */
-            uint8_t *frame_ptr = (uint8_t *)phys;
-            uint64_t j;
-            for (j = 0; j < PAGE_SIZE; j++) frame_ptr[j] = 0;
+            vmm_zero_frame(phys);
 
             /* Salin byte ELF yang jatuh dalam halaman ini */
             uint64_t seg_file_end = phdr->p_vaddr + phdr->p_filesz;
@@ -80,9 +77,9 @@ uint64_t elf_load(const uint8_t *data, uint32_t size, uint64_t *pml4) {
 
             if (copy_start < copy_end) {
                 const uint8_t *src = data + phdr->p_offset + (copy_start - phdr->p_vaddr);
-                uint8_t *dst       = frame_ptr + (copy_start - virt_page);
+                uint64_t off       = copy_start - virt_page;
                 uint64_t len       = copy_end - copy_start;
-                for (j = 0; j < len; j++) dst[j] = src[j];
+                vmm_copy_to_frame(phys, off, src, len);
             }
 
             /* Map page: User-accessible (flags=7: P+RW+User) */

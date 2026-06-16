@@ -75,10 +75,43 @@ uint32_t pmm_free_count() {
 /* ===================================================================
  * Helpers
  * =================================================================== */
+
+/* Boot PML4 (0x1000) memetakan seluruh 0-1GB dengan 512 × 2MB large page
+ * (kernel_entry.asm .fill_pd0). Fungsi vmm_* menyimpan CR3 sementara ke
+ * 0x1000 agar bisa mengakses frame PMM di 0x800000+ sebagai pointer.
+ * RFLAGS disimpan/dikembalikan agar aman di interrupt context (IF=0). */
+static uint64_t vmm_save_cr3(uint64_t *saved_rfl) {
+    uint64_t cr3, rfl;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(rfl));
+    __asm__ volatile("mov %%cr3, %0; mov %1, %%cr3"
+                     : "=&r"(cr3) : "r"(0x1000ULL) : "memory");
+    *saved_rfl = rfl;
+    return cr3;
+}
+static void vmm_restore_cr3(uint64_t cr3, uint64_t rfl) {
+    __asm__ volatile("mov %0, %%cr3" :: "r"(cr3) : "memory");
+    __asm__ volatile("push %0; popfq" :: "r"(rfl) : "cc");
+}
+
 static void zero_frame(uint64_t phys) {
     uint64_t *p = (uint64_t *)phys;
     int i;
     for (i = 0; i < (int)(PAGE_SIZE / 8); i++) p[i] = 0;
+}
+
+void vmm_zero_frame(uint64_t phys) {
+    uint64_t rfl, cr3 = vmm_save_cr3(&rfl);
+    zero_frame(phys);
+    vmm_restore_cr3(cr3, rfl);
+}
+
+void vmm_copy_to_frame(uint64_t phys, uint64_t off,
+                       const uint8_t *src, uint64_t len) {
+    uint64_t rfl, cr3 = vmm_save_cr3(&rfl);
+    uint8_t *dst = (uint8_t *)phys + off;
+    uint64_t i;
+    for (i = 0; i < len; i++) dst[i] = src[i];
+    vmm_restore_cr3(cr3, rfl);
 }
 
 /* ===================================================================
@@ -94,6 +127,7 @@ void vmm_switch_dir(uint64_t *pml4) {
  * Lewati jika PDE adalah 2MB large page (bit PS).
  */
 void vmm_map_page(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags) {
+    uint64_t rfl, saved_cr3 = vmm_save_cr3(&rfl);
     uint64_t pml4_idx = (virt >> 39) & 0x1FF;
     uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
     uint64_t pd_idx   = (virt >> 21) & 0x1FF;
@@ -108,7 +142,7 @@ void vmm_map_page(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags) 
         pdpt = (uint64_t *)(pml4[pml4_idx] & mask);
     } else {
         uint64_t p = pmm_alloc_frame();
-        if (!p) return;
+        if (!p) { vmm_restore_cr3(saved_cr3, rfl); return; }
         zero_frame(p);
         pdpt = (uint64_t *)p;
         pml4[pml4_idx] = p | 7;   /* P+RW+User — intermediate selalu writable */
@@ -120,14 +154,14 @@ void vmm_map_page(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags) 
         pd = (uint64_t *)(pdpt[pdpt_idx] & mask);
     } else {
         uint64_t p = pmm_alloc_frame();
-        if (!p) return;
+        if (!p) { vmm_restore_cr3(saved_cr3, rfl); return; }
         zero_frame(p);
         pd = (uint64_t *)p;
         pdpt[pdpt_idx] = p | 7;   /* P+RW+User — intermediate selalu writable */
     }
 
     /* Cek apakah PDE adalah 2MB large page (bit 7 = PS) */
-    if (pd[pd_idx] & (1ULL << 7)) return;
+    if (pd[pd_idx] & (1ULL << 7)) { vmm_restore_cr3(saved_cr3, rfl); return; }
 
     /* PD -> PT */
     uint64_t *pt;
@@ -135,13 +169,14 @@ void vmm_map_page(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags) 
         pt = (uint64_t *)(pd[pd_idx] & mask);
     } else {
         uint64_t p = pmm_alloc_frame();
-        if (!p) return;
+        if (!p) { vmm_restore_cr3(saved_cr3, rfl); return; }
         zero_frame(p);
         pt = (uint64_t *)p;
         pd[pd_idx] = p | 7;       /* P+RW+User — intermediate selalu writable */
     }
 
     pt[pt_idx] = (phys & mask) | flags | 1;  /* leaf PTE: pakai flags caller */
+    vmm_restore_cr3(saved_cr3, rfl);
     __asm__ volatile ("invlpg (%0)" :: "r"(virt) : "memory");
 }
 
@@ -150,21 +185,29 @@ void vmm_map_page(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags) 
  * Tidak membebaskan physical frame — caller bertanggung jawab.
  */
 void vmm_unmap_page(uint64_t *pml4, uint64_t virt) {
+    if (!pml4) return;
+    uint64_t rfl, saved_cr3 = vmm_save_cr3(&rfl);
     uint64_t mask     = ~(uint64_t)0xFFF;
     uint64_t pml4_idx = (virt >> 39) & 0x1FF;
     uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
     uint64_t pd_idx   = (virt >> 21) & 0x1FF;
     uint64_t pt_idx   = (virt >> 12) & 0x1FF;
+    int did_unmap = 0;
 
-    if (!pml4 || !(pml4[pml4_idx] & 1)) return;
-    uint64_t *pdpt = (uint64_t *)(pml4[pml4_idx] & mask);
-    if (!(pdpt[pdpt_idx] & 1)) return;
-    uint64_t *pd = (uint64_t *)(pdpt[pdpt_idx] & mask);
-    if (!(pd[pd_idx] & 1)) return;
-    if (pd[pd_idx] & (1ULL << 7)) return;  /* 2MB large page, lewati */
-    uint64_t *pt = (uint64_t *)(pd[pd_idx] & mask);
-    pt[pt_idx] = 0;
-    __asm__ volatile ("invlpg (%0)" :: "r"(virt) : "memory");
+    if (pml4[pml4_idx] & 1) {
+        uint64_t *pdpt = (uint64_t *)(pml4[pml4_idx] & mask);
+        if (pdpt[pdpt_idx] & 1) {
+            uint64_t *pd = (uint64_t *)(pdpt[pdpt_idx] & mask);
+            if ((pd[pd_idx] & 1) && !(pd[pd_idx] & (1ULL << 7))) {
+                uint64_t *pt = (uint64_t *)(pd[pd_idx] & mask);
+                pt[pt_idx] = 0;
+                did_unmap = 1;
+            }
+        }
+    }
+    vmm_restore_cr3(saved_cr3, rfl);
+    if (did_unmap)
+        __asm__ volatile ("invlpg (%0)" :: "r"(virt) : "memory");
 }
 
 /*
@@ -177,18 +220,20 @@ void vmm_unmap_page(uint64_t *pml4, uint64_t virt) {
  *   proc_pd_low[0] = 2MB large page 0x000000|0x87 (P+RW+User+PS)
  */
 uint64_t *vmm_create_page_dir() {
+    uint64_t rfl, saved_cr3 = vmm_save_cr3(&rfl);
+
     uint64_t pml4_phys = pmm_alloc_frame();
-    if (!pml4_phys) return 0;
+    if (!pml4_phys) { vmm_restore_cr3(saved_cr3, rfl); return 0; }
     zero_frame(pml4_phys);
     uint64_t *pml4 = (uint64_t *)pml4_phys;
 
     uint64_t pdpt_phys = pmm_alloc_frame();
-    if (!pdpt_phys) { pmm_free_frame(pml4_phys); return 0; }
+    if (!pdpt_phys) { pmm_free_frame(pml4_phys); vmm_restore_cr3(saved_cr3, rfl); return 0; }
     zero_frame(pdpt_phys);
     uint64_t *pdpt = (uint64_t *)pdpt_phys;
 
     uint64_t pd_low_phys = pmm_alloc_frame();
-    if (!pd_low_phys) { pmm_free_frame(pdpt_phys); pmm_free_frame(pml4_phys); return 0; }
+    if (!pd_low_phys) { pmm_free_frame(pdpt_phys); pmm_free_frame(pml4_phys); vmm_restore_cr3(saved_cr3, rfl); return 0; }
     zero_frame(pd_low_phys);
     uint64_t *pd_low = (uint64_t *)pd_low_phys;
 
@@ -211,14 +256,15 @@ uint64_t *vmm_create_page_dir() {
      * Heap penuh [0x100000-0x6FFFFF) + kernel image @ 0x700000 (linker.ld)
      * harus tetap accessible saat CR3 user process aktif (interrupt/syscall
      * berjalan dengan kernel .text di 0x700000+ walau CR3=punya proses user). */
-    pd_low[2] = MM_USER_HEAP_START | 0x87ULL;   /* base=0x400000, P+RW+User+PS */
-    pd_low[3] = MM_USER_STACK_PAGE | 0x87ULL;   /* base=0x600000, P+RW+User+PS */
+    pd_low[2] = 0x0000000000400087ULL;   /* base=0x400000, P+RW+User+PS (kernel heap 4-6MB) */
+    pd_low[3] = 0x0000000000600087ULL;   /* base=0x600000, P+RW+User+PS (kernel heap+image 6-8MB) */
     /* pd_low[32] = 2MB large page: identity map 64-66MB, kernel-only.
      * WAJIB: BSS kernel berada di 0x4000000-0x41FFFFF. Tanpa entry ini,
      * setiap akses ke global kernel (tasks[], frame_bitmap, dll.) saat
      * CR3 user process aktif akan menyebabkan #PF → crash. */
     pd_low[32] = MM_BSS_BASE | 0x83ULL;  /* base=0x4000000, P+RW, kernel-only, PS */
 
+    vmm_restore_cr3(saved_cr3, rfl);
     return pml4;
 }
 
@@ -228,6 +274,7 @@ uint64_t *vmm_create_page_dir() {
  */
 void vmm_free_user_memory(uint64_t *pml4) {
     if (!pml4) return;
+    uint64_t rfl, saved_cr3 = vmm_save_cr3(&rfl);
     uint64_t mask = ~(uint64_t)0xFFF;
     int i, j, k;
 
@@ -286,6 +333,7 @@ free_pml4:
         pmm_free_frame(pml4_phys);
 
     (void)k;
+    vmm_restore_cr3(saved_cr3, rfl);
 }
 
 /* ===================================================================
@@ -295,24 +343,30 @@ free_pml4:
 /* Kembalikan alamat fisik untuk VA pada pml4, atau 0 jika tidak terpetakan. */
 uint64_t vmm_get_phys(uint64_t *pml4, uint64_t virt) {
     if (!pml4) return 0;
+    uint64_t rfl, saved_cr3 = vmm_save_cr3(&rfl);
     uint64_t mask     = ~(uint64_t)0xFFF;
     uint64_t pml4_idx = (virt >> 39) & 0x1FF;
     uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
     uint64_t pd_idx   = (virt >> 21) & 0x1FF;
     uint64_t pt_idx   = (virt >> 12) & 0x1FF;
+    uint64_t result   = 0;
 
-    if (!(pml4[pml4_idx] & 1)) return 0;
-    uint64_t *pdpt = (uint64_t *)(pml4[pml4_idx] & mask);
-    if (!(pdpt[pdpt_idx] & 1)) return 0;
-    uint64_t *pd = (uint64_t *)(pdpt[pdpt_idx] & mask);
-    if (!(pd[pd_idx] & 1)) return 0;
-    if (pd[pd_idx] & (1ULL << 7)) {
-        /* 2MB large page */
-        return (pd[pd_idx] & ~(uint64_t)0x1FFFFF) + (virt & 0x1FFFFF);
+    if (pml4[pml4_idx] & 1) {
+        uint64_t *pdpt = (uint64_t *)(pml4[pml4_idx] & mask);
+        if (pdpt[pdpt_idx] & 1) {
+            uint64_t *pd = (uint64_t *)(pdpt[pdpt_idx] & mask);
+            if (pd[pd_idx] & 1) {
+                if (pd[pd_idx] & (1ULL << 7)) {
+                    result = (pd[pd_idx] & ~(uint64_t)0x1FFFFF) + (virt & 0x1FFFFF);
+                } else {
+                    uint64_t *pt = (uint64_t *)(pd[pd_idx] & mask);
+                    if (pt[pt_idx] & 1) result = pt[pt_idx] & mask;
+                }
+            }
+        }
     }
-    uint64_t *pt = (uint64_t *)(pd[pd_idx] & mask);
-    if (!(pt[pt_idx] & 1)) return 0;
-    return pt[pt_idx] & mask;
+    vmm_restore_cr3(saved_cr3, rfl);
+    return result;
 }
 
 /* Kembalikan pointer ke PTE untuk VA, atau NULL jika tidak ada PT. */
@@ -347,15 +401,16 @@ uint64_t *vmm_get_pte(uint64_t *pml4, uint64_t virt) {
  */
 void vmm_copy_cow(uint64_t *parent_pml4, uint64_t *child_pml4) {
     if (!parent_pml4 || !child_pml4) return;
+    uint64_t rfl, saved_cr3 = vmm_save_cr3(&rfl);
     uint64_t mask = ~(uint64_t)0xFFF;
     int i, j;
 
     /* Hanya PML4[0] (0-1GB, user space per-proses) */
-    if (!(parent_pml4[0] & 1)) return;
+    if (!(parent_pml4[0] & 1)) { vmm_restore_cr3(saved_cr3, rfl); return; }
     uint64_t *parent_pdpt = (uint64_t *)(parent_pml4[0] & mask);
 
     /* Hanya PDPT[0] (proc_pd_low) */
-    if (!(parent_pdpt[0] & 1)) return;
+    if (!(parent_pdpt[0] & 1)) { vmm_restore_cr3(saved_cr3, rfl); return; }
     uint64_t *parent_pd = (uint64_t *)(parent_pdpt[0] & mask);
 
     for (i = 0; i < 512; i++) {
@@ -386,6 +441,7 @@ void vmm_copy_cow(uint64_t *parent_pml4, uint64_t *child_pml4) {
             }
         }
     }
+    vmm_restore_cr3(saved_cr3, rfl);
 }
 
 /*
@@ -398,10 +454,13 @@ void vmm_copy_cow(uint64_t *parent_pml4, uint64_t *child_pml4) {
  * 0 jika bukan COW page (panic elsewhere).
  */
 int vmm_cow_fault(uint64_t *pml4, uint64_t virt) {
+    uint64_t rfl, saved_cr3 = vmm_save_cr3(&rfl);
     uint64_t fa   = virt & ~(uint64_t)0xFFF;
+    /* vmm_get_pte dereferences page table pointers di 0x800000+ — aman karena
+     * boot PML4 sudah aktif (dipanggil setelah vmm_save_cr3). */
     uint64_t *pte = vmm_get_pte(pml4, fa);
-    if (!pte || !(*pte & 1)) return 0;        /* halaman tidak present */
-    if (!(*pte & PTE_COW))   return 0;        /* bukan COW */
+    if (!pte || !(*pte & 1)) { vmm_restore_cr3(saved_cr3, rfl); return 0; }
+    if (!(*pte & PTE_COW))   { vmm_restore_cr3(saved_cr3, rfl); return 0; }
 
     uint64_t old_phys  = *pte & ~(uint64_t)0xFFF;
     uint32_t old_frame = (uint32_t)(old_phys / PAGE_SIZE);
@@ -409,7 +468,7 @@ int vmm_cow_fault(uint64_t *pml4, uint64_t virt) {
     if (old_frame < TOTAL_FRAMES && frame_cow_cnt[old_frame] > 1) {
         /* Masih ada proses lain yang berbagi frame ini — alokasi frame baru */
         uint64_t new_phys = pmm_alloc_frame();
-        if (!new_phys) return 0;  /* OOM — biarkan kernel panic */
+        if (!new_phys) { vmm_restore_cr3(saved_cr3, rfl); return 0; }
         /* Salin isi lama ke frame baru */
         uint8_t *src = (uint8_t *)old_phys;
         uint8_t *dst = (uint8_t *)new_phys;
@@ -422,6 +481,7 @@ int vmm_cow_fault(uint64_t *pml4, uint64_t virt) {
         /* Kita satu-satunya pemilik — cukup remap RW, clear COW */
         *pte = old_phys | 7ULL;  /* P+RW+User */
     }
+    vmm_restore_cr3(saved_cr3, rfl);
     __asm__ volatile ("invlpg (%0)" :: "r"(fa) : "memory");
     return 1;
 }

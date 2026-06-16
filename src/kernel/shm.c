@@ -34,10 +34,7 @@ int shm_create(const char *key) {
         if (!shm_slots[i].phys) {
             uint64_t frame = pmm_alloc_frame();
             if (!frame) return -1;
-            /* Zero-fill frame */
-            uint8_t *p = (uint8_t *)frame;
-            int j;
-            for (j = 0; j < SHM_PAGE_SIZE; j++) p[j] = 0;
+            vmm_zero_frame(frame);
             shm_slots[i].phys     = frame;
             shm_slots[i].refcount = 0;
             shm_strcpy(shm_slots[i].key, key, 16);

@@ -38,8 +38,7 @@ uint64_t syscall_dispatch_proc(uint64_t eax, uint64_t ebx, uint64_t edx, int *ha
         if (new_end == 0) return cur_end;          /* query current brk */
         if (new_end <= cur_end) return cur_end;    /* no shrink */
         if (new_end > MM_BRK_LIMIT) return cur_end; /* jangan masuk guard page */
-        /* Tier-1: tegakkan rlimit_mem (KB) jika diset via SYS_SETRLIMIT.
-         * Heap dimulai dari 0x400000, jadi ukuran heap = new_end - 0x400000. */
+        /* Tier-1: tegakkan rlimit_mem (KB) jika diset via SYS_SETRLIMIT. */
         {
             uint32_t mem_kb = 0; uint16_t fds_unused = 0;
             task_get_rlimit(tid, &mem_kb, &fds_unused);
@@ -151,7 +150,6 @@ uint64_t syscall_dispatch_proc(uint64_t eax, uint64_t ebx, uint64_t edx, int *ha
         uint64_t entry = elf_load(data, sz, new_dir);
         if (!entry) { vmm_free_user_memory(new_dir); return (uint64_t)-1; }
 
-        /* Alokasikan stack user baru di 0x600000 */
         uint64_t stack_frame = pmm_alloc_frame();
         if (!stack_frame) { vmm_free_user_memory(new_dir); return (uint64_t)-1; }
         vmm_map_page(new_dir, MM_USER_STACK_PAGE, stack_frame, 7);
@@ -161,7 +159,7 @@ uint64_t syscall_dispatch_proc(uint64_t eax, uint64_t ebx, uint64_t edx, int *ha
 
         /* Reset state task */
         task_set_page_dir(tid, new_dir);
-        task_set_heap_end(tid, MM_USER_STACK_PAGE); /* heap kosong, di bawah stack */
+        task_set_heap_end(tid, MM_USER_HEAP_START);
         vfs_close_all(tid);
         vfs_init_task(tid);
 

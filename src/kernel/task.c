@@ -201,10 +201,8 @@ int task_create_user(uint64_t entry, uint64_t *page_dir, uint64_t user_rsp, cons
     {
         uint64_t tls_va   = MM_TLS_BASE + (uint64_t)id * MM_TLS_PAGE_SIZE;
         uint64_t tls_phys = pmm_alloc_frame();
-        uint8_t *tp = (uint8_t *)(uintptr_t)tls_phys;
-        int zi; for (zi = 0; zi < 4096; zi++) tp[zi] = 0;
-        /* Tulis self-pointer di offset 0 */
-        *(uint64_t *)tp = tls_va;
+        vmm_zero_frame(tls_phys);
+        vmm_copy_to_frame(tls_phys, 0, (const uint8_t *)&tls_va, sizeof(uint64_t));
         vmm_map_page(page_dir, tls_va, tls_phys, 7); /* u/s, r/w, present */
         tasks[id].tls_frame = tls_phys;
         /* IA32_FS_BASE akan di-set oleh task_switch pertama kali task ini jalan */
@@ -281,9 +279,7 @@ int task_create_thread(uint64_t entry, uint64_t arg, int parent_tid) {
     {
         uint64_t tls_va   = MM_TLS_BASE + (uint64_t)id * MM_TLS_PAGE_SIZE;
         uint64_t tls_phys = pmm_alloc_frame();
-        /* zero-fill halaman TLS */
-        uint8_t *tp = (uint8_t *)(tls_phys);
-        int zi; for (zi = 0; zi < 4096; zi++) tp[zi] = 0;
+        vmm_zero_frame(tls_phys);
         vmm_map_page(tasks[parent_tid].page_dir, tls_va, tls_phys, 7); /* u/s, r/w, p */
         tasks[id].tls_frame = tls_phys;
         /* Tulis IA32_FS_BASE MSR: ECX=0xC0000100, EDX:EAX = tls_va */
@@ -409,12 +405,12 @@ void task_switch_ap(int cpu_idx)
     int next = start;
     int found = 0, i;
 
-    /* Tahap M: first pass — cari task yang di-assign langsung ke AP ini */
+    /* First pass — cari task ring-0 yang di-assign langsung ke AP ini */
     for (i = 0; i < MAX_TASKS; i++) {
         if (tasks[next].used &&
             tasks[next].status == TASK_RUNNING &&
-            tasks[next].cpu_id == (int8_t)cpu_idx &&
             tasks[next].is_user == 0 &&
+            tasks[next].cpu_id == (int8_t)cpu_idx &&
             next != current_task_ap) {
             found = 1;
             break;
@@ -422,14 +418,14 @@ void task_switch_ap(int cpu_idx)
         next = (next + 1) % MAX_TASKS;
     }
 
-    /* Second pass — work-steal: kernel task bebas (cpu_id==-1) */
+    /* Second pass — work-steal: task ring-0 bebas (cpu_id==-1) */
     if (!found) {
         next = start;
         for (i = 0; i < MAX_TASKS; i++) {
             if (tasks[next].used &&
                 tasks[next].status == TASK_RUNNING &&
-                tasks[next].cpu_id == -1 &&
-                tasks[next].is_user == 0) {
+                tasks[next].is_user == 0 &&
+                tasks[next].cpu_id == -1) {
                 found = 1;
                 break;
             }
@@ -453,14 +449,43 @@ void task_switch_ap(int cpu_idx)
     spinlock_release(&task_lock);
 
     /* Set pointer RSP untuk context switch di asm */
-    if (current_task_ap >= 0 && tasks[current_task_ap].used)
-        ap_current_rsp = &tasks[current_task_ap].rsp;
+    int old_ap = current_task_ap;  /* capture sebelum di-update */
+    if (old_ap >= 0 && tasks[old_ap].used)
+        ap_current_rsp = &tasks[old_ap].rsp;
     ap_next_rsp    = &tasks[next].rsp;
     current_task_ap = next;
 
-    /* Update TSS RSP0 AP agar exception di ring-0 punya stack bersih */
+    /* Update TSS RSP0 AP — exception/interrupt dari ring-3 di AP punya stack bersih */
     uint64_t kstack = (uint64_t)(stacks_base + (uint64_t)next * STACK_SIZE + STACK_SIZE);
     tss64_set_kernel_stack_cpu(cpu_idx, kstack);
+
+    /* Update syscall_kstack_ap — SYSCALL dari user task di AP punya kernel stack bersih */
+    if (tasks[next].is_user) {
+        extern volatile uint64_t syscall_kstack_ap;
+        syscall_kstack_ap = kstack;
+    }
+
+    /* FPU save/restore: simpan state task lama, restore task baru */
+    if (old_ap >= 0 && tasks[old_ap].used) {
+        __asm__ volatile ("fxsave %0" : "=m"(tasks[old_ap].fpu_state));
+        tasks[old_ap].fpu_valid = 1;
+    }
+    if (tasks[next].fpu_valid)
+        __asm__ volatile ("fxrstor %0" :: "m"(tasks[next].fpu_state));
+    else
+        __asm__ volatile ("fninit");
+
+    /* Page table switch — wajib jika user task punya page_dir sendiri */
+    if (tasks[next].page_dir)
+        vmm_switch_dir(tasks[next].page_dir);
+
+    /* Restore TLS (FS MSR) untuk user task yang punya TLS */
+    if (tasks[next].tls_frame) {
+        uint64_t tls_va = MM_TLS_BASE + (uint64_t)next * MM_TLS_PAGE_SIZE;
+        uint32_t tls_lo = (uint32_t)tls_va;
+        uint32_t tls_hi = (uint32_t)(tls_va >> 32);
+        __asm__ volatile ("wrmsr" :: "c"(0xC0000100u), "a"(tls_lo), "d"(tls_hi));
+    }
 }
 
 /* F-T: task_exit_code(code) — versi task_exit yang menyimpan kode exit.
