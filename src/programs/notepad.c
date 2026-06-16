@@ -246,6 +246,7 @@ void _start(void) {
 
     do_load();
     do_render(id);
+    win_flush();
 
     for (;;) {
         int ev = win_poll(id);

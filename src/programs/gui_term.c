@@ -216,6 +216,7 @@ void _start(void) {
 
     out_print("Terminal siap. Ketik 'help' untuk bantuan.");
     do_render();
+    win_flush();
 
     /* Event loop */
     for (;;) {

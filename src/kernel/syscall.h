@@ -152,6 +152,7 @@
 #define SYS_SIGPROCMASK   107 // sigprocmask: ebx=how, edx=mask → old_mask
 #define SYS_SETRLIMIT     108 // setrlimit: ebx=ptr{u32 mem_kb; u16 fds} → 0
 #define SYS_GETRLIMIT     109 // getrlimit: ebx=ptr{u32 mem_kb; u16 fds} → 0
+#define SYS_WIN_FLUSH     110 // flush + flip seluruh WM ke layar → 0
 /* Konstanta how untuk SYS_SIGPROCMASK */
 #define SIG_BLOCK   0
 #define SIG_UNBLOCK 1

@@ -10,6 +10,7 @@ void _start() {
     int y = (SCREEN_H - 48 - h) / 2 + 40;
     int id = win_create(x, y, w, h, "System Info");
     if (id < 0) exit();
+    win_flush();
 
     unsigned int last_sec = (unsigned int)-1;
     char buf[80];

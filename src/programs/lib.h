@@ -1285,6 +1285,7 @@ static inline void printf(const char *fmt, ...) {
 #define SYS_NET_UNLISTEN 103
 #define SYS_SETITIMER    104
 #define SYS_GFX_FLIP     105
+#define SYS_WIN_FLUSH    110
 #endif
 
 static inline int lseek(int fd, int offset, int whence) {
@@ -1441,6 +1442,9 @@ static inline int setitimer(int interval_ms) {
 }
 static inline void gfx_flip(void) {
     syscall0(SYS_GFX_FLIP);
+}
+static inline void win_flush(void) {
+    syscall0(SYS_WIN_FLUSH);
 }
 
 /* ============================================================

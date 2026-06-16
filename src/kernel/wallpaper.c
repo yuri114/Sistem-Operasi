@@ -129,8 +129,7 @@ static uint8_t g_sect_buf[512];
 /* Tidak ada modulo/divisi: pakai x/y counter langsung                */
 /* ------------------------------------------------------------------ */
 static void wp_blit_cache(void) {
-    extern uint32_t gfx_lfb_addr;
-    volatile uint32_t *fb = (volatile uint32_t *)(uintptr_t)gfx_lfb_addr;
+    volatile uint32_t *fb = gfx_get_fb();
     uint32_t *cache = g_wp_cache;
     uint32_t sy;
     for (sy = 0; sy < (uint32_t)WP_SRC_H; sy++) {
@@ -145,6 +144,7 @@ static void wp_blit_cache(void) {
             fb[base + 1920 + 1] = color;
         }
     }
+    gfx_mark_dirty(0, 0, (int)SCREEN_W, (int)SCREEN_H);
 }
 
 /* ------------------------------------------------------------------ */
@@ -153,8 +153,7 @@ static void wp_blit_cache(void) {
 /* ------------------------------------------------------------------ */
 void wp_blit_region(int dx, int dy, int dw, int dh) {
     if (!g_wp_loaded || !g_wp_cache) return;
-    extern uint32_t gfx_lfb_addr;
-    volatile uint32_t *fb = (volatile uint32_t *)(uintptr_t)gfx_lfb_addr;
+    volatile uint32_t *fb = gfx_get_fb();
     /* Clamp ke batas layar */
     if (dx < 0)        { dw += dx; dx = 0; }
     if (dy < 0)        { dh += dy; dy = 0; }
@@ -183,6 +182,7 @@ void wp_blit_region(int dx, int dy, int dw, int dh) {
         if (sx < dx + dw)
             fb_row[sx] = cache_row[sx >> 1];
     }
+    gfx_mark_dirty(dx, dy, dx + dw, dy + dh);
 }
 
 /* ------------------------------------------------------------------ */

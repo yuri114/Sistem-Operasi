@@ -177,6 +177,7 @@ void _start(void) {
 
     /* Tampilkan display awal */
     draw_display();
+    win_flush();   /* tampilkan semua tombol sekaligus */
 
     /* Event loop */
     while (1) {

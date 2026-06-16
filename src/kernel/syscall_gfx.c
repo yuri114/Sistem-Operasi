@@ -172,6 +172,12 @@ uint64_t syscall_dispatch_gfx(uint64_t eax, uint64_t ebx, uint64_t edx, int *han
         return 0;
     }
 
+    // SYS_WIN_FLUSH(110): composite ulang semua window lalu flip ke layar
+    if (eax == SYS_WIN_FLUSH) {
+        wm_flush();
+        return 0;
+    }
+
     *handled = 0;
     return 0;
 }

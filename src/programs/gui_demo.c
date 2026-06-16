@@ -59,6 +59,8 @@ void _start(void) {
     win_draw(w2,  6, 80, "Kiri   = [ ]",  GFX_WHITE, GFX_BLACK);
     win_draw(w2,  6, 94, "Kanan  = [ ]",  GFX_WHITE, GFX_BLACK);
 
+    win_flush();
+
     int alive1 = 1, alive2 = 1;
     int tick = 0;
 

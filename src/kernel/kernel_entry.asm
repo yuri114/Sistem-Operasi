@@ -162,18 +162,19 @@ long_mode_entry:
     mov  gs, ax
     mov  ss, ax
 
-    ; Stack kernel awal — diletakkan SETELAH .bss (0x4000000-0x41FFFFF, ~1MB
-    ; terpakai), masih di dalam region 2MB yang dipetakan pd_low[32] (vmm.c)
-    ; sehingga tetap accessible walau CR3 user process aktif.
+    ; Stack kernel boot: harus berada DI ATAS .bss agar tidak ditimpa
+    ; oleh g_back_buf (8MB BSS array di graphics.c) saat fill_screen() dipanggil.
     ;
-    ; CATATAN SEJARAH: stack lama dipasang di 0x9F000 dengan asumsi ".data
-    ; end (0x76148)". Setelah banyak fitur ditambahkan, .data sekarang
-    ; berakhir di ~0xA0280 — overlap dengan 0x9F000! Stack growing-down dari
-    ; 0x9F000 menimpa tail .data (variabel global) tepat saat kernel_main()
-    ; mulai berjalan -> korupsi data sebelum idt_init() -> #fault tanpa
-    ; handler -> triple fault -> reset loop ("bootnya looping di kernel").
-    ; Fix: pindahkan stack ke 0x4200000 (di atas .bss, masih dalam pd_low[32]).
-    mov  rsp, 0x4200000
+    ; Layout BSS (dari readelf build/kernel.elf):
+    ;   .bss  start = 0x4000000
+    ;   .bss  size  = 0x8F3CC0  (~9MB)
+    ;   .bss  end   = 0x48F3CC0
+    ;
+    ; g_back_buf[1920*1080] ≈ 8MB dimulai ~1MB setelah BSS start (~0x410ACC0).
+    ; Boot stack lama 0x4200000 berada di tengah g_back_buf — tiap fill_screen()
+    ; menimpa frame kernel di stack sekitar baris ke-32 → return address rusak →
+    ; triple fault. Pindahkan stack ke 0x4B00000 (di pd_low[37], di atas BSS end).
+    mov  rsp, 0x4B00000
 
     ; Tulis 'LM' ke VGA text buffer (diagnostik)
     mov  word [0xB8000], 0x0F4C

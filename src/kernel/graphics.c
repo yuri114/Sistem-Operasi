@@ -19,8 +19,8 @@ static uint32_t *back_buf = g_back_buf;
 /* Pointer ke hardware framebuffer (diset oleh graphics_set_fb) */
 static volatile uint32_t *hw_fb = 0;
 
-/* Pointer tulis: selalu menunjuk ke back_buf */
-static volatile uint32_t *fb = (volatile uint32_t *)g_back_buf;
+/* Pointer tulis: awalnya ke hw_fb (console mode); switch ke back_buf saat GUI aktif via gfx_enable_double_buffer() */
+static volatile uint32_t *fb = (volatile uint32_t *)0xE0000000U;
 
 /* Dirty region — bounding box area yang sudah diubah sejak gfx_flip() terakhir.
  * x2/y2 eksklusif. has_dirty=0 berarti tidak ada yang perlu di-flip. */

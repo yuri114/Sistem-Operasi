@@ -258,11 +258,15 @@ uint64_t *vmm_create_page_dir() {
      * berjalan dengan kernel .text di 0x700000+ walau CR3=punya proses user). */
     pd_low[2] = 0x0000000000400087ULL;   /* base=0x400000, P+RW+User+PS (kernel heap 4-6MB) */
     pd_low[3] = 0x0000000000600087ULL;   /* base=0x600000, P+RW+User+PS (kernel heap+image 6-8MB) */
-    /* pd_low[32] = 2MB large page: identity map 64-66MB, kernel-only.
-     * WAJIB: BSS kernel berada di 0x4000000-0x41FFFFF. Tanpa entry ini,
-     * setiap akses ke global kernel (tasks[], frame_bitmap, dll.) saat
-     * CR3 user process aktif akan menyebabkan #PF → crash. */
-    pd_low[32] = MM_BSS_BASE | 0x83ULL;  /* base=0x4000000, P+RW, kernel-only, PS */
+    /* pd_low[32..36] = 5 × 2MB large pages: identity map 64–74MB, kernel-only.
+     * BSS kernel di 0x4000000+; g_back_buf (8MB) memperluas BSS hingga ~0x4800000.
+     * 5 pages (10MB) memberi margin cukup untuk semua global kernel + back buffer. */
+    pd_low[32] = 0x4000000ULL | 0x83ULL;  /* 64–66MB */
+    pd_low[33] = 0x4200000ULL | 0x83ULL;  /* 66–68MB */
+    pd_low[34] = 0x4400000ULL | 0x83ULL;  /* 68–70MB */
+    pd_low[35] = 0x4600000ULL | 0x83ULL;  /* 70–72MB */
+    pd_low[36] = 0x4800000ULL | 0x83ULL;  /* 72–74MB (margin) */
+    pd_low[37] = 0x4A00000ULL | 0x83ULL;  /* 74–76MB: kernel boot stack (RSP=0x4B00000) */
 
     vmm_restore_cr3(saved_cr3, rfl);
     return pml4;

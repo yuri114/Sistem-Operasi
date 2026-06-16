@@ -94,6 +94,7 @@ void _start(void) {
 
     /* Kanvas putih awal */
     clear_canvas();
+    win_flush();   /* tampilkan toolbar + kanvas sekaligus */
 
     /* Event loop */
     while (1) {

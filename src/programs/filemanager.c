@@ -131,6 +131,7 @@ void _start(void) {
 
     refresh_list();
     do_render(id);
+    win_flush();
 
     for (;;) {
         int ev = win_poll(id);

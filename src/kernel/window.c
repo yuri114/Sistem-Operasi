@@ -377,6 +377,7 @@ static void wm_redraw_all(void) {
     for (int i = 0; i < z_count; i++)
         wm_draw_window(z_order[i]);
     taskbar_draw();  /* gambar taskbar di atas segalanya */
+    gfx_flip();      /* flush back buffer ke hardware — satu kali per compositing pass */
 }
 
 /* ------------------------------------------------------------------ */
@@ -409,6 +410,7 @@ static void wm_redraw_region(int id, int rx, int ry, int rw, int rh) {
         taskbar_draw();
     /* Gambar window yang bergerak di posisi baru */
     wm_draw_window(id);
+    gfx_flip();  /* flush partial update ke hardware */
 }
 
 /* ============================================================
@@ -468,6 +470,9 @@ static int hit_resize(int id, int mx, int my) {
 /* ============================================================
  * Fungsi publik
  * ============================================================ */
+
+/* Flush seluruh WM state ke layar — dipanggil via SYS_WIN_FLUSH setelah batch setup. */
+void wm_flush(void) { wm_redraw_all(); }
 
 void wm_init(void) {
     for (int i = 0; i < MAX_WINDOWS; i++) {
@@ -954,6 +959,5 @@ int wm_btn_add(int id, int x, int y, int w, int h, const char *label) {
     if (label)
         while (k < 23 && label[k]) { btn->label[k] = label[k]; k++; }
     btn->label[k] = '\0';
-    wm_redraw_all();   /* gambar ulang agar tombol langsung muncul */
-    return idx;
+    return idx;   /* caller panggil win_flush() / wm_flush() setelah semua tombol ditambah */
 }

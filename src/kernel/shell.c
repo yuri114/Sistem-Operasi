@@ -1971,6 +1971,7 @@ static void shell_execute() {
         /* Aktifkan GUI mode: wallpaper + window manager + mouse */
         set_color(GFX_LGRAY, GFX_BLACK);
         print("Memuat GUI...\n");
+        gfx_enable_double_buffer();  /* switch fb ke back_buf sebelum WM mulai gambar */
         wm_init();
         mouse_init();
         g_gui_mode = 1;

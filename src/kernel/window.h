@@ -99,6 +99,9 @@ void        wm_restore_by_id(int id);
 /* Koordinat klik terakhir di area konten window (piksel relatif konten) */
 void wm_get_click_pos(int id, int *out_x, int *out_y);
 
+/* Flush: composite ulang semua window ke back buffer lalu flip ke hardware. */
+void wm_flush(void);
+
 /* Gambar piksel di koordinat konten window (mengikuti posisi window) */
 void wm_draw_pixel(int id, int cx, int cy, uint32_t color);
 void wm_fill_rect(int id, int cx, int cy, int rw, int rh, uint32_t color);
